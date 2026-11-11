@@ -1,0 +1,15 @@
+{
+  "name": "go-zero-to-builder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "面向零基础学习者的交互式 Go 教程（GitHub Pages 站点）",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev docs",
+    "build": "vitepress build docs",
+    "preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

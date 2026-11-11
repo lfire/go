@@ -1,0 +1,10 @@
+node_modules/
+.vitepress/dist/
+.vitepress/cache/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+.DS_Store
+.kuai.yaml
+
+# 教程原始素材 / 草稿保留在本地，不随 Pages 站点一起推送。
+drafts/
