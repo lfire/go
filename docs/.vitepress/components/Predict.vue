@@ -34,7 +34,7 @@ function pretty(s?: string) { return (s || '').replace(/\\n/g, '\n') }
   <div class="go-card go-predict">
     <div class="go-eyebrow" style="color:var(--go-blue)">先猜结果 · Prediction</div>
     <div class="q-head" style="margin-top:.35rem">
-      <span class="q-no" style="color:var(--go-blue);background:var(--go-blue-soft)">{{ no || 'P' }}</span>
+      <span v-if="no" class="q-no">{{ no }}</span>
       <span class="q-text">{{ q || '上面这段代码运行后会输出什么？' }}</span>
     </div>
     <div class="go-options">

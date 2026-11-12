@@ -447,7 +447,153 @@ func main() {
 
 黑名单的关键优化是**只保留到令牌自身过期为止**：令牌过期后校验本来就会拒绝，再留着黑名单项纯属浪费内存。生产里这份状态通常放 Redis 并设相同 TTL。刷新轮换则同时解决「refresh 长期有效太危险」和「泄露检测」：每次刷新都换发新 refresh，旧的一旦被二次使用，就说明可能已经泄露，应撤销该用户整条令牌链。
 
+### 协议与契约：令牌结构、刷新与吊销的推导
+
+**JWT 的三段结构决定了它的安全边界。** 一个 JWT 是 `base64url(header).base64url(payload).base64url(signature)`：header 声明 `alg` 与 `typ`，payload 承载 `sub`、`exp`、`iat`、`jti`、`iss`、`aud` 等声明，signature 用 HMAC 或 RSA 对前两段签名。最关键的一句推导是：base64url 只是**编码，不是加密**，payload 任何人都能解开读明文，所以绝不能放密码、身份证号、手机号；要保密就得用 JWE 或干脆只放一个无意义的 ID。验签顺序也有讲究：先校验段数为 3，再**固定算法白名单**（否则攻击者把 `alg` 改成 `none` 绕过签名，或把 RS256 混淆成 HS256 用公钥当密钥伪造），再用 `hmac.Equal` 做恒定时间比较（防时序侧信道），最后才解码 payload 并校验 `exp`、`nbf`、`iss`、`aud` 与 `jti` 黑名单。顺序反了会给未验签的数据白白做解析与存储查询。
+
+**Cookie 属性不是可选项，每一条都对应一种攻击。** `HttpOnly` 让 JS 读不到 Cookie，缓解 XSS 窃取；`Secure` 保证只在 HTTPS 上发送，防明文链路嗅探；`SameSite=Lax/Strict` 阻止跨站请求自动携带 Cookie，缓解 CSRF；`Path` 与 `Domain` 限定作用域；`Expires` / `MaxAge` 控制寿命。会话 ID 必须用 `crypto/rand` 生成，因为它来自 CSPRNG、不可预测；`math/rand` 是确定性伪随机数，种子可由时间推断，攻击者能推算后续 ID 进而劫持会话。HTTP 也把认证与授权分成两个状态码：401 表示身份缺失或无效（去登录），403 表示身份有效但权限不足（提示无权限），混用会让客户端无法决定下一步。
+
+**刷新与吊销的矛盾可以从状态归属直接推出。** JWT 的全部卖点是服务端不存状态；可「退出登录、改密码、封禁账号」都要求让已签发令牌立刻失效，这本身就是在要求状态。三条出路各有代价：把 access 压到很短（如 15 分钟）并用 refresh 续期，把「不可吊销窗口」缩到可接受；维护 jti 黑名单或用户令牌版本号，校验时查一次存储——此时 JWT 已不再无状态；或直接改用 Session。所以准确说法是「JWT 不是不能吊销，而是吊销会让它失去无状态这个优势」。黑名单还有一条可推导的优化：只保留到令牌自身过期为止，过期后校验本来就会拒绝，再留着纯属浪费内存，因此 TTL 设为令牌剩余存活时间。刷新轮换进一步用「旧 refresh 一旦被二次使用就撤销整条令牌链」来检测泄露。
+
+**OAuth2 为什么用一次性 code 而不是直接给 token。** 授权码流程里，浏览器只拿到一个一次性 `code`，由应用后端用 `code` 加 `client_secret` 换取 access_token；这样令牌不出现在浏览器地址栏、Referer 与前端代码里，且能验证是哪一个客户端在换。PKCE 再补上「code 被截获也无法换取令牌」的证明。OAuth2 本质是**授权框架**（第三方应用在不拿密码的前提下获得有限权限），不是认证协议；OIDC 在其上用 ID Token 补上身份认证。自己实现登录用 Session 或 JWT 即可，接第三方登录才需要 OAuth2。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（视场景） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| 身份方案 | 服务端 Session | 短效 JWT 加 refresh 轮换 | Session 需共享存储或粘性会话，扩展稍麻烦 |
+| 吊销能力 | 无状态 JWT 不做黑名单 | 短 access 加黑名单或令牌版本号 | 前者改密码后旧令牌最长仍可用到过期 |
+| 令牌存放 | localStorage | HttpOnly 加 Secure 加 SameSite Cookie | 前者 XSS 可直接读到令牌 |
+| 会话 ID | `math/rand` | `crypto/rand` | 前者可预测，存在会话劫持风险 |
+| 密码存储 | MD5 / 明文 | bcrypt / argon2 加盐 | 彩虹表与撞库直接破解 |
+| 数据级权限 | 给每个资源造角色 | 授权层校验资源归属，或 ABAC | 角色爆炸，模型错配 |
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 超时 | 黑名单存储查询慢 | 鉴权延迟毛刺 | 鉴权耗时分布 | 本地缓存加短 TTL |
+| 重试放大 | refresh 并发到期触发刷新风暴 | 认证服务 QPS 尖峰 | refresh 请求曲线 | 单飞、抖动、错峰过期 |
+| 幂等缺失 | 同一 refresh 被并发使用 | 换发多对令牌、误判泄露 | refresh 重放计数 | 轮换加原子标记 |
+| 缓存与 DB 不一致 | 黑名单只写了一个实例 | 部分节点仍接受已吊销令牌 | 各实例黑名单比对 | 集中存 Redis 并设相同 TTL |
+| 连接池耗尽 | 每次请求都查黑名单且无缓存 | 存储等待队列上涨 | 存储 `WaitCount` | 短 access 加本地缓存 |
+| 慢查询 | 黑名单表无索引 | 鉴权变慢 | `EXPLAIN` | 按 jti 建索引 |
+| 消息重复 | 吊销事件重投 | 重复写黑名单无业务损害 | 事件 ID 去重 | 写操作幂等 |
+| 算法混淆 | 信任令牌头的 alg | 伪造令牌被接受 | 审计日志里的 alg 值 | 服务端固定算法白名单 |
+| 越权 | 只认证不校验资源归属 | 用户能读他人订单 | 归属断言日志 | 授权层校验归属 |
+
+<SequenceDiagram title="登录、刷新轮换与吊销" :actors='["Client","Auth","TokenStore","Redis","Resource"]' :steps='[{"from":"Client","to":"Auth","label":"登录","note":"提交凭据","kind":"call"},{"from":"Auth","to":"TokenStore","label":"校验密码","note":"bcrypt 比对","kind":"call"},{"from":"TokenStore","to":"Auth","label":"通过","note":"生成用户标识","kind":"return"},{"from":"Auth","to":"Client","label":"双令牌","note":"短 access 加长效 refresh","kind":"return"},{"from":"Client","to":"Resource","label":"带令牌访问","note":"Authorization 头","kind":"call"},{"from":"Resource","to":"Redis","label":"查黑名单","note":"校验 jti","kind":"call"},{"from":"Redis","to":"Resource","label":"未吊销","note":"放行","kind":"return"},{"from":"Client","to":"Auth","label":"access 过期","note":"请求刷新","kind":"call"},{"from":"Auth","to":"Redis","label":"标记旧 refresh","note":"原子轮换","kind":"call"},{"from":"Auth","to":"Client","label":"新令牌对","note":"旧 refresh 作废","kind":"return"},{"from":"Client","to":"Auth","label":"重放旧 refresh","note":"疑似泄露","kind":"call"},{"from":"Auth","to":"Redis","label":"撤销令牌链","note":"整条链作废","kind":"async"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把 Cookie 属性、状态码与 JWT 编码跑出来看
+
+**实验一：curl 观察 401 / 403 与 Cookie 属性。** 启动第 2 节的 Session 服务，依次发三条请求：
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/login -d '{"user":"gopher","pass":"secret"}'
+curl -i http://127.0.0.1:8080/me
+curl -i http://127.0.0.1:8080/admin
+```
+
+<OutputBox title="三次请求的关键状态行与头" output="POST /login → 204 No Content\nSet-Cookie: sid=...; Path=/; HttpOnly; Secure; SameSite=Lax\nGET /me 无 Cookie → 401 Unauthorized\nGET /admin 普通角色 → 403 Forbidden" note="204 表示登录成功且无响应体；三个头各挡一类攻击" />
+
+逐字段解释：`204 No Content` 是登录成功的正确状态码（没有内容可返回）；`HttpOnly` 让 JS 读不到 `sid`，XSS 拿不到会话；`Secure` 保证 Cookie 只在 HTTPS 上发送；`SameSite=Lax` 阻止跨站请求自动携带，缓解 CSRF；`401` 说明没带或带了无效身份，客户端该去登录；`403` 说明身份有效但角色不够，客户端该提示无权限——两者绝不能互换。把 `Secure` 去掉再在 HTTP 下抓包，会看到 Cookie 以明文出现在链路上，这条属性的作用就无需记忆了。
+
+**实验二：go test -race 证明载荷只是编码、并挡住 alg=none。** 下面这段完整可编译的测试文件把「base64url 不是加密」与「固定算法白名单能挡住算法混淆」变成断言：
+
+```go
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+var secret = []byte("test-secret")
+
+func sign(head, payload string) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(head + "." + payload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func verify(token string) error {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("malformed")
+	}
+	headBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return err
+	}
+	var head struct {
+		Alg string `json:"alg"`
+	}
+	if err := json.Unmarshal(headBytes, &head); err != nil {
+		return err
+	}
+	if head.Alg != "HS256" { // 固定算法白名单
+		return fmt.Errorf("unexpected alg: %s", head.Alg)
+	}
+	if !hmac.Equal([]byte(sign(parts[0], parts[1])), []byte(parts[2])) {
+		return fmt.Errorf("bad signature")
+	}
+	return nil
+}
+
+func TestPayloadIsEncodedNotEncrypted(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{"sub": "u-1", "role": "admin"})
+	payload := base64.RawURLEncoding.EncodeToString(body)
+	decoded, _ := base64.RawURLEncoding.DecodeString(payload)
+	if !strings.Contains(string(decoded), "admin") {
+		t.Fatal("载荷应可明文读出")
+	}
+}
+
+func TestAlgNoneIsRejected(t *testing.T) {
+	head := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"u-1"}`))
+	if err := verify(head + "." + body + "."); err == nil {
+		t.Fatal("alg=none 竟然被接受了")
+	}
+}
+
+func TestValidTokenPasses(t *testing.T) {
+	head := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"u-1"}`))
+	if err := verify(head + "." + body + "." + sign(head, body)); err != nil {
+		t.Fatalf("合法令牌被拒: %v", err)
+	}
+}
+```
+
+```bash
+go test -race -run 'TestPayloadIsEncodedNotEncrypted|TestAlgNoneIsRejected|TestValidTokenPasses' -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestPayloadIsEncodedNotEncrypted\n--- PASS: TestPayloadIsEncodedNotEncrypted (0.00s)\n=== RUN   TestAlgNoneIsRejected\n--- PASS: TestAlgNoneIsRejected (0.00s)\n=== RUN   TestValidTokenPasses\n--- PASS: TestValidTokenPasses (0.00s)\nPASS" note="载荷可明文读出，alg=none 被拒，合法 HS256 令牌通过" />
+
+逐字段解释：第一个 `--- PASS` 证明 payload 经 base64url 解码后能直接读到 `admin`，因此「看不懂就是加密」的直觉是错的，敏感信息绝不能放进去；第二个 `--- PASS` 证明把 `alg` 改成 `none`、签名留空的伪造令牌被固定算法白名单挡下，这正是算法混淆攻击的最小复现；第三个 `--- PASS` 证明正常 HS256 令牌仍能通过，说明拒绝不是「把校验写死成全拒」。`hmac.Equal` 的恒定时间比较也在这段里，换成普通的 `==` 会引入时序侧信道。把 `exp` 校验补进 `verify` 再跑一个过期用例，就能把第 2 节「必须校验 exp」同样变成断言。
+
+<Predict q="把 JWT 的 alg 改成 none 并把签名段留空，一个固定校验 HS256 的服务端会怎样？" :options='["正常放行，因为 none 是合法算法","在算法白名单处拒绝","自动降级为不校验","报 base64 解码错误"]' answer="1" output="服务端读到 alg=none 与白名单不符，直接返回 unexpected alg，令牌被拒" explain="alg 来自令牌头、属于不可信输入，必须由服务端固定为预期算法；信任它等于把验签方式的决定权交给攻击者。" />
+
+### 两条真实工程误解
+
+**误解一：JWT 的 payload 看起来是一串乱码，说明它是加密的，放点身份证号也没关系。** 错。base64url 是可逆编码，`base64 -d` 或任何一行 Go 代码都能还原出明文 JSON；JWT 的签名只保证「没被篡改」，不保证「没被看见」。要放敏感信息就得用 JWE 加密，或者只在 payload 里放一个无意义的用户 ID，其余信息回服务端查。
+
+**误解二：用 `math/rand` 生成会话 ID 也够随机，反正长度够长。** 错。`math/rand` 是确定性伪随机数生成器，默认种子固定、或可由启动时间推断，攻击者一旦观测到若干 ID 就能推算后续值并劫持会话；长度再长也救不了可预测的种子。会话 ID、CSRF Token、密码重置 Token 这类安全随机值一律用 `crypto/rand`（CSPRNG），这正是第 2 节 `rand.Read(buf)` 而非 `rand.Intn` 的原因。
+
+### 与后续阶段的呼应
+
+- 本讲的认证授权分层在 /microservice/gateway 会被收进统一入口做鉴权，在 /microservice/grpc-advanced 变成 metadata 透传身份与拦截器统一校验；/microservice/tracing 把 `sub` 与 `jti` 放进 span，便于跨服务追溯一次请求的身份。
+- 令牌黑名单与版本号本质是把状态请回来，属于 /distributed/cap-base 的一致性取舍；refresh 重放检测与去重表状态机在 /distributed/distributed-lock 继续展开。
+- L10 的 /projects/micro-ecommerce 里用户、角色、订单归属三层权限正好覆盖本讲的 RBAC 与数据级归属；/projects/ai-gateway 的令牌与限流把「短有效期加刷新」用在按量计费的接口上。
 
 权限模型上，RBAC 适合大多数后台系统：用户 → 角色 → 权限，改权限只动角色表。但「用户只能看自己的订单」这类数据级权限，RBAC 表达不了，需要在授权层额外校验资源归属；别试图为此给每个资源造一个角色，那是模型错配，应引入 ABAC 或策略引擎。
 
@@ -456,6 +602,12 @@ func main() {
 <FlowTimeline title="OAuth2 授权码流程" :steps='[{"title":"用户点登录","desc":"应用重定向到授权服务器","tone":"blue"},{"title":"认证与同意","desc":"用户在授权方登录并确认授权范围","tone":"purple"},{"title":"回调带 code","desc":"一次性授权码回到应用后端","tone":"orange"},{"title":"换 token","desc":"后端用 code 加 client_secret 换取令牌","tone":"green"},{"title":"访问资源","desc":"凭 access_token 调用资源接口","tone":"gray"}]' direction="horizontal" />
 
 还有几个反模式要避开：用 `math/rand` 生成会话 ID（可预测，必须用 `crypto/rand`）；把 access token 有效期设成几天甚至几周；把权限判断只放在前端（前端只是体验，服务端必须独立校验）；以及在日志里打印完整令牌。密码存储一律用 bcrypt/argon2 加盐哈希，绝不存明文或简单 MD5。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-070-auth`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-070-auth)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

@@ -247,7 +247,7 @@ go test -race ./...                         # 全量回归
 
 <SequenceDiagram title="sync.Pool 的两轮 GC 与 victim 降级" caption="首轮 GC 把 local 降级为 victim，次轮丢弃 victim，池空后 Get 回退到 New" :actors='["应用","primary(local)","victim","GC","New"]' :steps='[{"from":"应用","to":"primary(local)","label":"Put 归还","note":"进本 P 的 private","kind":"call"},{"from":"primary(local)","to":"应用","label":"Get 命中","note":"LIFO 零分配复用","kind":"return"},{"from":"GC","to":"primary(local)","label":"首轮 GC","note":"STW 调 poolCleanup","kind":"call"},{"from":"primary(local)","to":"victim","label":"降级为 victim","note":"local 置空","kind":"call"},{"from":"应用","to":"victim","label":"Get 仍可能命中","note":"顶多活两轮 GC","kind":"call"},{"from":"GC","to":"victim","label":"次轮 GC","note":"清空 oldPools","kind":"call"},{"from":"victim","to":"New","label":"缓存丢弃","note":"对象被回收","kind":"call"},{"from":"应用","to":"New","label":"池空回退","note":"New 造干净对象","kind":"call"},{"from":"New","to":"应用","label":"返回新对象","note":"不依赖上次残留","kind":"return"}]' />
 
-<Predict no="46-3" q="把带『旧数据』残留的 Buf 交给未重置的 fillNoReset 再 append『新』，结果是什么？" :options='["只有 新","旧数据新","空字符串","panic"]' answer="1" output="旧数据新" explain="复用对象带着上次残留，未截零就 append 会把旧内容拼在前面；正确写法先 b.Data[:0] 再写、归还前再截零，结果恒为 新。" />
+<Predict q="把带『旧数据』残留的 Buf 交给未重置的 fillNoReset 再 append『新』，结果是什么？" :options='["只有 新","旧数据新","空字符串","panic"]' answer="1" output="旧数据新" explain="复用对象带着上次残留，未截零就 append 会把旧内容拼在前面；正确写法先 b.Data[:0] 再写、归还前再截零，结果恒为 新。" />
 
 <Callout type="tip" title="能不能用 -race 验证 Pool 复用？" text="不能验证『Put 必被复用』，因为 sync/pool.go 在 race.Enabled 时以 1/4 概率随机丢弃 Put 的对象，正是为了打掉这种错误假设。想稳定复现残留污染，要像 TestPoolReset 那样直接构造脏对象，或显式连调两次 runtime.GC() 观察 victim 被清空。" />
 
@@ -255,6 +255,16 @@ go test -race ./...                         # 全量回归
 实战里 atomic 常用于指标计数、限流令牌、状态标志等单值场景，简单逻辑下比 Mutex 快一个量级；但「先检查再更新」这类跨步不变式要退回 Mutex 或 CAS 自旋。sync.Pool 只复用「构造成本高、可丢弃、无外部资源」的临时对象，是否有收益用基准测试的分配次数说话，小对象直接分配往往更快。
 
 <Compare :panels='[{"label":"写法 A：互斥锁计数","code":"mu.Lock(); total = total + 1; mu.Unlock()","note":"通用，能护一段复合逻辑，高竞争要阻塞切换"},{"label":"写法 B：原子加","code":"total.Add(1)","note":"单条指令完成，只适合简单计数"}]' title="计数场景的两种写法" />
+
+### 与 L10 实战的呼应
+
+无锁与复用的收益边界，在极端流量下最容易被量化。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 用原子预扣与一次性配额把十万级 QPS 削成数据库可承受的匀速写，「绝不超卖」靠的正是 `sync/atomic` 的顺序一致与 CAS 把「读改写」合成一步；分段库存把热点拆开，也沿用了「只护一个变量就别上锁」的取舍。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 的 fencing token 是单调递增令牌、写入端只接受更大的值，思路与 CAS 的「比较后更新」同源，只是跨进程要靠 etcd 的线性一致而非单机原子指令。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 复用 HTTP 缓冲区与解析缓冲时可用 `sync.Pool` 压分配，但必须记住 GC 会清空、取出先重置——把连接或带外部资源的对象放进 Pool，就会在下一轮 GC 后拿到脏对象；是否有收益，用本讲的 `go test -bench=. -benchmem` 看 `allocs/op` 说话。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-046-atomic-pool`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-046-atomic-pool)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用原子值统计命中次数" task="用 atomic.Int64 统计 100 次命中并打印总数，要求全程不加锁。" :hints='["声明 var hits atomic.Int64","用 hits.Add(1) 累加","用 hits.Load() 读结果"]' solution="var hits atomic.Int64\nfor i := 0; i != 100; i++ {\n    hits.Add(1)\n}\nfmt.Println(hits.Load())" explain="Add 不可分割，100 次累加不覆盖，Load 读到 100；换成普通整数并发累加会丢更新，正是第 49 讲的数据竞争。" />

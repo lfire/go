@@ -282,6 +282,147 @@ func main() {
 
 目前全局一把锁是最简单也最正确的选择，别急着上锁分片。等真有压测数据说明锁是瓶颈，再按第 113 讲的思路拆；过早优化会先把正确性赔进去。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-025-capstone`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-025-capstone)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条设计结论追到运行时与工具链，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：fatal error、动态派发与返回副本的依据
+
+这一讲把前面十二讲的结论装成系统，几条设计可以追到规范与运行时依据。其一，`map` 并发写触发的是运行时 `fatal error: concurrent map writes`——`runtime/map.go` 的 `mapassign` 在写前检查 `h.flags` 里的 `hashWriting` 标志，发现同一个 `hmap` 已被另一个 goroutine 标记写入就直接 `throw`；`throw` 是 fatal error，不是 panic，`recover` 拦不住，所以 `MemStore` 必须自己持锁，不能把加锁责任推给调用方。其二，`Storage` 接口之所以能换实现，是第 19 讲的隐式实现加第 30 讲的 itab 动态派发：`var store Storage = NewMemStore()` 的两个字分别指向 itab 与 `*MemStore`，方法调用经 itab 的方法表间接跳转，编译期只检查 `MemStore` 的方法集是否覆盖 `Storage`。其三，`Keys()` 返回新切片而不是内部数据，依据是第 13 讲的「切片是描述符」——直接返回内部切片会把底层数组的写权限一起交出去。其四，`defer s.mu.Unlock()` 紧贴 `Lock()`，依据是第 21 讲的 LIFO 与参数快照。错误用哨兵加 `errors.Is`，则来自第 20 讲的 Unwrap 链。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`map` 并发写既然会报错，外面套一层 `recover` 就能兜住继续服务。** `recover` 只接 panic，不接 throw。
+
+<Compare title="fatal error 能不能 recover" :panels='[{"label":"错误：以为 recover 能兜住","code":"defer func() { recover() }()\n// 多 goroutine 同时写同一个 map","note":"fatal error 是 throw，进程直接退出"},{"label":"正确：写前加锁","code":"mu.Lock()\nm[k] = v\nmu.Unlock()","note":"或改用 sync.Map，临界区尽量短"}]' />
+
+运行时的 `throw` 会打印栈后直接结束进程，任何 deferred 函数都来不及成为「兜底」；这是把锁放进实现内部、而不是文档里提醒调用方的硬理由。
+
+**误解二：`Keys()` 直接返回内部切片更省一次分配，调用方只读就没问题。** 返回描述符等于把底层数组的写权限交出去。
+
+<Compare title="Keys 该返回什么" :panels='[{"label":"错误：返回内部切片","code":"func (s *MemStore) Keys() []string {\n    return s.keys\n}","note":"调用方改元素会回写内部状态，且绕过锁"},{"label":"正确：返回副本","code":"out := make([]string, 0, len(s.data))\nfor k := range s.data {\n    out = append(out, k)\n}\nreturn out","note":"副本独立，读锁只保护遍历这一段"}]' />
+
+切片是描述符，返回它等于把底层数组一起交出去；`map` 本身也不可并发读写，读锁期间必须完成拷贝再释放。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go test -race ./...
+go vet ./...
+```
+
+```text
+ok      example.com/kv  0.412s
+# example.com/kv
+./store.go:9:9: NewMemStore passes lock by value: example.com/kv.MemStore contains sync.RWMutex
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `ok example.com/kv 0.412s` | 包名与耗时；`-race` 未发现竞态 |
+| `WARNING: DATA RACE`（去掉锁后会出现） | 定位并发读写同一内存地址 |
+| `# example.com/kv` | vet 报告的包路径 |
+| `./store.go:9:9` | 文件、行、列 |
+| `passes lock by value` | copylocks：含锁类型按值返回或传参会复制锁 |
+| `contains sync.RWMutex` | 触发检查的具体字段 |
+
+两条命令互补：`-race` 在运行期抓并发读写，`go vet` 在静态期抓「锁被复制」；构造函数应返回 `*MemStore` 指针，正好避开这条告警。
+
+下面这段用一百个 goroutine 并发写、再用接口替身验证可测试性，输出确定：
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+var ErrNotFound = errors.New("kv: key 不存在")
+
+type Storage interface {
+	Put(key, value string) error
+	Get(key string) (string, error)
+}
+
+type MemStore struct {
+	mu   sync.RWMutex
+	data map[string]string
+}
+
+func (s *MemStore) Put(k, v string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[k] = v
+	return nil
+}
+
+func (s *MemStore) Get(k string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.data[k]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return v, nil
+}
+
+// fakeStore 是单测替身：接口让 Apply 不必起真实存储。
+type fakeStore struct{}
+
+func (fakeStore) Put(k, v string) error { return nil }
+func (fakeStore) Get(k string) (string, error) {
+	return "fake", nil
+}
+
+func Apply(s Storage, put bool, k, v string) (string, error) {
+	if put {
+		return "OK", s.Put(k, v)
+	}
+	return s.Get(k)
+}
+
+func main() {
+	s := &MemStore{data: make(map[string]string)}
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_ = s.Put(fmt.Sprintf("k%d", n), "v")
+		}(i)
+	}
+	wg.Wait()
+	v, err := s.Get("k7")
+	fmt.Println("并发写后取 k7 =", v, "出错 =", err != nil)
+	out, _ := Apply(fakeStore{}, false, "x", "")
+	fmt.Println("替身测试 =", out)
+}
+```
+
+<OutputBox title="运行结果" output="并发写后取 k7 = v 出错 = false\n替身测试 = fake" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.9 | `sync.Map` 加入 | 读多写少、键集合稳定时可用 |
+| Go 1.13 | `errors.Is` / `errors.As` 让哨兵错误可跨包装判定 | 本讲错误模型依赖它 |
+| Go 1.18 | `any` / 泛型加入，`sync.Map` 仍是具体类型 | 泛型版未进标准库 |
+| Go 1.22 | 循环变量每轮新建，并发 goroutine 传参更省心 | 与第 15 讲衔接 |
+| 全版本 | map 并发写 fatal、`recover` 拦不住 throw | 结论与版本无关 |
+
+适用边界还有一条：全局一把 `RWMutex` 是最简单也最正确的选择，别急着上锁分片；等压测数据说明锁是瓶颈，再按第 113 讲的思路拆，过早优化会先把正确性赔进去。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 29 讲](/core/map-internals) 会展开 `hmap` 与 `hashWriting` 标志，[第 30 讲](/core/interface-internals) 讲 itab 动态派发，[第 45 讲](/concurrency/sync-primitives) 与 [第 49 讲](/concurrency/race) 分别给出锁原语与竞态判据；[第 52 讲](/engineering/unit-test) 用表驱动加 fake 替身测命令解析。实战里，[第 111 讲](/projects/kv-1-memory) 是本讲的直接延续，[第 113 讲](/projects/kv-3-async) 追加 WAL 与锁分片，[第 114 讲](/projects/kv-4-distributed) 演进到分片、副本与 Raft——今天留的每个接缝都在那里长出新东西。
+
 ## 动手练一练
 
 <Exercise title="给 MemStore 加 Exists" task="在第 1 段的 MemStore 上补一个 Exists(key string) bool 方法：存在返回 true，否则 false。要求用读锁，并用 defer 解锁。" solution="func (s *MemStore) Exists(key string) bool {\n    s.mu.RLock()\n    defer s.mu.RUnlock()\n    _, ok := s.data[key]\n    return ok\n}" :hints='["只读不写，用 RLock 配 RUnlock。","用 comma-ok 判断键是否存在，别先 Get 再判错。"]' explain="读锁允许多个 Exists 并行；defer 保证任何返回路径都解锁；comma-ok 直接给出存在性，不会与 ErrNotFound 的判定缠在一起。" />

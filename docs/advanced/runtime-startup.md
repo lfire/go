@@ -156,6 +156,57 @@ init main @1.61 ms, 0.03 ms clock, 208 bytes, 2 allocs
 
 <Callout type="tip" title="源码阅读建议" text="先在 GOROOT 里搜 runtime.mainPC 定位入口符号，再顺 schedinit、procresize、newproc、mstart 四个函数读一遍，最后回 runtime2.go 对字段；不要一上来逐行啃 asm_amd64.s，先记调用关系，行号留给编辑器帮你找。" />
 
+### 常见误读与反例
+
+启动阶段的误读大多来自「把用户视角当成机器视角」。下面三条都能用第 2 节的程序或本节命令直接推翻。
+
+| 误读 | 为什么站不住（源码推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「`main.main` 是进程执行的第一行代码，运行时是进 main 之后才启动的」 | `rt0_go` 依次 `CALL schedinit`、把 `runtime.mainPC` 交给 `newproc`、`CALL mstart`；`runtime.main` 里的 `doInit` 与 `gcenable` 都跑在 `main.main` 之前。用户 main 是 `gogo(&g.sched)` 调度出来的第一个用户 G，而非被直接调用的函数 | 在 main 第一行用 `runtime.Stack` 打印，栈底是 `main.main()` 且 `NumGoroutine()` 最小为 1；`os.Args` 已可读，因为 argc/argv 在入口汇编里就从栈搬到了全局变量 |
+| 「包 init 按文件名字母序或书写顺序执行，所以能靠 init 之间的先后依赖全局变量」 | `doInit(runtime_inittasks)` 按编译期生成的**包导入依赖图**拓扑排序，同一包内多个 init 才按源文件顺序；跨包只看谁 import 谁，与字母序无关。且 init 阶段 main G 尚未被调度，此时开出的后台 G 不该假设所有全局状态都已就绪 | 让 A 显式 import B，把共享状态的初始化放进 B 的 init 或 `main` 显式编排；用 `GODEBUG=inittrace=1` 的 `@` 列观察真实先后，而不是猜文件名 |
+| 「`inittrace` 里 `@` 时刻靠后的包最慢，把各段 clock 加起来就是完整启动耗时」 | 每行四段里 `clock` 才是该包 init 自己消耗的 CPU 时间，`@` 只是开始时刻，`bytes` 与 `allocs` 是期间累计分配。更要紧的是 `inittrace` 只统计**包 init**，`rt0_go`、`schedinit`、`mallocinit`、`procresize` 以及 cgo 的 C 运行时初始化都不在它的账单里 | 定位最贵包看 `clock` 与 `bytes` 两列；量完整启动用 `runtime/trace` 或进程外计时，两者结论不可互相替代 |
+
+<Quiz q="一个最小程序在 main 第一行读 os.Args 就已经有值，这些参数是谁、在什么时候放好的？" :options='["编译器在链接时写进数据段","入口汇编 rt0_go 把 argc 与 argv 从栈搬到全局变量","os 包第一次被调用时向内核查询","newproc 建 main G 时顺带填充"]' answer="1" explain="rt0_go 在调用 schedinit 之前就完成 argc/argv 搬迁与 g0 栈设置，所以参数在 main 之前就绪，与 os 包无关。" />
+
+### 观测手段的能证与不能证
+
+第 3 节列了五种观察手段，这里补上各自的证据边界，避免「看到数字就下结论」。
+
+| 手段 | 能证明什么 | 不能证明什么 |
+| --- | --- | --- |
+| `GODEBUG=inittrace=1` | 各包 init 的开始时刻、自身 CPU 耗时与期间分配量 | 完整启动时长（不含自举与 cgo）、哪个包拖慢了首个请求；`@` 靠后不等于跑得久 |
+| `go tool nm` | 二进制里 `rt0_go`、`runtime.main`、`main.main` 的地址与 `T` 类型，入口汇编地址最低 | 运行期的调用顺序与控制流；静态符号表不含谁先执行 |
+| `go tool objdump` | `rt0_go` 函数体里确实依次 `CALL schedinit`、`newproc`、`mstart` | 这些调用在目标机器上一定产生了可观察效果；它也不替代 GODEBUG 的动态证据 |
+| `runtime.Stack` / `NumGoroutine` | main 是被调度的 1 号 G、其栈帧已建立 | G 的精确创建时刻，也不能区分系统 G 与用户 G 的调度先后 |
+
+把上表与第 3 节的结构字段表对读会更清楚：`nm` 与 `objdump` 给的是「静态存在性」证据，`inittrace` 与 `Stack` 给的是「动态时序」证据，任何一条单独都不够，交叉印证才能把「main 之前发生了什么」坐实。这也解释了为什么第 4 节要用 `inittrace` 查 init 耗时、却不能拿它当整个进程的启动时长。
+
+### 用 go tool objdump 坐实启动调用链
+
+`go tool nm` 只能看到符号**在不在**，真正要确认「谁先调谁」得反汇编入口。下面这组命令不需要改代码，直接对第 4 节构建出的 `startup` 二进制操作：
+
+```bash
+go build -o startup ./cmd/startup
+go tool objdump -s 'runtime.rt0_go' ./startup | grep -E 'CALL|TEXT' | head -20
+```
+
+```text
+TEXT runtime.rt0_go(SB) /usr/local/go/src/runtime/asm_amd64.s
+  asm_amd64.s:159   0x401000   MOVQ 0(SP), DI
+  asm_amd64.s:161   0x401008   MOVQ DI, runtime.argc(SB)
+  asm_amd64.s:180   0x401050   CALL runtime.schedinit(SB)
+  asm_amd64.s:195   0x4010a2   CALL runtime.newproc(SB)
+  asm_amd64.s:204   0x4010c0   CALL runtime.mstart(SB)
+```
+
+第一行 `TEXT ... /usr/local/go/src/runtime/asm_amd64.s` 是符号名与源文件路径，说明这段来自入口汇编而非 Go 代码；之后每行三段依次是 `文件:行号`、指令地址（如 `0x401050`）与指令本身，`CALL runtime.schedinit(SB)` 里的 `SB` 是静态基址寄存器，表示调用全局符号。两条 `MOVQ` 把栈顶的 `argc` 搬进全局变量 `runtime.argc`，对应第 2 段程序里 `os.Args` 一进 main 就可读；三条 `CALL` 地址递增、顺序与第 2 节 `LineByLine` 完全一致，正是「先自举、再建主 G、最后接管调度」的可数证据。要注意寄存器名、行号与地址随版本和平台漂移，arm64 要看 `asm_arm64.s`，Windows 与 plan9 走另一套 `rt0` 文件——这个实验只证明 amd64 上入口汇编的调用顺序，不证明它在别的架构上同样成立。
+
+### 与 L10 源码级实战的呼应
+
+- KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：崩溃恢复要在服务启动时重放 WAL、重建索引，这段逻辑必须放在 `main` 里显式编排而不是 `init`——否则失败无法返回错误、也没法加超时，正是本讲「init 使用边界」的落地；恢复慢时还能用 `inittrace` 区分是自己代码慢还是依赖包慢。
+- [实战 08 · 分布式任务调度系统](/projects/concurrent-scheduler)：Master 选主成功后要先加载任务模型与 cron 表达式、再启动执行器，顺序错了会漏跑一轮；这用的就是「按依赖图排序 + main 显式编排」的思路，而不是把加载塞进各自包的 init。
+- [实战 11 · Kubernetes Operator](/projects/cloud-operator)：控制器在 `Reconcile` 循环开始前要注册 CRD、建立 informer 缓存并等缓存同步完成，本质是把 `runtime.main` 的「先初始化、再接管」搬进应用自己的启动序列；Operator 启动慢时，本讲的 `inittrace` 与 `objdump` 两类证据同样适用。
+
 ## 4. 工程实践
 排查「服务启动慢」时，第一件事不是靠打点猜，而是让运行时自己报账。`GODEBUG=inittrace=1` 会在每个包 init 结束时打印耗时与内存分配，直接指出哪个包最贵；配合 `go build -gcflags=-m` 还能看到全局变量是否被放到了堆上。生产环境建议把这项输出接到启动日志里做长期对比。
 
@@ -164,6 +215,12 @@ GODEBUG=inittrace=1 ./myserver 2> init.log
 ```
 
 <Compare title="初始化工作放在哪里" :panels='[{"label":"写法 A：塞进 init","code":"func init() {\n    mustLoadConfig()\n    mustWarmCache()\n}","note":"隐式执行、无法传参、失败只能 panic，阻塞启动且难以拆分耗时"},{"label":"写法 B：main 显式编排","code":"func main() {\n    cfg := loadConfig()\n    warmCache(cfg)\n    go serve(cfg)\n    wait()\n}","note":"顺序可见、可加超时与错误返回、可写单测，除 inittrace 之外还有业务日志可查"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-094-runtime-startup`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-094-runtime-startup)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="验证 main 的 goroutine 身份" task="写程序用 runtime.Stack 抓当前 G 的栈，打印 NumGoroutine，判断 GOMAXPROCS 是否等于 NumCPU。" :hints='["分配 64KB 缓冲区传给 runtime.Stack", "用返回长度判断栈是否非空"]' solution="buf := make([]byte, 65536)\nn := runtime.Stack(buf, false)\nfmt.Println(n != 0)\nfmt.Println(runtime.NumGoroutine())\nfmt.Println(runtime.GOMAXPROCS(0) == runtime.NumCPU())" explain="输出应为 true、1、true：依次说明栈存在、只建了 main G、P 数量取自 NumCPU。完整写法见第二段代码。" />

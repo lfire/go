@@ -232,6 +232,123 @@ histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by 
 
 <Callout type="warn" title="别把 rate 用在 Gauge 上，也别只看平均延迟" text="rate 靠差值算速率，用在可增可减的 Gauge 上会算出负数等荒谬结果；Counter 还要注意进程重启后归零，PromQL 的 rate 已能自动处理这种重置。延迟方面，平均值会被长尾掩盖，用户体验取决于 P95、P99，必须靠 Histogram 分位数来看。" />
 
+### 3.2 为什么只存累计值：rate 与分位数的数学推导
+
+Prometheus 抓取到的是「到现在一共处理了多少请求」这类累计值，而不是「这一秒处理了多少」。速率、错误率、分位数统统在查询时用两个时间点的差值算出来。这样设计有个很实在的好处：偶尔漏抓一次，下一次的累计值仍带着中间那段增量，趋势不会丢。`rate` 的本质就是对窗口内的 Counter 取 `(cur - prev) / dt`——它只适用于单调增的 Counter，用在可增可减的 Gauge 上会算出负数等荒谬结果；进程重启导致 Counter 归零时，PromQL 的 `rate` 还能自动识别这种重置并修正，手写差值则很容易踩坑。
+
+Histogram 的分位数推导更值得拆开。每个桶记录的是「小于等于该上界的总次数」，所以桶计数必然单调不减，形成一条累计曲线。`histogram_quantile` 先按分位比例算出目标落在累计次数的第几位，定位到对应桶，再在该桶的上下界之间做线性插值——这正说明了桶边界为什么必须按 SLO 目标来设：目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗插值出来的分位数会严重失真。也因为平均值会被大量快请求掩盖掉少量慢请求，用户体验取决于 P95、P99，必须靠分位数而不是平均值来刻画。
+
+「label 是时间序列的乘数」是另一条能算清楚的规律。下面这段代码把高基数 label 的放大效应量化出来：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	services, methods, statuses, users := 10, 20, 5, 100000
+	base := services * methods * statuses
+	fmt.Printf("低基数标签 时序数=%d\n", base)
+	fmt.Printf("误加 user_id 标签 时序数=%d\n", base*users)
+}
+```
+
+<OutputBox title="运行结果" output="低基数标签 时序数=1000\n误加 user_id 标签 时序数=100000000" note="把 user_id 当 label，时序数从一千暴涨到一亿，Prometheus 会被直接打垮。" />
+
+逐字段解释：`base = 10 * 20 * 5 = 1000` 是只用 service、method、status 三个低基数维度时的序列数；`base * users = 1000 * 100000 = 100000000` 是把十万个 user_id 也做成 label 后的结果。每个 label 取值都是一条独立时间序列，内存、索引与抓取开销都按这个乘数增长。user_id、order_id 这类高基数字段应放进日志与链路追踪，指标里只留低基数维度。
+
+### 3.3 替代方案取舍：指标类型、方法与采集模型
+
+三种指标类型各有不可混用的增减特性，选错的后果在查询时才暴露：
+
+| 指标类型 | 增减特性 | 分位数谁算 | 典型失败边界 |
+| --- | --- | --- | --- |
+| Counter | 只增不减 | 不涉及 | 用在 Gauge 语义上或手写差值忽略重置 |
+| Gauge | 可增可减 | 不涉及 | 误用 rate 算出负数 |
+| Histogram | 累计桶 | 查询时算 | 桶边界太粗导致分位数失真 |
+| Summary | 客户端直接算分位 | 客户端算 | 分位数不可跨实例聚合 |
+
+| 方法 | 面向 | 三个指标 | 替代关系与适用 |
+| --- | --- | --- | --- |
+| RED | 服务与请求 | Rate、Errors、Duration | 最贴近用户感受，微服务首选 |
+| USE | 资源 | 利用率、饱和度、错误 | 看主机、磁盘、连接池更合适 |
+| 四信号 | 综合 | 延迟、流量、错误、饱和度 | RED 加饱和度的超集，告警分层用 |
+
+| 采集模型 | 数据流向 | 优点 | 失败边界 |
+| --- | --- | --- | --- |
+| Prometheus 拉取 | 服务端定期抓 /metrics | 漏抓不丢趋势、易调试 | 需可达目标，短生命周期任务不友好 |
+| StatsD 推送 | 应用主动推聚合 | 低延迟、适合短任务 | 聚合在客户端，维度受限于服务端 |
+| OpenTelemetry | 统一 SDK 与 OTLP | 指标、日志、追踪一体 | 组件多、迁移成本 |
+| 客户端 Summary | 进程内算分位 | 分位精确 | 无法跨副本再聚合，横向扩容时失真 |
+
+### 3.4 可验证实验：exposition 文本、竞态与抓取
+
+Prometheus 抓取的是纯文本，用 curl 就能看到 `/metrics` 到底暴露了什么：
+
+```bash
+curl -s http://localhost:8080/metrics | grep http_requests_total
+```
+
+```text
+# HELP http_requests_total 累计请求数
+# TYPE http_requests_total counter
+http_requests_total{service="order",method="Get"} 4600
+```
+
+逐字段解释：`# HELP` 行的文本是给人看的说明；`# TYPE ... counter` 声明这个指标是 Counter，PromQL 据此允许对它用 `rate`；样本行里 `{service="order",method="Get"}` 是低基数 label，末尾 `4600` 是累计值——注意它不是一个瞬时 QPS，速率要由查询时前后两份快照的差算出。Histogram 还会额外输出一组带 `le` 标签的累计桶样本行，供 `histogram_quantile` 按桶插值。
+
+Histogram 是共享状态，并发 `Observe` 的正确性可以用竞态检测器验证。下面这段故意**不加锁**：
+
+```go
+package main
+
+import (
+	"sync"
+	"testing"
+)
+
+type Histogram struct{ count uint64 }
+
+func (h *Histogram) Observe() {
+	h.count++
+}
+
+func TestHistogramRace(t *testing.T) {
+	h := &Histogram{}
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.Observe()
+		}()
+	}
+	wg.Wait()
+}
+```
+
+```bash
+go test -race -run TestHistogramRace
+```
+
+```text
+WARNING: DATA RACE
+Write at 0x00c0000140b0 by goroutine 8:
+  main.(*Histogram).Observe()
+      histogram_test.go:12
+Previous write at 0x00c0000140b0 by goroutine 7:
+  main.(*Histogram).Observe()
+      histogram_test.go:12
+```
+
+逐字段解释：多个 goroutine 对 `h.count` 无同步地自增，检测器报出写写冲突；地址与 goroutine 编号每次不同属正常。原文 2.1 的 Histogram 用 `sync.Mutex` 保护 `sum`、`count` 与整组桶，正是为了并发观测下计数准确。若想观察高基数 label 的内存代价，可对暴露 `/metrics` 的进程 `go tool pprof -top http://localhost:6060/debug/pprof/heap`，会看到时间序列对象成为主要常驻分配。
+
+### 3.5 从埋点到告警的完整时序
+
+RED 三项不是凭空出现在面板上的，而是「应用埋点 → 暴露累计值 → 抓取存储 → 查询计算 → 规则判定」这条链一步步产出的。看清这条链，才会明白为什么速率要在查询时用差值算、为什么告警规则要加 `for` 抗抖动。
+
+<SequenceDiagram title="从埋点到 RED 告警的完整链路" caption="应用累计计数，Prometheus 拉取并落时间序列，PromQL 计算速率分位，规则持续判定后告警" :actors='["App","Metrics","Prometheus","Alert","Oncall"]' :steps='[{"from":"App","to":"Metrics","label":"请求进入计数","note":"Counter 加一","kind":"call"},{"from":"App","to":"Metrics","label":"观测耗时","note":"Histogram Observe","kind":"call"},{"from":"Prometheus","to":"Metrics","label":"抓取 metrics","note":"拉取文本","kind":"call"},{"from":"Metrics","to":"Prometheus","label":"返回文本","note":"累计值","kind":"return"},{"from":"Prometheus","to":"Prometheus","label":"存时间序列","note":"带 label","kind":"self"},{"from":"Prometheus","to":"Prometheus","label":"算 rate 分位","note":"查询时计算","kind":"self"},{"from":"Prometheus","to":"Alert","label":"规则超阈值","note":"错误率告警","kind":"call"},{"from":"Alert","to":"Alert","label":"for 持续判定","note":"过滤抖动","kind":"self"},{"from":"Alert","to":"Oncall","label":"触发告警","note":"按 severity","kind":"call"},{"from":"Oncall","to":"Prometheus","label":"查图定位","note":"Grafana 面板","kind":"return"}]' />
+
 ## 4. 工程实践
 
 一条能用的错误率告警规则长这样：`rate` 取 5 分钟窗口，错误速率除以总请求速率，超过 1% 并持续 2 分钟才告警。加 `for` 是为了过滤瞬时抖动，`labels` 决定路由到哪个值班组。
@@ -254,6 +371,43 @@ groups:
 <Compare :panels='[{"label":"只记平均值","code":"avg := totalDuration / totalRequests\nlog(avg)","note":"平均值会被少量慢请求拉高、也会被大量快请求掩盖，看不出长尾体验"},{"label":"Histogram 分位数","code":"p95 := histogram.Quantile(0.95)\nalert(p95)","note":"分位数直接反映长尾，能对齐 SLO 里的 95 分位延迟目标"}]' title="延迟该看平均值还是分位数" />
 
 落地时还有几条经验。label 是时间序列的乘数，`user_id`、`order_id` 这类高基数字段绝不能当 label，否则序列数爆炸会把 Prometheus 打垮——它们应放进日志与链路追踪，指标里只留 `service`、`method`、`status` 这类低基数维度。Histogram 的桶边界要按 SLO 目标来设，比如目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗算出的分位数会失真。埋点位置选在第 74 讲的拦截器里：请求进出统一累计，业务代码零侵入，还能顺带把 trace_id 关联进日志。告警要分层：RED 面向用户症状优先报，USE 面向资源原因其次报，避免半夜被一堆 CPU 抖动吵醒却没人知道接口已经出问题。最后，Grafana 面板建议固定「流量、错误率、P95/P99、饱和度」四行，配成团队共用模板，出问题时不用临时找图。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l7-microservice/lesson-081-metrics`](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-081-metrics)。clone 仓库后进入 `examples/l7-microservice`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+### 4.2 指标与告警的失败矩阵
+
+指标本身出错，往往比业务出错更难察觉，因为它看起来「一切正常」：
+
+| 故障 | 触发点 | 现象 | 防线 |
+| --- | --- | --- | --- |
+| 指标基数爆炸 | 把 user_id 当 label | 时序数从上千涨到上亿，Prometheus 被打垮 | label 只留低基数维度 |
+| rate 用错对象 | 对 Gauge 用 rate | 算出负数等荒谬结果 | rate 只用于 Counter |
+| Counter 归零误算 | 手写差值不看重置 | 进程重启后出现负速率 | 用 rate 自动处理重置 |
+| 平均延迟掩盖长尾 | 只盯平均值 | 少量慢请求被大量快请求掩盖 | 看 Histogram 的 P95、P99 |
+| 桶边界过粗 | 边界离 SLO 目标太远 | 插值出的分位数失真 | 按 SLO 在目标附近多放桶 |
+| 抓取漏点 | 实例重启或网络抖动 | 样本缺口，趋势判断偏差 | 拉取模型自带容错 + 多副本 |
+
+### 4.3 两条真实工程误解
+
+**误解一：rate 可以用在任何指标上，看平均延迟就够了。** `rate` 靠累计值的前后差值算速率，只认单调增的 Counter；用在可增可减的 Gauge 上会算出负数，用在重启归零的 Counter 上若手写差值也会得到负速率。延迟方面更隐蔽：平均值会被长尾掩盖，一秒处理一千个快请求、夹十个两秒的慢请求，平均值几乎不动，但那十个用户的体验已经崩了——必须靠 Histogram 分位数看 P95、P99。
+
+<Callout type="warn" title="rate 不认 Gauge，平均值不认长尾" text="rate 靠累计值差值算速率，用在可增可减的 Gauge 上会算出负数；延迟平均值会被长尾掩盖，用户体验取决于 P95 与 P99，必须靠 Histogram 分位数来看。" />
+
+**误解二：label 加得越多越好，方便下钻。** 每个 label 取值都是一条独立时间序列，维度是相乘关系。把 user_id、order_id 做成 label，十万个用户就能把序列数放大到上亿，Prometheus 的内存、索引与抓取全被拖垮。下钻应交给日志与链路追踪，指标里只留 service、method、status 这类低基数维度。
+
+<Compare :panels='[{"label":"错误：高基数 label","code":"counter.WithLabelValues(userID).Inc()","note":"每个用户一条时序，十万个用户把序列数放大到上亿"},{"label":"正确：低基数维度","code":"counter.WithLabelValues(service, method, status).Inc()","note":"只留低基数维度，高基数字段放进日志与链路"}]' title="label 该怎么选" />
+
+### 4.4 与后续阶段的呼应
+
+RED 指标在 L8 会升级成完整的稳定性语言：[/distributed/sre](/distributed/sre) 的 SLI、SLO 与错误预算，正是把本讲的 Rate、Errors、Duration 定成可衡量的目标；[/distributed/high-availability](/distributed/high-availability) 的容量规划要看流量与饱和度，[/distributed/kubernetes](/distributed/kubernetes) 的 HPA 直接拿自定义指标做扩缩容依据。可观测三支柱也在此汇合：[/engineering/logging](/engineering/logging) 的结构化日志与 [/engineering/profiling](/engineering/profiling) 的 pprof 分别补上「个体样本」与「进程内热点」，和聚合指标互补。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 的监控大盘固定盯 P99 与错误率，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单服务则用 RED 加 USE 分层告警，避免半夜被一堆 CPU 抖动吵醒却没人知道接口已经出问题。
+
+<Quiz q="把 user_id 这类高基数字段做成 Prometheus 的 label，最直接的后果是什么？" :options='["查询变得更快","每个取值生成一条时间序列，序列数爆炸把 Prometheus 打垮","会自动被聚合成低基数维度","只影响告警，不影响存储"]' answer="1" explain="label 是时间序列的乘数，十万个用户 ID 会把一千条序列放大到上亿条，内存、索引与抓取开销都随之爆炸；高基数字段应放进日志与链路。" />
+
+<Predict q="按 3.2 的估算，10 个服务、20 个方法、5 个状态，再误加十万个 user_id 做 label，时序数分别是多少？" :options='["1000 与 100000","1000 与 100000000","100 与 1000000","都不变"]' answer="1" output="低基数标签 时序数=1000；误加 user_id 标签 时序数=100000000" explain="低基数三维相乘得 1000；再乘十万个 user_id 得 1 亿，说明一个高基数 label 就能把序列数放大十万倍。" />
 
 ## 动手练一练
 <Exercise title="给 Histogram 加上 le 标签的 exposition 输出" task="扩展 2.2 的 exposition，让 Histogram 按 Prometheus 约定输出一组带 le 标签的累计桶样本行，外加 _sum、_count，使 histogram_quantile 能直接计算。" :hints='["每个桶一行 http_request_duration_seconds_bucket{le=上界} 累计次数","额外补一个 le=+Inf 的桶，其值等于总观测次数","再输出 _sum 与 _count 两行，类型声明为 histogram"]' solution="要点一：遍历 bounds，逐行输出 bucket 样本，le 用字符串形式的上界，值为累计桶计数。\n要点二：追加 le 为 +Inf 的桶，值等于 count；真实客户端还会输出 _sum 与 _count 汇总行。\n要点三：TYPE 声明为 histogram，这样 PromQL 的 histogram_quantile 才能按 le 聚合算分位数。" explain="Prometheus 的 Histogram 就是靠一组带 le 的累计桶样本表达的，补齐它们，自建指标才能被标准查询函数消费。" />

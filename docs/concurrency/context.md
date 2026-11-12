@@ -242,7 +242,7 @@ go vet ./...                             # 补全 defer cancel 后 lostcancel �
 
 <SequenceDiagram title="一次请求里的取消传播链路" caption="客户端断开由 net/http 取消 root，沿 children 级联到 DB 子 ctx，下游 select 到 Done 立即返回" :actors='["客户端","Handler","ctx(root)","ctx(DB)","queryDB"]' :steps='[{"from":"客户端","to":"Handler","label":"发起请求","note":"携带 deadline","kind":"call"},{"from":"Handler","to":"ctx(root)","label":"r.Context()","note":"入口取根 ctx","kind":"call"},{"from":"Handler","to":"ctx(DB)","label":"WithTimeout","note":"派生更短预算","kind":"call"},{"from":"Handler","to":"queryDB","label":"带 ctx 调用","note":"select 监听 Done","kind":"call"},{"from":"客户端","to":"ctx(root)","label":"连接断开","note":"net/http 自动取消","kind":"async"},{"from":"ctx(root)","to":"ctx(DB)","label":"广播取消","note":"遍历 children 级联","kind":"call"},{"from":"ctx(DB)","to":"queryDB","label":"Done 关闭","note":"close 建立 happens-before","kind":"return"},{"from":"queryDB","to":"Handler","label":"返回错误","note":"立即收手不再等待","kind":"return"},{"from":"Handler","to":"客户端","label":"504 响应","note":"预算内给客户端答复","kind":"return"}]' />
 
-<Quiz no="47-3" q="下游函数用 context.Background() 另起炉灶、且不监听 ctx.Done()，上游取消后会怎样？" :options='["下游立刻收到取消","下游无视取消，一直跑到自身耗时结束","编译器报错","context 自动把取消塞进 Background"]' answer="1" explain="Background 是不带取消的根，另起炉灶等于切断取消树；下游必须透传上游 ctx 并在阻塞处 select 监听 Done，TestCancel 用 20ms 超时验证 slowWithCtx 能及时返回 DeadlineExceeded。" />
+<Quiz q="下游函数用 context.Background() 另起炉灶、且不监听 ctx.Done()，上游取消后会怎样？" :options='["下游立刻收到取消","下游无视取消，一直跑到自身耗时结束","编译器报错","context 自动把取消塞进 Background"]' answer="1" explain="Background 是不带取消的根，另起炉灶等于切断取消树；下游必须透传上游 ctx 并在阻塞处 select 监听 Done，TestCancel 用 20ms 超时验证 slowWithCtx 能及时返回 DeadlineExceeded。" />
 
 <Callout type="warn" title="lostcancel 不是 lint 洁癖" text="丢掉 cancel 会让 cancelCtx 一直挂在父的 children 里、timerCtx 的 time.AfterFunc 计时器到点才释放。go vet 的 lostcancel 分析器能静态抓到这类写法，报错文案是 the cancel function returned by context.WithCancel should be called, not discarded。把每个派生都配 defer cancel()，既释放引用也及时停表。" />
 
@@ -250,6 +250,16 @@ go vet ./...                             # 补全 defer cancel 后 lostcancel �
 真实服务里 context 贯穿始终：入口从 r.Context() 取，按剩余预算给数据库、RPC、缓存派生更短超时，出错就靠 Done 让在途 goroutine 收手。trace_id 靠 Value 透传，业务参数走函数签名。跨进程要把 deadline 一并传给对端，否则上游超时下游还在跑。context 管「何时停」，不管「做什么」。
 
 <Compare :panels='[{"label":"写法 A：业务参数塞进 Value","code":"ctx = context.WithValue(ctx, userIDKey, uid); doWork(ctx)","note":"参数被藏进上下文，签名失真，调用链难追踪，属误用"},{"label":"写法 B：显式参数加元数据","code":"ctx = context.WithValue(ctx, traceKey, tid); doWork(ctx, uid)","note":"业务参数走签名，context 只承载横切元数据，职责清晰"}]' title="context.Value 的边界" />
+
+### 与 L10 实战的呼应
+
+取消树与 deadline 预算，是三个实战里跨层协作的公共协议。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Scheduler 用单 goroutine 编排加 `context` 取消传播，进程退出时先停投放再等在途任务收尾，`http.Client` 的整体超时也挂在同一个 ctx 上——正是本讲「取消沿父到子单向广播、阻塞调用都接受 ctx」的落地；下游若用 `context.Background()` 另起炉灶，整体超时就失效。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 的优雅退位把发布窗口的在途任务收干净，租约 TTL 与 ctx 超时共同决定「旧 leader 到底死没死」，跨进程还要把 deadline 转成对端超时一并传出。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 的排队请求要有超时释放，否则被拒绝的请求也会一直占着 goroutine；第 118 讲 [LLM 网关](/projects/ai-gateway) 把上游 deadline、重试预算与客户端断开串成一棵取消树，`trace_id` 靠 `Value` 透传、业务参数仍走签名，正是本讲两条纪律的合用。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-047-context`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-047-context)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="给下游调用加上超时" task="基于 parent 派生 50ms 超时的 context，defer 释放 cancel，并用 NewRequestWithContext 把 ctx 绑定到一次请求。" :hints='["用 context.WithTimeout 并 defer cancel()","标准库提供 http.NewRequestWithContext","ctx 绑定进请求后超时或断开都能取消"]' solution="ctx, cancel := context.WithTimeout(parent, 50*time.Millisecond)\ndefer cancel()\nreq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)\nif err != nil {\n    return err\n}\nresp, err := http.DefaultClient.Do(req)\nif err != nil {\n    return err\n}\ndefer resp.Body.Close()\nreturn nil" explain="WithTimeout 给下游独立预算，defer cancel 保证提前返回也释放计时器；ctx 绑进请求后超时或断开，底层传输立刻中止。" />

@@ -180,7 +180,126 @@ func main() {
 
 <Callout type="idea" title="版本差异" text="Go 1.22 之前 ServeMux 只匹配路径，方法判断要自己写 switch r.Method；1.22 起支持带方法和通配符的模式串，并新增 r.PathValue 读取通配段。新项目可以直接用，老项目升级时注意路径转义与重定向行为的变化。" />
 
+### 协议与契约：为什么方法、状态码和超时不能凭感觉
+
+`net/http` 的行为不是 Go 自己定的，而是 RFC 9110（HTTP Semantics）与 RFC 9112（HTTP/1.1 报文语法）的实现。把规范摊开，前面那些「顺序很重要」「方法不匹配返回 405」就有了推导链，而不只是需要死记的结论。
+
+**方法语义与幂等。** RFC 9110 把方法拆成「安全（safe）」与「幂等（idempotent）」两个正交维度：安全指不改变服务端状态（GET、HEAD、OPTIONS、TRACE），幂等指同一请求执行一次与执行 N 次、服务端最终状态相同（GET、HEAD、PUT、DELETE、OPTIONS、TRACE）。POST 既不幂等也不安全，PATCH 通常也不幂等。为什么服务端工程师必须较真？因为「谁可以重放请求」是基础设施决定的：浏览器、CDN、网关、负载均衡器在超时或连接被重置时，默认只会自动重试**安全且幂等**的方法。把创建订单设计成 GET，或让 GET 承担扣库存，缓存、预取、重试就会替你悄悄多下几单。推导结论：方法不是路由标签，而是写给全链路中间件的一纸承诺。
+
+**状态码是给机器读的契约。** 2xx / 4xx / 5xx 的首位直接决定缓存与告警：2xx 配合 `Cache-Control` 默认可缓存；4xx 表示请求方错了、重试同样请求不会有不同结果；5xx 表示服务端暂时失败、可以带退避重试。这正是第 63 讲把 400 与 422 分开、把 409 从 500 里摘出来的依据。混用的代价很具体：把限流写成 503 而不是 429，客户端重试逻辑会当成服务端故障而继续加大流量（重试放大）；把鉴权失败写成 404 而不是 401 / 403，SDK 不会触发重新登录。
+
+**超时与取消是一条链，不是一个数。** `r.Context()` 在三种情况下被取消：客户端断开、服务端 `Server` 主动关闭或写超时、以及显式 `CancelFunc`。RFC 并不规定超时怎么设，但 Go 把四类超时拆开正是为了对齐 TCP 生命周期：`ReadHeaderTimeout` 对齐「请求行加头部必须在时限内到达」，`ReadTimeout` 覆盖到 body 读完，`WriteTimeout` 从读完请求头算起覆盖写回，`IdleTimeout` 管 keep-alive 空闲连接。推导：只设 `ReadTimeout` 而不设 `ReadHeaderTimeout`，Slowloris 仍能在头部阶段占住连接；只设 `WriteTimeout` 而让连接永久 keep-alive，fd 仍会被空闲连接耗尽。四个字段必须配套——这就是第 3 节那张表的「为什么」。
+
+**连接复用与半开连接。** HTTP/1.1 默认持久连接（除非显式 `Connection: close`），一条 TCP 连接串行承载多个请求，`IdleTimeout` 到期后服务端主动发 FIN 回收。真正的难点是「半开连接（half-open）」：对端崩溃、被 NAT 超时清除、或中间设备静默丢包时，本端 TCP 状态仍是 ESTABLISHED 却再也收不到字节。服务端无法靠 accept 感知，只能靠 `IdleTimeout` 加读探测；客户端侧 `http.Transport` 的 `IdleConnTimeout` 与 `ResponseHeaderTimeout` 同理。所以「连接复用」与「超时」必须一起讲：复用提升了吞吐，也让僵尸连接更难被发现。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（本讲采用） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| 启动服务 | `http.ListenAndServe(addr, mux)` | 显式构造 `http.Server` 配齐四类超时 | 零值 Server 无超时，Slowloris 可长期占住 goroutine 与 fd |
+| 超时控制 | 每个 Handler 内用 `time.After` 自建 | `r.Context()` 透传加 Server 超时 | 自建超时无法取消下游 DB / RPC，goroutine 仍空转到点 |
+| 中间件组合 | 框架式回调列表、全局注册 | `func(Handler) Handler` 返回新 Handler | 回调列表的结果不是 `http.Handler`，无法被 `httptest`、反代与 Server 直接复用 |
+| 连接管理 | 每请求新建连接 | keep-alive 加 `IdleTimeout` | 三次握手与慢启动反复付出，高并发下延迟与 fd 都翻倍 |
+
+再补两个「为什么不」的推导。其一，中间件为什么是「返回新 Handler」而不是往切片里 append 回调？因为组合结果必须仍是 `http.Handler`，才能继续被包、被替换、被交给 `http.Server` 与 `httptest.NewServer`；换成回调切片就丢了整个标准库生态，这是「接受接口、返回结构体」的直接收益。其二，为什么退出要配 `signal.NotifyContext` 加 `Shutdown` 而不是直接 `os.Exit`？因为 SIGTERM 到达时监听必须先关闭（拒绝新连接）、再等在途请求结束；直接退出等于腰斩在途请求，滚动发布时表现为随机 502。
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 读超时 | 慢请求头 / 慢 body | 连接长期占用，新连接排队 | `ReadHeaderTimeout` 命中日志、fd 数 | 设齐四类超时并透传 ctx |
+| 写超时 | 慢客户端不读响应 | Handler 迟迟不返回，goroutine 堆积 | goroutine profile | `WriteTimeout` 加响应体分块 |
+| 重试放大 | 网关对 5xx 无限重试 | 后端 QPS 成倍高于入口 | 入口与后端 QPS 对比 | 429 加退避加重试预算（见 /microservice/resilience） |
+| 幂等缺失 | POST 超时被自动重放 | 重复下单、重复扣款 | 幂等键命中日志 | 幂等键加唯一索引（见 /server/rest-api） |
+| 连接池耗尽 | 下游慢且无超时 | 延迟毛刺而非报错，等待队列变长 | 下游 `WaitCount` | 超时加并发上限加熔断 |
+| 半开连接 | NAT 静默断连 | 借到死连接，请求偶发 EOF | `IdleTimeout` 命中统计 | 心跳、读探测、缩短 idle |
+| 取消未透传 | 用 `context.Background()` 调下游 | 客户端已断，DB 慢查询仍在跑 | SQL 慢日志 | 全程 `r.Context()` |
+
+<SequenceDiagram title="keep-alive 复用与取消传播" :actors='["Client","Server","Middleware","Handler","Downstream"]' :steps='[{"from":"Client","to":"Server","label":"请求 1","note":"建连并携带 keep-alive","kind":"call"},{"from":"Server","to":"Middleware","label":"进链","note":"日志与恢复前置","kind":"call"},{"from":"Middleware","to":"Handler","label":"交棒","note":"进入业务","kind":"call"},{"from":"Handler","to":"Downstream","label":"带 ctx 查询","note":"透传 r.Context","kind":"call"},{"from":"Downstream","to":"Handler","label":"返回","note":"结果回传","kind":"return"},{"from":"Handler","to":"Server","label":"写响应","note":"先设头再写码","kind":"return"},{"from":"Server","to":"Client","label":"响应 1","note":"连接不关闭","kind":"return"},{"from":"Client","to":"Server","label":"请求 2","note":"复用同一条连接","kind":"call"},{"from":"Client","to":"Client","label":"超时放弃","note":"ctx 到点","kind":"self"},{"from":"Server","to":"Handler","label":"取消","note":"Done 通道关闭","kind":"async"},{"from":"Handler","to":"Downstream","label":"取消下游","note":"驱动取消在途调用","kind":"call"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把复用、超时与取消跑出来看
+
+**实验一：curl 观察 keep-alive 复用。** 启动第 4 节那个带超时的服务，把同一个 URL 写两次，curl 会在一条命令里串行发两个请求：
+
+```bash
+curl -sv --http1.1 http://127.0.0.1:8080/slow http://127.0.0.1:8080/slow -o /dev/null 2>&1 | grep -E "Connected to|Re-using|HTTP/1.1 200"
+```
+
+<OutputBox title="curl -v 关键行（按出现顺序）" output="第 1 次: Connected to 127.0.0.1 port 8080 (#0)\n第 1 次: HTTP/1.1 200 OK\n第 2 次: Re-using existing connection! (#0)\n第 2 次: HTTP/1.1 200 OK" note="同一个 #0 被复用，第二次没有再出现 Connected to" />
+
+逐字段解释：`Connected to ... (#0)` 中 `#0` 是 curl 给这条 TCP 连接的内部编号，只在第一次出现说明第二次没有新建连接；`Re-using existing connection! (#0)` 证明连接被复用，省掉一次三次握手与慢启动；两条 `HTTP/1.1 200 OK` 说明 `/slow` 睡 3 秒但在 `WriteTimeout=10s` 内完成。做两个对照：把 `WriteTimeout` 改成 1 秒，第二次会拿到被截断的响应或读错误，直接验证写超时生效；加请求头 `Connection: close` 再跑，会出现两次 `Connected to`，把复用收益量化出来。
+
+**实验二：httptest 加 go test -race 验证取消传播。** 下面是一段完整可编译的测试文件，把「客户端取消后服务端下游能否立刻停下」变成断言：
+
+```go
+package main
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+// cancelAware 模拟一个会透传 ctx 的下游调用；取消后应立即返回。
+func cancelAware(ctx context.Context, started chan struct{}) error {
+	close(started)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return nil
+	}
+}
+
+func TestRequestContextCancelledOnClientGone(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = cancelAware(r.Context(), started)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	done := make(chan struct{})
+	go func() {
+		_, _ = http.DefaultClient.Do(req)
+		close(done)
+	}()
+	<-started
+	cancel() // 模拟客户端断开
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("客户端已取消，但服务端未及时返回")
+	}
+}
+```
+
+```bash
+go test -race -run TestRequestContextCancelledOnClientGone -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestRequestContextCancelledOnClientGone\n--- PASS: TestRequestContextCancelledOnClientGone (0.00s)\nPASS\nok   example.com/server   1.203s" note="取消后请求立刻返回，且 race 检测无数据竞争" />
+
+逐字段解释：`=== RUN` 是用例开始；`--- PASS ... (0.00s)` 表示请求在 `cancel()` 后立刻返回，没有傻等 `cancelAware` 里那个 2 秒定时器，证明 `r.Context()` 的取消确实传播到了下游分支；`PASS` 与 `ok` 是包级结果；`-race` 未打印 `WARNING: DATA RACE`，说明 `started` 通道与 goroutine 之间同步正确。把 `cancelAware` 里的 `ctx.Done()` 分支删掉再跑，用例会在 1 秒兜底处 `t.Fatal`，于是「透传 ctx」从口号变成可证伪的断言。
+
+<Predict q="把 Server 的 WriteTimeout 设成 1 秒、Handler 睡 3 秒，客户端最可能收到什么？" :options='["完整的 200 响应","被截断的响应或读超时错误","404","自动重试后成功"]' answer="1" output="写超时到点后连接被关闭，客户端收到不完整响应或 read: connection reset by peer" explain="WriteTimeout 从读完请求头开始计时，到点直接关连接，不会等 Handler 自然结束；长耗时接口必须自己用 ctx 控制节奏，而不是依赖更长的写超时。" />
+
+### 两条真实工程误解
+
+**误解一：设了 `WriteTimeout` 就不用在 Handler 里管 ctx 了。** 错。`WriteTimeout` 只保证「到点关连接」，它不会主动取消你正在跑的 goroutine 里的计算或下游调用；如果 Handler 用 `context.Background()` 发了 RPC，客户端已断、写超时已到，那段 RPC 仍会跑满自己的超时，继续占着 goroutine 与连接池。错误写法 `db.QueryRow(query)`，正确写法 `db.QueryRowContext(r.Context(), query)`，差别就在取消能否抵达。
+
+**误解二：keep-alive 一定更快，连接留得越久越好。** 错。空闲连接占 fd 与服务端内存，而 NAT、负载均衡器常有自己的静默断连时间（常见 60 到 350 秒）；`IdleTimeout` 一旦大于链路中最短的那个超时，客户端就会借到一条「半开」的死连接，表现为偶发 EOF 或首个请求莫明失败。正确做法是把 `IdleTimeout` 设得略小于链路里最短的空闲断连时间，并让 `http.Transport.IdleConnTimeout` 与之一致。
+
+### 与后续阶段的呼应
+
+- 本讲的方法、状态码与取消契约会在 /server/rest-api 变成幂等键、400 与 422 的分工，在 /server/websocket 变成「升级后必须摘出短请求超时体系」的例外。
+- L7 的 /microservice/grpc-advanced 把 `r.Context()` 超时升级为 gRPC 的 Deadline 传播与 metadata 透传，拦截器把超时与取消收成统一横切能力；/microservice/gateway 则把四类超时、鉴权、限流放到统一入口，Slowloris 防护由网关集中承担。
+- L10 的 /projects/net-shortlink 里，跳转接口是典型「读多写少、必须低延迟」的场景，本讲的 keep-alive、显式超时与优雅退出是它扛住高并发跳转的前提；/projects/ai-gateway 的 SSE 流式转发则必须按本讲的结论单独放宽写超时。
 
 最容易被忽略的生产事故来自这一行：`http.ListenAndServe(addr, mux)`。它内部构造的是一个**零值** `http.Server`，所有超时字段都是 0，也就是永不超时。一个恶意客户端只发请求头不发完，就能一直占住一个 goroutine 和一个文件描述符，这被称为 Slowloris。生产服务必须显式构造 `http.Server`，并且配合信号做优雅退出，否则滚动发布时 SIGTERM 一到，在途请求会被硬生生掐断。
 
@@ -252,6 +371,12 @@ func main() {
 <FlowTimeline title="一次请求的完整生命周期" :steps='[{"title":"连接接入","desc":"Accept 后交给 Server 的 serve 循环","tone":"blue"},{"title":"只读请求头","desc":"受 ReadHeaderTimeout 约束","tone":"purple"},{"title":"路由匹配","desc":"ServeMux 按方法与路径选中 Handler","tone":"orange"},{"title":"中间件前置","desc":"日志、鉴权、恢复依次进入","tone":"blue"},{"title":"业务处理","desc":"读 body、查数据、写响应","tone":"green"},{"title":"响应返回","desc":"后置逻辑逆序执行，连接按 IdleTimeout 复用或回收","tone":"gray"}]' direction="horizontal" />
 
 还有一个高频反模式：**每次请求都新建一个 ServeMux 或 Server**。它们都是并发安全、应当长生命周期复用的对象；在 Handler 内部反复 `http.NewServeMux()` 并注册，既浪费又有数据竞争风险。装配只应在 `main` 里做一次。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-061-net-http`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-061-net-http)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

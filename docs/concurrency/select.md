@@ -227,7 +227,7 @@ go test -race ./...                          # 顺带确认整个包没有数据
 
 <SequenceDiagram title="for-select 超时与停止链路" caption="命中远快于超时时旧 timer 滞留，close(done) 一次广播唤醒全部等待者" :actors='["主协程","worker","业务通道","timer.C","done 通道"]' :steps='[{"from":"主协程","to":"worker","label":"启动循环","note":"三路出口同时监听","kind":"call"},{"from":"worker","to":"业务通道","label":"select 等待","note":"带 default 非阻塞探测","kind":"call"},{"from":"worker","to":"timer.C","label":"注册超时","note":"time.After 每轮新建 timer","kind":"call"},{"from":"业务通道","to":"worker","label":"命中返回","note":"命中远快于 d","kind":"return"},{"from":"timer.C","to":"worker","label":"旧 timer 挂起","note":"到期前一直留在堆","kind":"async"},{"from":"worker","to":"timer.C","label":"再建 timer","note":"下一轮重复堆积","kind":"call"},{"from":"主协程","to":"done 通道","label":"close(done)","note":"一次关闭","kind":"call"},{"from":"done 通道","to":"worker","label":"广播唤醒","note":"close 建立 happens-before","kind":"return"},{"from":"worker","to":"主协程","label":"退出循环","note":"defer Stop 释放计时器","kind":"return"}]' />
 
-<Quiz no="44-3" q="for-select 循环里业务通道命中远快于超时 d，反复写 time.After(d) 会带来什么后果？" :options='["timer 命中更快，程序更省内存","每轮新建的 runtimeTimer 要等到 d 到期才回收，堆对象与 GC 次数上涨","select 会退化为按书写顺序执行","编译直接报错"]' answer="1" explain="time.After 每次新建 timer 插入 per-P 的 timer 堆，命中快时旧 timer 到期前不摘除；用 go test -bench=. -benchmem 看 allocs/op，或 pprof -alloc_objects 定位调用者，修法是 NewTimer 一次加 Stop 加 Reset 复用。" />
+<Quiz q="for-select 循环里业务通道命中远快于超时 d，反复写 time.After(d) 会带来什么后果？" :options='["timer 命中更快，程序更省内存","每轮新建的 runtimeTimer 要等到 d 到期才回收，堆对象与 GC 次数上涨","select 会退化为按书写顺序执行","编译直接报错"]' answer="1" explain="time.After 每次新建 timer 插入 per-P 的 timer 堆，命中快时旧 timer 到期前不摘除；用 go test -bench=. -benchmem 看 allocs/op，或 pprof -alloc_objects 定位调用者，修法是 NewTimer 一次加 Stop 加 Reset 复用。" />
 
 <Callout type="warn" title="别把 Go 1.23 的同步 timer 当成『不用 Stop』" text="1.23 把 timer channel 改为无缓冲后，Stop 之后『再从 C 兜底读一次』的旧套路不再必要；但 NewTimer、NewTicker 持有的 runtime timer 仍要 Stop 才会从堆摘除。高频循环里只复用不 Stop、或反复 time.After，泄漏照旧。判断标准始终是：这个等待有没有超时或停止出口，timer 有没有被显式释放。" />
 
@@ -235,6 +235,16 @@ go test -race ./...                          # 顺带确认整个包没有数据
 真实服务里 select 几乎总是「数据 + 超时 + 停止」三件套：HTTP handler 等下游结果、等 deadline、等客户端断开；后台 worker 抢任务、等心跳、等优雅退出。经验是任何可能阻塞的等待都要配超时或停止出口，否则一个卡住的下游就能拖垮整组 goroutine；定时器复用而非每次新建，done 用 close 广播。
 
 <Compare :panels='[{"label":"写法 A：循环里直接用","code":"time.After(d)","note":"每次新建 timer，命中快时旧 timer 堆积到 d 到期才回收"},{"label":"写法 B：显式持有复用","code":"timer := time.NewTimer(d); defer timer.Stop(); timer.Reset(d)","note":"只建一次，Stop 主动释放，Reset 复用，是长循环正确写法"}]' title="超时写法的取舍" />
+
+### 与 L10 实战的呼应
+
+select 的「数据 + 超时 + 停止」三件套在后面的实战里几乎是同一套骨架。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Fetcher worker 每轮都在 select 里同时等任务、等单域名限速令牌、等 `http.Client` 的整体超时与 `ctx.Done()`，任何一路先到就收手，正是本讲「多路复用加显式 timer 加 done 广播」的生产版本；循环里若用 `time.After` 堆 timer，抓取高峰会直接把堆对象数拉起来。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 的优雅退位用 close 广播叫停一批在途任务、用租约 TTL 做超时释放，Master 换主窗口里「谁先超时」要靠 select 判定。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 的结果轮询与排队超时释放，同样要求每个等待都有 `timer.C` 与 `done` 两条出口，否则洪峰里一个卡住的下游就能拖垮整组 goroutine。第 118 讲 [LLM 网关](/projects/ai-gateway) 把「首 token 超时、整体 deadline、客户端断开」并进一次 SSE 流式转发的 select，是这套三件套最贴近当下的用法。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-044-select`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-044-select)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="让定时任务干净停下" task="用 time.NewTicker 每 10ms 打印一次，累计 3 次后退出并释放定时器，要求 defer 释放、用 for range 接收。" :hints='["ticker.C 可用 for range 接收","defer ticker.Stop() 不能漏","用计数变量达到 3 就 return"]' solution="计数器 := 0\nticker := time.NewTicker(10 * time.Millisecond)\ndefer ticker.Stop()\nfor range ticker.C {\n    计数器 = 计数器 + 1\n    fmt.Println(计数器)\n    if 计数器 == 3 {\n        return\n    }\n}" explain="Ticker.C 是只读 channel，for range 阻塞式接收；计数到 3 时 return，defer 保证 Stop 释放 runtime timer。这正是替代循环里不断 time.After 的思路。" />

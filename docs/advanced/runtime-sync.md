@@ -205,6 +205,63 @@ Showing nodes accounting for 1.62s, 100% of 1.62s total
 
 <Callout type="tip" title="源码阅读建议" text="读 chan.go 先抄一遍 hchan 的字段清单，再顺着 chansend 的三种分支读，最后看 selectgo 的 pollorder 与 lockorder；mutex.go 的 lockSlow 和 unlockSlow 要对着 state 位图读，把 mutexLocked、mutexWoken、mutexStarving 三个位圈出来，状态机就清楚了。" />
 
+### 常见误读与反例
+
+channel 与 mutex 的误读常常来自「把模型图当成实现细节」。下面四条都能用第 2 节程序、mutex profile 或一个最小反例推翻。
+
+| 误读 | 为什么站不住（源码推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「无缓冲 channel 的值会先拷进缓冲区再交给接收者，缓冲越大吞吐越高」 | `chansend` 加锁后先查 `recvq`，非空就走 `send` 把值从发送方 `sudog` **直接拷给接收方**并 `goready`，全程不进 `buf`；`buf` 只在没有等待者时兜底。加大缓冲只是把「配对」改成「排队」，掩盖背压，让生产者跑飞、内存堆积 | 第 3 节时序图第 9 步那一对直接交接；需要背压时优先用无缓冲或小区缓冲 channel，而不是把 cap 调到几万 |
+| 「Mutex 进了饥饿模式就永久退化，新来者也会自旋帮它抢」 | `unlockSlow` 在等待超 `starvationThresholdNs`（1ms）后置 `mutexStarving`，此后锁直接交队首、新来者不自旋；但队首等待回落到 1ms 以内或队列清空就切回普通模式，这是吞吐与尾延迟的动态权衡，不是单向开关 | 第 3 节三行模式表：退出条件一列写得很清楚；看到 `contentions` 飙升先按表判断卡在哪个模式，别假定「一旦饥饿就回不来」 |
+| 「有锁竞争就该立刻换 atomic，单核机器上自旋也能提速」 | `runtime_canSpin` 在单核直接返回 false，自旋路径根本不会走；换无锁结构前应先缩短临界区、把 I/O 移出锁外。`mutexprofilefraction=1` 或 `-mutexprofile` 会明显增加开销，只能短窗口用 | 第 2 段程序先把 `counter++` 的临界区缩到最小再对比；用 `contentions` 与 `delay` 两列判断是海量短竞争（适合分片）还是临界区里做了 I/O |
+| 「select 会按 case 的书写顺序挑第一个就绪的」 | `selectgo` 用 `pollorder` 随机打乱 case 后查就绪，是语言规范要求的公平性，不是实现偶然；`lockorder` 按 channel 地址顺序加锁只为避免多 case 死锁，与选中顺序无关 | 下面这个最小反例跑一万次，两个都就绪的 case 被选中的次数应接近各一半，而不是总选第一个 |
+
+```go
+package main
+
+import "fmt"
+
+// 反例：两个 case 同时就绪时，select 并不总选书写在前的那个。
+func main() {
+	first, second := 0, 0
+	for i := 0; i < 10000; i++ {
+		a := make(chan int, 1)
+		b := make(chan int, 1)
+		a <- 1
+		b <- 2
+		select {
+		case <-a:
+			first++
+		case <-b:
+			second++
+		}
+	}
+	fmt.Println("选到第一个 case 的次数 =", first)
+	fmt.Println("选到第二个 case 的次数 =", second)
+}
+```
+
+两个计数都应接近 5000 而非 10000 与 0：这正是 `pollorder` 随机化在起作用。它同时说明另一件事——不能用「某次 select 选了哪个 case」去推断优先级，要优先级得自己用嵌套 select 或 `done` channel 显式表达。
+
+<Quiz q="一个等待者超过 1ms 没拿到 Mutex，进入饥饿模式后新来的 goroutine 会怎样？" :options='["一起自旋帮忙抢锁","不自旋，直接排到等待队列尾部","立即 panic 返回错误","把 GOMAXPROCS 自动加一"]' answer="1" explain="置 mutexStarving 后所有权由 Unlock 直接交给队首，新来者不自旋、直接排队，直到队首等待回落到 1ms 以内或队列清空才切回普通模式。" />
+
+### 观测手段的能证与不能证
+
+| 手段 | 能证明什么 | 不能证明什么 |
+| --- | --- | --- |
+| mutex profile 的 `contentions` / `delay` | 哪段临界区竞争最热、累计等待多久 | 锁本身就是端到端瓶颈（还要看 QPS 与 p99）；`contentions` 极高但 `delay` 短可能只是海量短竞争 |
+| `go tool trace` 的 Synchronization 视图 | 某个 G 因锁或 channel 阻塞的时间线 | 不能量化「换成 atomic 能快多少」，那是基准测试的事 |
+| `go test -bench` 对比 mutex 与 atomic | 同一负载下两种写法的 ns/op 差异 | 不能推广到临界区里含 I/O 或跨核数不同的场景 |
+| `GODEBUG=mutexprofilefraction=1` | 打开全量竞争采样 | 不能长期常开（开销大），也抓不到单核自旋（该路径不走） |
+
+一句话记边界：profile 证明「等待记在哪段代码上」，`trace` 证明「某个 G 等了多久」，两者都不证明「应该换数据结构」——先缩短临界区、再分片，最后才考虑无锁，这个顺序来自第 3 节那张状态机表而不是直觉。
+
+### 与 L10 源码级实战的呼应
+
+- KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：「锁分片」正是把一把大锁拆成 N 把、把竞争面缩到同分片 key 的做法，本讲三行状态机表解释了为什么分片后不再轻易退化到饥饿模式；WAL 追加写还要保证临界区里不做阻塞 I/O，否则 `delay` 一列会立刻暴露问题。
+- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：热点账户就是一把被过度使用的锁，`contentions` 与 `delay` 两列直接指出该按账户哈希分片还是改成预扣减队列；本讲「先减临界区再谈换锁」的顺序在这里能避免一上来就上无锁结构。
+- KV 贯穿线 ② [TCP 协议帧与网络层](/projects/kv-2-network)：连接管理与并发处理用无缓冲 channel 把请求从 accept 协程直接交给 worker，`recvq/sendq` 直接配对省一次拷贝；背压靠 channel 而非无限缓冲队列，正是第一条误读纠正后的工程落地。
+
 ## 4. 工程实践
 定位锁竞争有两把尺子：`GODEBUG=mutexprofilefraction=1` 打开 mutex profile，配合 `go tool pprof` 看 `contentions` 与 `delay`；`go tool trace` 的 Synchronization 视图则能看到 goroutine 因阻塞在锁上的时间线。判断拐点的办法是固定 worker 数逐级加压，记录每级 QPS 与 p99，一旦 QPS 不增而 p99 陡升，多半就是锁或 channel 的配对点成了瓶颈。
 
@@ -214,6 +271,12 @@ go tool pprof -top mutex.prof
 ```
 
 <Compare title="共享状态的两种保护方式" :panels='[{"label":"写法 A：一把大锁","code":"mu.Lock()\ncache[k] = v\nmu.Unlock()","note":"临界区含 map 写入，并发越高等待者越多，退化到饥饿模式后吞吐骤降"},{"label":"写法 B：按 key 分片","code":"shard := shardFor(k)\nshard.mu.Lock()\nshard.data[k] = v\nshard.mu.Unlock()","note":"把一把锁拆成 N 把，竞争面缩小到同分片的 key，配合 profile 验证收益"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-097-runtime-sync`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-097-runtime-sync)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 mutex profile 找到最热的锁" task="给第三段程序开启 mutexprofilefraction，用 pprof 看哪一行 Lock 的 contentions 最高，再改成 atomic 版本对比。" :hints='["采样 rate 设为 1 才能抓到全部竞争", "关注 contentions 与 delay 两列"]' solution="GODEBUG=mutexprofilefraction=1\nmu.Lock()\ncounter = counter + 1\nmu.Unlock()\natomic.AddInt64(ptr, 1)" explain="竞争会集中到临界区那一行；改成 atomic 后热点消失。完整代码见第三段。" />

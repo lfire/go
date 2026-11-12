@@ -1061,6 +1061,12 @@ func BenchmarkSliceSourceScan(b *testing.B) {
 
 **坑七：emit 不返回 error。** 现象是下游写失败后查询仍空跑几分钟，日志里只有一个模糊错误。原因是回调签名是 `func(Row)`，执行器无法感知失败。错误写法是忽略写出返回值；正确写法让 Emit 返回 error，执行器一收到就停止并把行号包进 fmt.Errorf 的 %w 链。故障注入让 emit 在第三行返回错误，断言立即停止且错误含行号，即可验证。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-108-data-sql-tool`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-108-data-sql-tool)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给表达式 AST 增加一个 Not 节点" task="实现 Not 节点，遵循三值逻辑：NOT TRUE 为 FALSE、NOT FALSE 为 TRUE、NOT UNKNOWN 仍为 UNKNOWN；写一段实现并用表驱动测试覆盖三种输入。" :hints='["Not 只需持有一个 Expr 字段","Eval 里对子节点结果做 switch","UNKNOWN 必须原样返回，不能折叠成 FALSE"]' solution='type Not struct{ E Expr }\n\nfunc (n Not) Eval(r Row) Tri {\n    switch n.E.Eval(r) {\n    case True:\n        return False\n    case False:\n        return True\n    default:\n        return Unknown\n    }\n}\n\ntype constTri struct{ v Tri }\n\nfunc (c constTri) Eval(Row) Tri { return c.v }\n\nfunc TestNot(t *testing.T) {\n    cases := []struct{ in, want Tri }{{True, False}, {False, True}, {Unknown, Unknown}}\n    for _, c := range cases {\n        if got := (Not{E: constTri{c.in}}).Eval(nil); got != c.want {\n            t.Fatalf("NOT %v = %v, want %v", c.in, got, c.want)\n        }\n    }\n}' explain="小接口让新增算子零改动：Not 只依赖 Expr 的 Eval，不碰 Compare、And、Or 任何一行，这正是本讲用 AST 而非硬编码条件链的理由。" />
@@ -1071,7 +1077,7 @@ func BenchmarkSliceSourceScan(b *testing.B) {
 
 <Predict no="108-2" q="一百万行结果集用 emit 回调写到 io.Discard，执行完成并 GC 后常驻堆增量最接近哪个量级？" :options='["数百 MB","数十 MB","接近 0 KB"]' answer="2" output="输出行数=1000000 错误=无 执行后常驻堆增量=0 KB" explain="流式执行每一时刻只持有一行，emit 写完该行即可回收；行被逐行 GC，执行后存活对象几乎不增加，因此常驻堆增量接近零，与总行数无关。这正是 6.5 用 GC 前后对比 HeapAlloc 要证明的结论。" />
 
-<FillBlank no="108-3" tpl="把过滤条件交给数据源在扫描阶段执行，叫作 ___ ；结果用 ___ 逐行吐出，内存才与行数无关。" :answers='["谓词下推","emit 回调~回调~emit"]' hint="一个是优化规则，一个是流式执行的出口。" explain="谓词下推把 WHERE 下放到扫描层，减少上行行数；emit 回调让执行器每时刻只持有一行，避免把结果集攒进切片撑爆内存。两者分别对应物理计划与流式执行两层的决策。" />
+<FillBlank no="108-3" tpl="把过滤条件交给数据源在扫描阶段执行，叫作 ___ ；结果用 ___ 逐行吐出，内存才与行数无关。" :answers='["谓词下推","emit 回调~回调~emit"]' hint="一个是优化规则，一个是流式执行的出口。" explain="谓词下推把 WHERE 下放到扫描层，减少上行行数；emit 回调让执行器每时刻只持有一行，避免把结果集攒进切片撑爆内存。两者分别对应物理计划与流式执行两层的决策。" :explains='["把 WHERE 条件下放到扫描层，让数据源边读边过滤，上行行数先被削减；若留到执行器再筛，等于把全部原始数据白搬一趟。","每算完一行就通过回调交给调用方，执行器只持有当前一行、用完即弃；若把结果攒进切片，内存会随总行数线性上涨。"]' />
 
 ## 一页纸速记
 

@@ -272,7 +272,119 @@ func main() {
 | 不写标签 | 用字段名原样 | 未导出字段编码时不可见 |
 | 反引号包裹 | 编译期附在字段上的元信息 | 内容靠运行期反射读取，编译期不校验 |
 
-<Predict no="17-3" q="调用 load(一段非法 JSON, &c) 时 err 不为 nil；改成 load(合法 JSON, nil) 把目标指针传成 nil，会怎样？" :options='["正常解析，c 被填充","panic: nil pointer","返回错误，不会 panic","编译失败"]' answer="2" output="返回错误，不会 panic" explain="load 开头先判 dst == nil 直接返回错误，把边界挡在 json.Unmarshal 之前；若不判空，nil 目标交给 Unmarshal 会返回 InvalidUnmarshalError，同样不该让调用方以为解析成功。" />
+<Predict q="调用 load(一段非法 JSON, &c) 时 err 不为 nil；改成 load(合法 JSON, nil) 把目标指针传成 nil，会怎样？" :options='["正常解析，c 被填充","panic: nil pointer","返回错误，不会 panic","编译失败"]' answer="2" output="返回错误，不会 panic" explain="load 开头先判 dst == nil 直接返回错误，把边界挡在 json.Unmarshal 之前；若不判空，nil 目标交给 Unmarshal 会返回 InvalidUnmarshalError，同样不该让调用方以为解析成功。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-017-structs`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-017-structs)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与 ABI，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：对齐规则、标签与零大小值从哪来
+
+对齐的规则追到规范「Size and alignment guarantees」：字段按声明顺序排布、编译器可插入 padding，结构体大小向上取整到最大字段对齐数的倍数；具体数值来自平台 ABI（amd64 上 `int64` 对齐 8、`bool` 对齐 1）。于是 `bool/int64/bool` 的 24 是这样算出来的：第一个 bool 占 1 字节，int64 必须从 8 的倍数地址起，补 7 字节；末尾再补 7 字节让整体是 8 的倍数，合 `1+7+8+1+7=24`。重排为 `int64/bool/bool` 后，两个 bool 相邻占 2 字节、只补尾部 6 字节，得 `8+2+6=16`。`go doc unsafe.Offsetof` 明写它返回「字段起点到结构体起点的字节数」，逐字段量一遍比背结论可靠；用 `GOARCH=386` 跑同一段代码，int64 的对齐数变成 4，A 与 B 的差距会缩小，所以谈 `Sizeof` 必须先说平台。标签则是编译期附在字段上的不透明字符串：编译器在 `cmd/compile/internal/types` 计算字段偏移时只把它存着、完全不校验内容，运行时由 `reflect.StructField.Tag` 读出——这就是 `json:"prot"` 拼错不报编译错、只在序列化时悄悄写错键的原因。`struct{}` 大小为 0 是规范「最小大小为 0」的直接结果，运行时对零大小分配可能复用同一个地址（`runtime.zerobase`），所以两个 `struct{}{}` 相等且适合作 Set 值或通道信号。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`unsafe.Sizeof(T{})` 等于各字段 `Sizeof` 的简单相加。** 两处 padding 都不体现在字段自身大小里。
+
+<Compare title="字段大小之和不是结构体大小" :panels='[{"label":"错误：直接相加","code":"// bool 1 + int64 8 + bool 1 = 10\nfmt.Println(unsafe.Sizeof(A{})) // 以为 10","note":"实际 24，漏算了 padding 与尾部对齐"},{"label":"正确：用 Offsetof 核对","code":"fmt.Println(unsafe.Sizeof(A{}))\nfmt.Println(unsafe.Offsetof(a.Count), unsafe.Offsetof(a.Tail))","note":"每个字段的真实起点一目了然"}]' />
+
+记住两条就够：每个字段起点必须是自身对齐数的整数倍，整体大小再补到最大对齐数的整数倍。
+
+**误解二：结构体是值，`u2 := u1` 之后改 `u2` 的字段不会牵连 `u1`。** 值拷贝只保证「一层」，引用型字段仍共享底层数据。
+
+<Compare title="浅拷贝与深拷贝" :panels='[{"label":"错误：以为引用字段也隔离","code":"u2 := u1\nu2.Tags[0] = \"zig\"\n// 以为 u1.Tags 不变","note":"切片字段只拷描述符，改元素会回写"},{"label":"正确：对引用字段显式拷贝","code":"u2 := u1\nu2.Tags = append([]string(nil), u1.Tags...)\nu2.Tags[0] = \"zig\"","note":"深拷贝切片后才互不影响"}]' />
+
+这与第 13 讲「子切片共享底层数组」是同一条规则：切片、map、指针字段本身都是描述符，要彻底隔离得逐个深拷贝。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go vet ./...
+go doc reflect.StructTag
+```
+
+```text
+# example.com/demo
+./main.go:4:2: struct field tag `json:port` not compatible with reflect.StructTag.Get: bad syntax for struct tag value
+type StructTag string
+    By convention, tag strings are a concatenation of optionally space-separated
+    key:"value" pairs.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `./main.go:4:2` | 出错字段标签所在的行、列 |
+| `not compatible with reflect.StructTag.Get` | structtag 检查器判定标签不符合约定格式 |
+| `bad syntax for struct tag value` | 具体原因：value 少了双引号 |
+| `type StructTag string` | 标签本质就是字符串，编译器不解析语义 |
+| `key:"value" pairs` | 约定格式；键名拼错（如 prot）仍合法，vet 查不出 |
+
+关键结论：`go vet` 能查「格式非法」，查不出「键名拼错」；后者只能靠运行时 `reflect.StructField.Tag.Get("json")` 对照，或用一条序列化单测覆盖。
+
+下面这段把对齐数值、浅拷贝与深拷贝、零大小值一次跑出来：
+
+```go
+package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+type A struct {
+	Flag  bool
+	Count int64
+	Tail  bool
+}
+
+type User struct {
+	Name string
+	Tags []string
+}
+
+func main() {
+	var a A
+	fmt.Println("A 总大小 =", unsafe.Sizeof(a))
+	fmt.Println("Count 偏移 =", unsafe.Offsetof(a.Count), "Tail 偏移 =", unsafe.Offsetof(a.Tail))
+	fmt.Println("int64 对齐 =", unsafe.Alignof(a.Count), "A 对齐 =", unsafe.Alignof(a))
+
+	u1 := User{Name: "a", Tags: []string{"go", "rust"}}
+	u2 := u1
+	u2.Tags[0] = "zig"
+	fmt.Println("浅拷贝后 u1.Tags =", u1.Tags, "u2.Tags =", u2.Tags)
+
+	u4 := User{Name: "a", Tags: []string{"go", "rust"}}
+	u3 := u4
+	u3.Tags = append([]string(nil), u4.Tags...)
+	u3.Tags[0] = "zig"
+	fmt.Println("深拷贝后 u4.Tags =", u4.Tags, "u3.Tags =", u3.Tags)
+
+	fmt.Println("空结构体大小 =", unsafe.Sizeof(struct{}{}))
+}
+```
+
+<OutputBox title="运行结果" output="A 总大小 = 24\nCount 偏移 = 8 Tail 偏移 = 16\nint64 对齐 = 8 A 对齐 = 8\n浅拷贝后 u1.Tags = [zig rust] u2.Tags = [zig rust]\n深拷贝后 u4.Tags = [go rust] u3.Tags = [zig rust]\n空结构体大小 = 0" />
+
+### 版本差异与适用边界
+
+| 版本或平台 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.17 | `unsafe.Slice` 等新 API 加入 | 与对齐计算无关，属 L3 |
+| Go 1.18 | 泛型结构体 `type Box[T any] struct{...}` 可用 | 字段类型由类型参数决定 |
+| Go 1.19 | `atomic.Pointer[T]` 等泛型原子类型 | 结构体里放指针字段更类型安全 |
+| Go 1.23 | `structs.HostLayout` 标记强制宿主布局 | 与 cgo / 系统调用交互时使用 |
+| 32 位平台 | int64 对齐数变为 4 | A 与 B 的差距缩小，`Sizeof` 结果不同 |
+| 全版本 | 对齐规则、`struct{}` 零大小、标签不校验 | 数值随 `GOARCH` 变，规则不变 |
+
+工程上别为省几个字节把字段按大小硬排得没法读：先用 `unsafe.Sizeof` 或压测确认是热点再动手；含未导出字段的结构体跨包构造要提供构造函数。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 26 讲](/core/value-semantics) 会把「结构体拷贝一层、引用字段共享」量化成成本，[第 28 讲](/core/slice-internals) 展开切片字段为何共享底层数组，[第 37 讲](/core/unsafe-cgo) 讲对齐与 cgo 布局的交互。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Command` 与 `Storage` 都是靠字段顺序清晰、可演化的结构体，[第 106 讲](/projects/net-image-server) 处理含 `[]byte` 字段的结构体时要留意浅拷贝，[第 117 讲](/projects/cloud-operator) 的 CRD 类型定义则把 `json` 标签当成对外契约。
 
 ## 动手练一练
 

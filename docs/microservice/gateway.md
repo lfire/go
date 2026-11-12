@@ -259,6 +259,111 @@ func main() {
 
 <Callout type="warn" title="网关是边界，不是业务层" text="别把订单状态机、数据聚合这类业务逻辑写进网关，否则它会变成谁都不敢改的巨石。也别只在网关做鉴权：一旦请求从内网绕过网关直达服务，单层防护就全失效，内部服务至少还要保留一次轻量校验。" />
 
+### 3.2 为什么需要统一入口，以及网关的能力边界从哪来
+
+服务拆细之后，如果让外部客户端直接对接内部服务，它就得知道几十个实例地址，还得每个服务各自实现一遍鉴权、限流与日志。网关的动机是把这些横切能力收敛到唯一入口：外部只认一个域名，内部服务的拓扑变化对外不可见。它的威力与风险都来自同一句话——「所有流量都过它」。
+
+由此能推出两条硬边界。第一，网关只做与业务无关的边界治理：认证、限流、灰度、日志、证书卸载、协议转换都合适；订单状态机、跨服务数据聚合这类业务编排一旦写进网关，它就会变成谁都不敢改的巨石，因为最常变的业务代码压在了最不该动的层里。第二，网关自身必须无状态、可水平扩容：既然是唯一入口，单副本就是全站单点，本地内存里存限流计数或会话都会让扩容失效。协议转换的边界也在这里——把 RESTful 的路径与 JSON 翻译成内部方法调用是「翻译」，替下游编排多个服务是「编排」，后者不该做。
+
+限流算法的选择则是另一处可以算清楚的推导。固定窗口计数最简单，却有著名的临界双倍问题：限 100 次每分钟，若 59.9 秒来了 100 次、60.1 秒又来 100 次，两个窗口各自合法，但在这 0.2 秒的临界区间里实际放行了 200 次。令牌桶用「按速率补充、最多存 capacity 个」解决它：`tokens += elapsed * rate`，超过 capacity 截断，取到令牌才放行。capacity 决定闲置后一次最多能放行多少（突发），rate 决定稳态平均 QPS，两者独立，才既能限平均又能容忍突发。
+
+<SequenceDiagram title="一次请求穿过网关的治理链" caption="鉴权限流在前、路由协议转换在中、透传链路上下文后转发到后端" :actors='["Client","Gateway","Auth","Limiter","Backend"]' :steps='[{"from":"Client","to":"Gateway","label":"HTTP 请求","note":"抵达统一入口","kind":"call"},{"from":"Gateway","to":"Auth","label":"校验 token","note":"失败短路","kind":"call"},{"from":"Auth","to":"Gateway","label":"通过或 401","note":"带身份","kind":"return"},{"from":"Gateway","to":"Limiter","label":"取令牌","note":"按用户维度","kind":"call"},{"from":"Limiter","to":"Gateway","label":"放行或 429","note":"带 Retry-After","kind":"return"},{"from":"Gateway","to":"Gateway","label":"匹配路由前缀","note":"查路由表","kind":"self"},{"from":"Gateway","to":"Gateway","label":"透传 trace-id","note":"避免断链","kind":"self"},{"from":"Gateway","to":"Backend","label":"协议转换转发","note":"REST 转 RPC","kind":"call"},{"from":"Backend","to":"Gateway","label":"回写结果","note":"内部响应","kind":"return"},{"from":"Gateway","to":"Client","label":"返回响应","note":"包回 JSON","kind":"return"}]' />
+
+### 3.3 替代方案取舍：限流算法与网关形态
+
+限流算法不止令牌桶一种，各自的突发与平滑特性决定适用场景：
+
+| 算法 | 允许突发 | 平滑度 | 边界问题 | 适用 |
+| --- | --- | --- | --- | --- |
+| 固定窗口计数 | 否 | 低 | 窗口临界可能双倍流量 | 粗粒度兜底 |
+| 滑动窗口计数 | 较平滑 | 中 | 存储与精度取舍 | 通用接口 |
+| 漏桶 | 否，恒定流出 | 高 | 突发被排队或丢弃 | 保护脆弱下游 |
+| 令牌桶 | 是 | 高 | capacity 与 rate 需联调 | API 网关主流 |
+| 分布式集中计数 | 视算法 | 高 | 依赖 Redis，多一次网络 | 多副本配额一致 |
+
+网关本身也有多种形态，选型决定了运维与故障面：
+
+| 形态 | 底座 | 配置方式 | 优点 | 失败边界 |
+| --- | --- | --- | --- | --- |
+| 自研轻量网关 | net/http 标准库 | 代码或本地文件 | 可控、可教学、定制自由 | 能力少，生态靠自己 |
+| Kong | Nginx 加 Lua | 声明式，可落库 | 插件成熟、企业生态 | 运维重，Lua 定制门槛 |
+| APISIX | Nginx 加 etcd | 声明式，etcd 热更 | 高频变更、插件热加载 | 依赖 etcd，组件多 |
+| Service Mesh Ingress | Envoy 数据面 | 控制面下发 CRD | 与集群治理一体 | 多一跳，排障链路长 |
+
+还有一处只在多副本下暴露的取舍：限流计数放进程内内存时，N 个网关副本各自维护一份桶，实际放行量约为单副本的 N 倍，且各实例看到的配额不一致。要么用 Redis 集中计数（多一次网络、Redis 成为依赖），要么按实例数把配额均分并接受误差——没有两全，只有按业务容忍度选。
+
+### 3.4 可验证实验：429 响应与令牌桶并发竞态
+
+限流是否真的生效，用 curl 看状态码最直接。容量 3、每秒补 2 个令牌时连续快速请求：
+
+```bash
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H 'Authorization: Bearer abc123' http://localhost:8080/api/order/1
+done
+```
+
+```text
+200
+200
+200
+429
+429
+200
+```
+
+逐字段解释：前三个请求取走了初始的 3 个令牌，返回 200；第四、五个因桶已空返回 429，配合 Retry-After 让客户端知道何时重试；第六个发生在令牌按速率补充之后，重新放行。若把限流改成固定窗口计数，在窗口临界处会看到短时间内连续两个 200 突发，正好对比出两种算法的差别。
+
+令牌桶本身是共享状态，并发正确性可以用竞态检测器验证。下面这段故意**不加锁**，复现「多个 goroutine 同时改 tokens」会怎样：
+
+```go
+package main
+
+import (
+	"sync"
+	"testing"
+)
+
+type Bucket struct{ tokens float64 }
+
+func (b *Bucket) Allow() bool {
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func TestBucketRace(t *testing.T) {
+	b := &Bucket{tokens: 1000}
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = b.Allow()
+		}()
+	}
+	wg.Wait()
+}
+```
+
+```bash
+go test -race -run TestBucketRace
+```
+
+```text
+WARNING: DATA RACE
+Read at 0x00c0000b4010 by goroutine 9:
+  main.(*Bucket).Allow()
+      bucket_test.go:12
+Previous write at 0x00c0000b4010 by goroutine 8:
+  main.(*Bucket).Allow()
+      bucket_test.go:14
+```
+
+逐字段解释：`b.tokens < 1` 的读与 `b.tokens--` 的写在两个 goroutine 间无同步，检测器报出冲突，说明无锁版本会算错令牌、放行量失控。原文 2.2 的 `TokenBucket` 用 `sync.Mutex` 把整段 `Allow` 保护起来，正是为了让判定与扣减成为一个原子操作——这也是任何带共享计数的限流器不能省的一把锁。
+
 ## 4. 工程实践
 
 限流要分层：网关做粗粒度的全局兜底（防刷、防突发），服务侧再做细粒度（按用户、按租户、按接口）。维度上优先用「用户 ID 加接口」而非单纯 IP，避免 NAT 后大量用户共享一个桶相互挤占。被限流的请求应返回 429 并带上 Retry-After，让客户端知道何时重试，而不是一律 500。
@@ -266,6 +371,43 @@ func main() {
 <Compare :panels='[{"label":"只放网关","code":"gateway.Auth(next)\n// 内部服务默认互信","note":"入口统一、改造成本低，但一旦被绕过或内网失守，内部服务毫无防护"},{"label":"网关加服务双层","code":"gateway.Auth(next)\nhandler.Auth(next)","note":"网关挡外部、服务再校验一次，纵深防御；代价是每服务都要带一份校验逻辑"}]' title="鉴权放在哪一层" />
 
 还有几条落地经验。网关自身必须无状态并多副本部署，限流计数若放本地内存，多实例间配额会不一致，要么用 Redis 集中计数、要么按实例数把配额均分并接受误差。路由与限流规则走配置中心热更新，和上一讲的能力接起来就能不重启地调阈值。转发时记得透传 trace-id 等 metadata，否则链路追踪会在网关这一跳断掉；同时设置合理的超时与连接池，别让下游慢拖垮网关。选型上，小集群或强定制需求用自研轻量网关足够，需要成熟插件、可视化与多租户时再上 Kong 或 APISIX——功能越多，运维与故障面也越大。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l7-microservice/lesson-078-gateway`](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-078-gateway)。clone 仓库后进入 `examples/l7-microservice`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+### 4.2 网关的失败矩阵
+
+网关是唯一入口，它的故障天然是全站级别的，更要把边界一条条钉死：
+
+| 故障 | 触发点 | 现象 | 防线 |
+| --- | --- | --- | --- |
+| 网关单点 | 只部署单副本 | 入口一挂全站不可用 | 无状态多副本 + 前置 LB |
+| 限流击穿 | 固定窗口临界 | 瞬时间隔内双倍流量打到下游 | 令牌桶或滑动窗口 |
+| 配额不一致 | 本地内存计数 + 多副本 | 各实例阈值叠加或不一致 | Redis 集中计数或按实例均分 |
+| trace 断链 | 转发未透传 metadata | 链路追踪缺网关这一跳 | 显式透传 trace-id |
+| 单层鉴权 | 内网可绕过网关直达服务 | 内部服务零防护 | 网关 + 服务双层校验 |
+| 下游慢拖垮网关 | 未设转发超时与连接池 | 连接堆积、goroutine 暴涨 | 超时 + 连接池 + 熔断 |
+
+### 4.3 两条真实工程误解
+
+**误解一：只在网关做鉴权就够了，内部服务默认互信。** 网关挡住了外部流量，但内网里服务间调用、运维直连、配置错误都可能让请求绕过网关直达后端。一旦单层防护被绕过，内部服务毫无校验。正确做法是纵深防御：网关做统一鉴权，服务侧保留一次轻量校验，代价是每服务带一份校验逻辑，换来的却是内网失守时仍有一道底线。
+
+<Compare :panels='[{"label":"错误：单层鉴权","code":"gateway.Auth(next)\n后端默认互信","note":"一旦请求从内网绕过网关，内部服务毫无防护"},{"label":"正确：双层校验","code":"gateway.Auth(next)\nhandler.Auth(next)","note":"网关挡外部、服务再校验一次，纵深防御"}]' title="鉴权放在哪一层" />
+
+**误解二：令牌桶本地计数在多副本下配额天然一致。** 每个网关副本各维护一份进程内的桶，N 个副本的实际放行量约为单副本的 N 倍，而且彼此看到的余量不同，用户换一个副本就可能从被限流变成被放行。要么用 Redis 集中计数（多一次网络、Redis 成为新依赖），要么按实例数把配额均分并接受误差——没有既零依赖又全局精确的方案。
+
+<Callout type="warn" title="本地令牌桶多副本会失准" text="限流计数放进程内内存时，N 个副本各自计一份，总配额被放大约 N 倍；要么集中到 Redis，要么按副本数均分配额并接受误差，别默认本地计数能全局一致。" />
+
+### 4.4 与后续阶段的呼应
+
+网关在 L8 会融入更大的接入体系：[/distributed/kubernetes](/distributed/kubernetes) 的 Ingress 与 Service 负责把流量引进集群并暴露服务，[/distributed/high-availability](/distributed/high-availability) 的多活架构要求入口本身也能跨故障域容灾，[/distributed/sre](/distributed/sre) 的容量规划则直接决定限流阈值怎么定。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 把网关限流当作防刷与削峰的第一道闸，[/projects/micro-ecommerce](/projects/micro-ecommerce) 用统一入口收敛鉴权与协议转换——本讲「只做边界治理、自身无状态」的原则，到那里就是能不能扛住峰值的前提。
+
+<Quiz q="多副本网关把令牌桶计数放在各自进程内存里，最可能出现什么问题？" :options='["各副本限流更精确","实际总放行量约为单副本的 N 倍，且各实例配额不一致","令牌会在副本间自动同步","不会有任何影响"]' answer="1" explain="每个副本独立计一份桶，总配额被放大约 N 倍且彼此不一致；要全局一致就得集中计数到 Redis，或按副本数均分配额并接受误差。" />
+
+<Predict q="令牌桶容量 3、每秒补 2 个，连续快速发 6 个请求，返回的 HTTP 状态码序列最可能是？" :options='["全是 200","200 200 200 429 429 200","全是 429","200 429 200 429 200 429"]' answer="1" output="200 200 200 429 429 200" explain="前三个请求取走初始 3 个令牌返回 200，第四五个因桶空返回 429 并带 Retry-After，第六个在令牌补充后重新放行。" />
 
 ## 动手练一练
 <Exercise title="给网关加上按用户维度的限流与 429 响应" task="扩展 2.1 的 Gateway：用 map[string]*TokenBucket 为每个用户 ID 维护一个独立令牌桶，在鉴权通过后按用户限流，超限时返回 429 与 Retry-After 头。" :hints='["用户 ID 可在鉴权成功后写入 context，或在 token 映射里带出","每个用户首次访问时懒创建令牌桶，用一把锁保护 map","限流失败时 http.Error 之前先设置 Retry-After 头"]' solution="要点一：Gateway 增加 limits map[string]*TokenBucket 与 mu，鉴权成功后取用户 ID。\n要点二：getBucket 懒创建，用户首次请求时用 NewTokenBucket 初始化。\n要点三：Allow 为 false 时先 Set Retry-After，再 WriteHeader(429) 返回，不放行到 ReverseProxy。" explain="按用户隔离配额才不会让一个高频用户挤占所有人的令牌；明确的 429 与 Retry-After 让客户端能退避重试而不是盲目打爆网关。" />

@@ -978,6 +978,12 @@ func BenchmarkWindowOf(b *testing.B) {
 
 **坑六：上下文丢失导致 goroutine 泄漏。** 现象是优雅退出后进程仍不退出。原因是读取 goroutine 卡在往已满缓冲发送上，没监听取消信号。错误写法 `out <- e`；正确写法把发送放进 select 并加 `case <-ctx.Done(): return`。退出后用 runtime.NumGoroutine 断言回到基线，是第 10 节已写明的验收项。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-107-data-log-etl`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-107-data-log-etl)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给管道加一个按级别分组的计数窗口" task="在现有扇出扇入基础上，让每个 worker 的局部结果按 Level 分别累加 Count，扇入时按 Level 合并；写一段实现并用表驱动测试覆盖 INFO 与 WARN 两组。" :hints='["把 Partial 从单个结构体改成以 Level 为键的 map","扇入时对每个 worker 的 map 逐键累加到总 map","用 t.Run 分别断言两个级别的计数"]' solution='func merge(dst, src map[string]int64) {\n    for k, v := range src {\n        dst[k] += v\n    }\n}\n\nfunc TestMerge(t *testing.T) {\n    dst := map[string]int64{"INFO": 2}\n    merge(dst, map[string]int64{"INFO": 3, "WARN": 1})\n    if dst["INFO"] != 5 || dst["WARN"] != 1 {\n        t.Fatalf("合并结果错误: %v", dst)\n    }\n}' explain="用 map 承载分组维度，扇入只做逐键累加，改动局限在聚合层，不影响读取与落地两层的接口；级别维度加入后，落地表的唯一键也要相应带上 Level。" />
@@ -988,7 +994,7 @@ func BenchmarkWindowOf(b *testing.B) {
 
 <Predict no="107-2" q="一分钟窗口、乱序容忍 5 秒，事件按到达顺序的时间戳为 10、50、65、8 秒。最后迟到丢弃计数是多少？" :options='["0","1","2"]' answer="1" output="迟到丢弃: 1" explain="事件 65 让 maxSeen 升到 65、水位线到 60，窗口 0 被结算关闭；随后到达的事件 8 属于窗口 0，且窗口末端 60 不大于水位线 60，被判为迟到并丢弃，计数为 1。这正是 6.4 的输出。" />
 
-<FillBlank no="107-3" tpl="Scanner 默认的单行上限是 ___ ，超过后会停止扫描且必须显式检查 ___ 才能发现。" :answers='["64 KiB","sc.Err()~sc.Err~Err"]' hint="一个与 bufio 包常量有关，一个是 Scanner 的错误返回方法。" explain="bufio.Scanner 默认 MaxScanTokenSize 为 64 KiB；生产日志必须调用 sc.Buffer 放大，并在循环结束后返回 sc.Err()，否则超长行导致的停扫会被静默忽略。" />
+<FillBlank no="107-3" tpl="Scanner 默认的单行上限是 ___ ，超过后会停止扫描且必须显式检查 ___ 才能发现。" :answers='["64 KiB","sc.Err()~sc.Err~Err"]' hint="一个与 bufio 包常量有关，一个是 Scanner 的错误返回方法。" explain="bufio.Scanner 默认 MaxScanTokenSize 为 64 KiB；生产日志必须调用 sc.Buffer 放大，并在循环结束后返回 sc.Err()，否则超长行导致的停扫会被静默忽略。" :explains='["bufio 的单次扫描缓冲上限定为该常量，超长行会让扫描停下；需用 sc.Buffer 抬高阈值，否则大行被静默忽略。","扫描错误被缓存在内部，循环平顺结束也可能只是提前停扫；只有循环后调用这个错误方法读取返回值，才能拿到并上报真实故障原因。"]' />
 
 ## 一页纸速记
 

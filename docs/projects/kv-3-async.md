@@ -1528,6 +1528,12 @@ go tool pprof -http=:8080 cpu.prof
 
 **坑 8：用 `time.Now()` 做日志序号。** 现象：NTP 回拨后恢复顺序错乱，新写被旧写覆盖。原因：墙上时钟不单调。修正：位点一律用字节偏移，任期与序号这类逻辑时钟留给第 114 讲 Raft。本讲从设计上就用字节位点规避了整类问题，但评审时要明确写出来，免得后来有人「顺手」加个时间戳排序。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-113-kv-3-async`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-113-kv-3-async)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给组提交加批量阈值，把 RPO 从固定窗口变成「窗口或批量先到」" task="当前 syncLoop 只按 time.Ticker 触发 fsync，低流量时一条写也要等满 5 ms，高流量时又可能攒太多写才落盘。请改造 syncLoop：让 pending 达到阈值时立即触发一次 Sync，同时保留窗口触发，并保证 Close 仍能收尾。" :hints='["给 WAL 增加 batchSize 字段，Append 里 pending 累加后判断是否达到阈值","可以在 Append 里直接判断并调用一次内部 syncLocked，也可以用一个带缓冲的信号 channel 通知 syncLoop","注意 Sync 必须在持 w.mu 的状态下进行，且不要与 ticker 分支重复计数","补一个测试：batchSize 设为 1 时，写过一条后 fsync_total 应当立刻增加"]' solution='给 WAL 增加 batchSize int 字段，OpenWAL 归一化默认值（例如 256）。在 Append 把 pending 累加后追加判断：若 policy 为 SyncGroup 且 pending 达到 batchSize，则就地调用 w.f.Sync() 并把 pending 归零、syncCount 加一。syncLoop 的 ticker 分支保持不变，用于处理未达阈值但窗口已到的尾巴；stop 分支保持不变用于收尾。注意两处 Sync 都要在 w.mu 保护下执行，避免与 Close 竞争。测试用 SyncGroup 且 batchSize 设为 1 打开实例，写一条 SET 后读取 Metrics() 的 fsync_total，断言大于 0。' explain="这道题的价值在于戳破「组提交等于固定窗口」的误解：真正可控的组提交是「批量或时间先到者触发」，批量约束了单批最大丢失量，时间约束了低流量下的最大等待延迟，两者合起来才把 RPO 与 P99 同时写进 SLA。" />
@@ -1538,7 +1544,7 @@ go tool pprof -http=:8080 cpu.prof
 
 <Predict no="113-2" q="日志末尾有 3 条完整记录，随后是 5 字节的半条记录头，Replay 的结果是什么？" :options='["报错并拒绝启动，要求人工清理","跳过半条记录继续读后面的内容","重放 3 条后返回干净位点并正常结束","把半条按 0 补齐后应用"]' answer="2" output="重放 3 条后返回干净位点并正常结束" explain="io.ReadFull 读不满 8 字节头时返回 ErrUnexpectedEOF，replayOne 把 clean 置为 false 并返回当前 pos；Replay 收到后停止遍历，返回该干净位点和 nil。随后 OpenWALStorage 用 TruncateTo 把这 5 字节裁掉，再 OpenWAL 新建段。报错、跳过或补零都会破坏「只读已完整记录」这条不变量。" />
 
-<FillBlank no="113-3" tpl="WAL 记录用 ___ 字段挡半条记录、用 ___ 挡位翻转；崩溃恢复四步是加载快照、按位点重放、___、新建段；组提交的 RPO 由 ___ 决定。" :answers='["length~长度","CRC32C~CRC~校验和","裁剪脏尾巴~TruncateTo","组提交窗口~窗口~group_window_ms"]' hint="前两空来自记录格式，第三空来自恢复链路，第四空来自 SyncPolicy" explain="长度与 CRC32C 各司其职；TruncateTo 是「重放」之后、「开新段」之前不可省的一步；SyncGroup 的 RPO 上限就是配置里的组提交窗口，写进 SLA 的就是这个数字。" />
+<FillBlank no="113-3" tpl="WAL 记录用 ___ 字段挡半条记录、用 ___ 挡位翻转；崩溃恢复四步是加载快照、按位点重放、___、新建段；组提交的 RPO 由 ___ 决定。" :answers='["length~长度","CRC32C~CRC~校验和","裁剪脏尾巴~TruncateTo","组提交窗口~窗口~group_window_ms"]' hint="前两空来自记录格式，第三空来自恢复链路，第四空来自 SyncPolicy" explain="长度与 CRC32C 各司其职；TruncateTo 是「重放」之后、「开新段」之前不可省的一步；SyncGroup 的 RPO 上限就是配置里的组提交窗口，写进 SLA 的就是这个数字。" :explains='["记录头写入自身字节长度，恢复时按它读满一条；崩溃残留的半条记录因长度不符被识破并停在这里，不会把残缺字节当成合法数据。","长度只防截断，挡不住位翻转这类静默损坏；给每条附一份校验码，重放时重算比对，不符即判损坏，把悄悄变坏的数据挡在恢复之外。","按位点重放到末尾往往撞上没写完的脏尾巴，直接开新段会让后续记录接在残字节后；必须先按最后合法位点截断，再建新段接着写。","开启组提交后，写入先在内存攒够一个时间窗才落盘，宕机最多丢窗口内未刷盘的数据，所以窗口时长就是可承诺的 RPO 上限。"]' />
 
 ## 一页纸速记
 

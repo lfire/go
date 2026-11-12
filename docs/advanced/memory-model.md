@@ -187,6 +187,76 @@ exit status 66
 
 <Callout type="tip" title="源码阅读建议" text="先通读 doc/go_mem.html 里 happens before 与 DRF-SC 两节拿到术语，再按 sync/mutex.go、once.go、waitgroup.go、atomic/doc.go 的顺序读各文件开头的同步保证注释；想深挖 -race 就搜 runtime.raceread 的插桩点，别从 ThreadSanitizer 的向量时钟实现读起。" />
 
+### 常见误读与反例
+
+内存模型的误读最危险，因为错的代码往往「跑几次都对」。下面四条用规范定义、`-race` 报告与一个最小反例就能推翻。
+
+| 误读 | 为什么站不住（规范推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「`time.Sleep` 一会儿或加个 `runtime.Gosched()`，读就能看到之前的写」 | `sequenced before` 只在单个 G 内有效，`Sleep` 与 `Gosched` 都不建立 `synchronized before`；没有同步边就是数据竞争，DRF-SC 不适用。编译器甚至可能把 `for !ready {}` 优化成死循环 | 用 atomic 的 Store/Load、channel 或 Mutex 建立边；第 2 段错误样例与第 1 段正确样例就是同一逻辑的两种写法 |
+| 「`-race` 没报就说明没有数据竞争，跑几次结果都对就说明写对了」 | `-race` 只发现本次执行实际碰到的冲突访问，未覆盖的分支、未触发的交错都查不到；有竞争的程序不受 DRF-SC 保护，语言不保证任何结果 | 靠 `happens-before` 推导正确性；用 `go test -race -count=20` 提高交错触发概率，但它仍是采样手段，不是证明 |
+| 「原子变量只是更快，可见性和普通变量一样；x86 不会重排所以不用同步」 | `sync/atomic/doc.go` 规定全体原子操作等价于某个顺序一致执行，这才建立 synchronized-before；硬件内存序（x86 的 TSO、ARM 的弱序）由编译器与运行时用屏障抽象掉，应用只能依赖语言级 happens-before | 按第 3 节那张表选原语，别按某款 CPU 的行为推理；`go_mem.html` 的术语是唯一可移植的依据 |
+| 「Mutex 的 TryLock 失败也建立了同步边」 | `sync/mutex.go` 开头明确写：第 n 次 Unlock synchronizes before 第 m 次 Lock（n 小于 m），而**失败的 TryLock 不建立任何关系** | 只有成功配对的 Lock/Unlock 才算边；用 TryLock 做「试探」后不能据此读共享数据 |
+
+下面这个最小反例把第一条误读坐实：同样的发布逻辑，`Sleep` 与 `Gosched` 版本在 `-race` 下稳定报告竞争，atomic 版本无报告。
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync/atomic"
+	"time"
+)
+
+// 反例：Sleep 与 Gosched 都不建立 synchronized-before。
+// 单独用 go run -race 运行 wrong() 会报告数据竞争。
+func wrong() {
+	var data int
+	var ready bool
+	go func() {
+		data = 42
+		ready = true
+	}()
+	for i := 0; i < 1000 && !ready; i++ {
+		runtime.Gosched()
+	}
+	time.Sleep(time.Millisecond)
+	fmt.Println("wrong 读到 data =", data)
+}
+
+func right() {
+	var data int
+	var ready atomic.Int32
+	go func() {
+		data = 42
+		ready.Store(1)
+	}()
+	for ready.Load() == 0 {
+		runtime.Gosched()
+	}
+	fmt.Println("right 读到 data =", data)
+}
+
+func main() {
+	wrong()
+	right()
+}
+```
+
+`wrong` 里 `data` 与 `ready` 的写读之间没有任何同步边，即使这次恰好打印 42 也不能作数；`right` 里 `atomic.Int32` 的 Store/Load 配成一对，才把 G1 内的 `sequenced before` 传递到 G2 的读上。用 `go run -race` 跑，`wrong` 部分会出现 `WARNING: DATA RACE` 与 `Found 1 data race(s)`，这正是第 3 节报告逐字段解释里的那条链。
+
+<Quiz q="用 go test -race -count=20 跑一个含数据竞争的程序，全部 20 次都没报错，能得出什么结论？" :options='["程序没有数据竞争","本次采样的交错没碰到冲突访问，不能证明无竞争","-race 对该程序无效","加 Sleep 就能彻底修复"]' answer="1" explain="-race 只发现本次执行实际碰到的冲突访问，-count=20 只是提高触发概率，仍是采样；正确性只能靠 happens-before 推导。" />
+
+一句话记边界：`-race` 报告能证明「这次碰到了一对未排序的冲突访问」，却不能证明「没碰到的分支里没有」；`go_mem.html` 的偏序推导才是证明，工具只是发现手段。
+
+### 与 L10 源码级实战的呼应
+
+- KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：WAL 追加写与快照切换之间必须靠 Mutex 或 atomic 建立同步边，否则恢复线程可能看到「写了一半」的记录；本讲的 happens-before 推导是判断这段并发控制是否正确的唯一依据，`-race` 只能辅助发现。
+- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：预扣减与最终一致里，库存计数与订单状态的发布必须有一次同步边（channel 或 atomic），靠「先写库存再写订单」的书写顺序在并发下并不成立。
+- [实战 08 · 分布式任务调度系统](/projects/concurrent-scheduler)：etcd 选主与租约故障转移时，主节点标志的读写跨多个 goroutine，`sync/atomic` 与 `WaitGroup.Done`/`Wait` 各自建立的边正好对上第 3 节那张同步原语表。
+
 ## 4. 工程实践
 代码评审时把「共享变量 + 是否有同步边」当成固定检查项：先列出所有跨 goroutine 的读写，再逐个追问两者之间有没有 channel、Mutex、Once、WaitGroup 或 atomic 建立的边；没有就补上，而不是加 `time.Sleep`。CI 里固定跑 `go test -race`，并对 `go_mem.html` 里「实现可以对数据竞争直接报告并终止」这一条保持敬畏。
 
@@ -196,6 +266,12 @@ go test -race ./...
 ```
 
 <Compare title="发布信号的两种写法" :panels='[{"label":"写法 A：普通 bool","code":"go func() {\n    data = 42\n    ready = true\n}()\nfor !ready {\n    spin()\n}\nprintln(data)","note":"写与读之间无 synchronized-before，是数据竞争，结果不可推导"},{"label":"写法 B：atomic 或 channel","code":"go func() {\n    data = 42\n    atomic.StoreInt32(ptr, 1)\n}()\nfor atomic.LoadInt32(ptr) == 0 {\n    spin()\n}\nprintln(data)","note":"Store/Load 建立 synchronized-before，读必然看到 42，可用 -race 验证"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-099-memory-model`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-099-memory-model)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 -race 抓一次数据竞争" task="把第二段程序用 go run -race 运行，记录报告里的两个访问位置；再改成第一段写法，确认报告消失。" :hints='["报告会同时给出写与读的栈", "关注 WARNING: DATA RACE 与 Found 1 data race"]' solution="var data int\nvar ready int32\ngo writer()\nfor atomic.LoadInt32(ptr) == 0 {\n    runtime.Gosched()\n}\nprintln(data)" explain="普通 bool 版本被报告竞争；换成 atomic 后同步边成立、报告消失。完整代码见第一段。" />

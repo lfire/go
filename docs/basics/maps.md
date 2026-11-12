@@ -257,7 +257,123 @@ func main() {
 | `sync.RWMutex` | 读多写少 | 写会阻塞所有读 | 读锁内不要再做写操作 |
 | `sync.Map` | 键集合稳定、读远多于写 | 内存占用更高 | 只有 Store / Load，没有下标赋值 |
 
-<Predict no="16-3" q="var m map[string]int 是 nil map，对它调用 Go 1.21 的 clear(m) 后再 len(m)，结果是？" :options='["panic: assignment to entry in nil map","编译失败","0，且不会 panic","1"]' answer="2" output="0，不会 panic" explain="clear 对 nil map 是空操作，len 仍为 0；这和「nil map 写入会 panic」并不矛盾，clear 只清已有键，没有就什么都不做。" />
+<Predict q="var m map[string]int 是 nil map，对它调用 Go 1.21 的 clear(m) 后再 len(m)，结果是？" :options='["panic: assignment to entry in nil map","编译失败","0，且不会 panic","1"]' answer="2" output="0，不会 panic" explain="clear 对 nil map 是空操作，len 仍为 0；这和「nil map 写入会 panic」并不矛盾，clear 只清已有键，没有就什么都不做。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-016-maps`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-016-maps)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与运行时源码，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：不可取址、键可比较与随机顺序的规范依据
+
+`&m[k]` 编译失败，根本依据不是「扩容会搬元素」这条运行时现象，而是规范层面的可寻址性：Go 语言规范「Address operators」规定取址操作数必须是 addressable，而「Index expressions」明确 map 的 index 表达式**不是** addressable。所以无论 `make` 给多大容量、是否真的会扩容，编译器在类型检查阶段就拒绝 `&m[k]`；「扩容会搬动元素、地址不稳定」是设计动机，不是判定条件。同理 `m[k].Field = v` 也失败：map 返回的是 value 的一份拷贝，且这份拷贝不可寻址，无法给它的字段赋值；正确姿势是「取出 — 改字段 — 整体赋值回去」，或把 value 存成指针。键必须可比较也写在规范「Map types」里：`==` 与 `!=` 必须对键类型完全有定义，否则编译器报 `invalid map key type`，因此数组、可比较的结构体、指针可以作键，切片、map、函数不行。遍历顺序不保证则来自 `runtime/map.go` 的 `mapiterinit`：`fastrand()` 随机选起始桶与桶内偏移，`mapiternext` 顺序扫桶，所以顺序既不稳定也不该被依赖；规范同时写明「迭代中删除当前键安全，新增键可能被扫到也可能不被扫到」，这正是桶扫描的直接推论。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`&m[k]` 只是因为扩容才会失败，预分配足够容量、保证不扩容就能取地址。** 可寻址性是编译期的类型属性，不随运行时容量变化。
+
+<Compare title="取址失败与容量无关" :panels='[{"label":"错误：以为容量够就合法","code":"m := make(map[string]int, 16)\np := &m[\"a\"] // 容量足够也编译失败\n_ = p","note":"报 cannot take address of m[k]"},{"label":"正确：取出改完写回","code":"v := m[\"a\"]\nv++\nm[\"a\"] = v","note":"或把 value 存成指针类型"}]' />
+
+换成 `map[string]*User` 后 `m[k].Field = x` 能写，是因为指针值本身可解引用，而非 `m[k]` 变得可寻址——别把两件事混为一谈。
+
+**误解二：把 map 传进函数，函数内 `m = make(...)` 重新赋值会清空或替换调用方那张表。** 传参拷的是描述符，重新赋值只改副本的指向。
+
+<Compare title="描述符的重新赋值与删键" :panels='[{"label":"错误：以为换掉了调用方的表","code":"func reset(m map[string]int) {\n    m = make(map[string]int)\n}\n// 调用方那张表不变","note":"副本改指向，不影响原 hmap"},{"label":"正确：改共享的 hmap","code":"func clearAll(m map[string]int) {\n    for k := range m {\n        delete(m, k)\n    }\n}","note":"删键作用于同一张表，调用方看得见"}]' />
+
+这与「切片传参改元素互相看见、但 `append` 换数组不回传」是同一套规则：描述符按值传，共享的是它指向的数据结构。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go build ./...
+go doc builtin.delete
+```
+
+```text
+# example.com/demo
+./main.go:5:7: invalid operation: cannot take address of m["a"] (map index expression of type int)
+./main.go:8:10: invalid map key type []byte
+func delete(m map[Type]Type1, key Type)
+    If m is nil or there is no such element, delete is a no-op.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `./main.go:5:7` | 报错位置：文件、行、列 |
+| `cannot take address of m["a"]` | 取址被拒，map index 表达式不可寻址 |
+| `(map index expression of type int)` | 编译器点明操作数类别与元素类型 |
+| `invalid map key type []byte` | 键类型的 `==` 未定义，编译期拒绝 |
+| `func delete(m ..., key Type)` | delete 的签名，key 类型必须与键类型一致 |
+| `If m is nil ... delete is a no-op` | 规范承诺：nil map 与缺失键都安全 |
+
+下面这段把两条误解、数组作键与 `clear` 对 nil map 的行为跑成确定输出：
+
+```go
+package main
+
+import "fmt"
+
+type User struct{ Age int }
+
+func reset(m map[string]int) {
+	m = make(map[string]int)
+}
+
+func clearAll(m map[string]int) {
+	for k := range m {
+		delete(m, k)
+	}
+}
+
+func main() {
+	users := make(map[string]User, 16)
+	users["a"] = User{Age: 18}
+	u := users["a"]
+	u.Age = 20
+	users["a"] = u
+	fmt.Println("取出改回写 =", users["a"].Age)
+
+	ptrs := map[string]*User{"a": &User{Age: 18}}
+	ptrs["a"].Age = 30
+	fmt.Println("指针 value 直接改 =", ptrs["a"].Age)
+
+	m := map[string]int{"x": 1}
+	reset(m)
+	fmt.Println("重新赋值后调用方 =", m)
+	clearAll(m)
+	fmt.Println("删键后调用方 =", m)
+
+	byArray := map[[3]int]string{}
+	byArray[[3]int{1, 2, 3}] = "ok"
+	fmt.Println("数组键 =", byArray[[3]int{1, 2, 3}])
+
+	var nilMap map[string]int
+	clear(nilMap)
+	fmt.Println("nil map 清空后 len =", len(nilMap))
+}
+```
+
+<OutputBox title="运行结果" output="取出改回写 = 20\n指针 value 直接改 = 30\n重新赋值后调用方 = map[x:1]\n删键后调用方 = map[]\n数组键 = ok\nnil map 清空后 len = 0" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.18 | `any` 成为 `interface{}` 别名，可作 map 的 value 类型 | 与 `interface{}` 等价 |
+| Go 1.20 | `comparable` 约束放宽，普通接口值可满足 | 影响泛型 map 键，见第 22 讲 |
+| Go 1.21 | 内建 `clear(m)` 一行清空所有键 | 对 nil map 是空操作 |
+| Go 1.21 | 标准库 `maps` 包提供 `Clone`/`Keys`/`Values` | 手写拷贝有了官方替代 |
+| Go 1.23 | `maps.Keys`/`Values` 返回 `iter.Seq` 迭代器 | 需配合 `for range` 使用 |
+| 全版本 | `&m[k]` 不可取址、键须可比较、并发写 fatal | 结论与版本无关 |
+
+适用边界还有两条：`clear(m)` 只删键、不缩桶，长期膨胀的缓存要定期重建而非只清键；键类型若有不可比较字段（如含切片的结构体）同样编译失败，别等运行时才发现。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 29 讲](/core/map-internals) 会展开 `hmap`/`bmap`、桶分裂与渐进扩容，把「为什么地址不稳定」落到结构里；[第 30 讲](/core/interface-internals) 解释 map 里装 `any` 时的动态类型；[第 45 讲](/concurrency/sync-primitives) 与 [第 49 讲](/concurrency/race) 分别给出 `RWMutex` 与竞态的判据。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 就是「一张 map 加一把锁」，[第 116 讲](/projects/micro-seckill) 的库存热点 key 则把锁粒度与 `sync.Map` 的取舍摆到台面上。
 
 ## 动手练一练
 

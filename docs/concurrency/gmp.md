@@ -145,6 +145,135 @@ func main() {
 
 本地队列 256 个槽位是设计取舍：定长数组让入队出队成为无锁的 O(1) 操作；一旦放满，运行时会把其中一半搬到全局队列，既保住了本地访问的快，又给均衡留了出口。至于「空闲 P 怎么去别的 P 偷 G」「M 阻塞时 P 怎么转交」，属于调度循环的动作，下一讲专门拆开。
 
+### 再深一层：调度不是同步动作、P 的推导与可验证证据
+
+GMP 讲的是「谁在什么时候被挑起来跑」，它**不属于**内存模型里的同步动作。这一点必须掰清楚，否则最容易推出一个错误的安心感：「我把它设成单 P、或者让它 `Gosched` 让出一次，两个 G 不就有先后了吗？」答案是没有。`go_mem.html` 列出的同步动作只有 `go` 语句、channel 收发与关闭、Mutex 的 Unlock 到 Lock、WaitGroup、Once 与 `sync/atomic`；G 在 P 之间迁移、`findRunnable` 的取 G 顺序、work stealing、异步抢占、sysmon 的 retake 都只改变**谁占用 CPU**，不改变**写入是否对别人可见**。`runtime/proc.go` 里 `schedule`、`findRunnable` 做的是队列操作与 `goready`，它们不是同步型读写，编译器与 CPU 仍可对无同步的访问重排。由此得到一条硬结论：**正确性只能来自同步原语，不能来自调度器的排列**。
+
+| 事件 | 是否同步动作 | 依据与边界 |
+| --- | --- | --- |
+| G 在 P 间迁移、work stealing | 否 | `runtime/proc.go` 的 `findRunnable` / `stealWork`，纯队列调度 |
+| `runtime.Gosched()` | 否 | 只主动让出一次 P，不发布任何写入 |
+| `runtime.GOMAXPROCS(n)` | 否 | 只改 P 的数量，即并行度上限 |
+| 异步抢占、sysmon retake | 否 | 夺回 CPU 让调度与 GC 推进，不建立 happens-before |
+| channel 收发、`close`、Mutex、atomic、WaitGroup、`go` 语句 | 是 | go_mem.html 与 `sync` 包注释列明的同步动作 |
+
+这个结论可以用反面实验钉死：把 `GOMAXPROCS` 设为 1，两个 G 在同一 P 上交替对同一个共享 `int` 各加 1000 次且不加锁，`go test -race` 依然会报 `WARNING: DATA RACE`。原因是数据竞争的定义看「两次访问之间有没有 happens-before」，而不看物理上是否真的并行；单 P 交替、写之间仍无排序，向量时钟照样判为并发。这也是「这次跑对了不能证明正确」的一种：单 P 下结果往往恰好是 2000，换到多 P 才偶发少算。
+
+```go
+package main
+
+import (
+	"os"
+	"runtime"
+	"sync"
+	"testing"
+)
+
+// burn 纯计算，会持续占住一个 P
+func burn(n int) int {
+	sum := 0
+	for i := 0; i < n; i++ {
+		sum += i
+	}
+	return sum
+}
+
+func runParallel(procs, workers int) int {
+	old := runtime.GOMAXPROCS(procs)
+	defer runtime.GOMAXPROCS(old)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	total := 0
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := burn(20_000_000)
+			mu.Lock()
+			total += v
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return total
+}
+
+func TestParallelSum(t *testing.T) {
+	if got := runParallel(2, 2); got == 0 {
+		t.Fatal("计算结果为 0，异常")
+	}
+}
+
+// 反面实验：单 P 下两个 G 交替写共享变量且无同步，仍构成数据竞争
+func scheduleIsNotSync() int {
+	old := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(old)
+	n := 0
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				n++
+			}
+		}()
+	}
+	wg.Wait()
+	return n
+}
+
+func TestScheduleNotSyncRace(t *testing.T) {
+	if os.Getenv("SHOW_RACE") == "" {
+		t.Skip("反面实验：设 SHOW_RACE=1 并加 -race 运行")
+	}
+	_ = scheduleIsNotSync()
+}
+
+func BenchmarkP1(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_ = runParallel(1, 2)
+	}
+}
+
+func BenchmarkPN(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_ = runParallel(runtime.NumCPU(), 2)
+	}
+}
+```
+
+```bash
+go test -race -run=TestParallelSum -v ./...                    # 正确写法：全绿
+SHOW_RACE=1 go test -race -run=TestScheduleNotSyncRace ./...  # 单 P 交替写仍报 DATA RACE
+go test -bench='P1|PN' -benchmem -run=^$ ./...                 # 看 P 数对纯计算的影响
+GODEBUG=schedtrace=1000,scheddetail=1 go run main.go           # 逐字段看各 P 的队列长度
+```
+
+<OutputBox title="BenchmarkP1 与 BenchmarkPN 本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkP1-12：约 42 ms/op，0 B/op，0 allocs/op\nBenchmarkPN-12：约 22 ms/op，0 B/op，0 allocs/op" note="两个纯计算任务：1 个 P 轮流跑约等于两者之和，多 P 真正并行接近单个任务" />
+
+逐字段读：`ns/op`（这里显示为 ms/op）是每轮耗时，P 数为 1 时两个任务只能轮流占 P、耗时约等于两者相加，恢复到 `NumCPU` 后真正并行、耗时接近单个任务，这正是「P 决定并行度」的量化证据；`B/op` 与 `allocs/op` 都接近 0，因为 `burn` 只做整数循环、不分配堆内存，说明这里的差距纯粹来自并行而非分配。把任务换成 `time.Sleep` 型 I/O，两个 benchmark 会几乎持平——等待中的 G 不占 P，再多的 P 也帮不上忙。
+
+<OutputBox title="GODEBUG=schedtrace=1000,scheddetail=1 的一段采样" output="SCHED 2000ms: gomaxprocs=8 idleprocs=2 threads=14 spinningthreads=1 idlethreads=5 runqueue=3" note="runqueue 是全局队列长度，idleprocs 是空闲 P 数，spinningthreads 是正在找活的 M 数" />
+
+`runqueue=3` 表示全局队列里还压着 3 个待调度的 G，`idleprocs=2` 表示有 2 个 P 暂时空闲，`spinningthreads=1` 是那个正自旋找活的 M。要记住这些字段反映的是**负载分布**，不是**正确性**：`runqueue` 长期偏高、`idleprocs` 长期偏低，说明 P 忙不过来；反过来大量 `idleprocs` 却仍有高延迟，瓶颈在锁、I/O 或下游，调大 P 只会掩盖问题。调度轨迹能告诉你的始终是「CPU 有没有闲着」，不会告诉你「两个 G 的写入有没有排序」。
+
+失败时序也要用这套模型来看：等待中的 G 会挂起并让出 P，M 立刻拿这个 P 去跑别的就绪 G，所以少量 P 能撑起大量并发 I/O。下面这张时序图把一次「计算转网络等待再被唤醒」的链路画出来。
+
+<SequenceDiagram title="等待中的 G 让出 P 的时序" caption="G 一挂起，M 立刻拿 P 去跑别的就绪 G，少量 P 即可服务大量 I/O" :actors='["请求","P1","G计算","G网络","netpoller"]' :steps='[{"from":"请求","to":"P1","label":"派发任务","note":"进入本地队列","kind":"call"},{"from":"P1","to":"G计算","label":"执行计算","note":"占住一个 P","kind":"call"},{"from":"G计算","to":"P1","label":"发起网络IO","note":"让出 P","kind":"call"},{"from":"P1","to":"G网络","label":"挂起登记","note":"gopark 不占 P","kind":"call"},{"from":"G网络","to":"netpoller","label":"注册监听","note":"等待数据到达","kind":"call"},{"from":"netpoller","to":"P1","label":"IO 就绪","note":"唤醒对应 G","kind":"async"},{"from":"P1","to":"G网络","label":"重新入队","note":"回到运行队列","kind":"return"},{"from":"G网络","to":"请求","label":"返回结果","note":"少量 P 撑大量 IO","kind":"return"}]' />
+
+两条工程误解都建立在「把调度当同步」或「把并行度当容量」上：
+
+<Compare title="别拿调度动作当同步" :panels='[{"label":"错误：让出就算排好序","code":"runtime.GOMAXPROCS(1)\nruntime.Gosched() // 以为这样就有先后\nn++ // 与另一个 G 的写无同步","note":"Gosched 与 GOMAXPROCS 都不是同步动作，两次写之间仍无 happens-before，属数据竞争。"},{"label":"正确：用同步原语建边","code":"ch := make(chan int, 1)\ngo func() { ch &lt;- 1 }()\n&lt;-ch // 收发建立 happens-before\nn++","note":"channel 的一次收发是内存模型列明的同步动作；也可用 Mutex 或 atomic。"}]' note="先后顺序与可见性排序是两回事，只有后者才算数。" />
+
+<Compare title="P 数是并行度，不是并发容量" :panels='[{"label":"错误：按连接数设 P","code":"runtime.GOMAXPROCS(5000)\n// 以为要服务 5000 个并发就得有 5000 个 P","note":"更多 P 意味着更多 mcache、更多 GC 辅助线程与更频繁切换，纯计算通常反而变慢。"},{"label":"正确：保持默认","code":"// 不设置，用运行时默认值\n// 等待中的 G 不占 P\n// 压测或 schedtrace 确认瓶颈后再按 CPU 限额调","note":"少量 P 就能服务大量 I/O；P 只限制同一时刻并行执行 Go 代码的名额。"}]' note="先分清瓶颈是 CPU 不够还是等待没重叠，后者与 P 数量基本无关。" />
+
+第 41 讲会把「锁与阻塞的性能画像」展开：`go tool pprof -mutex` 看争用热点、`-block` 看阻塞时长，它们与 `schedtrace` 一样只给性能线索，不判正确性。
+
+这些结论在实战里有直接对应。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 把服务跑在容器里，若默认值没识别出 cgroup 的 CPU 限额就会按宿主机核数起太多 P，洪峰下上下文切换与 GC 开销被放大（Go 1.25 起运行时已会参考容器限额）；第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Fetcher worker 数远大于 CPU 核数却仍能高吞吐，靠的正是「等待中的 G 不占 P」；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 里执行槽与机器核数的关系，也要用「P 限并行、不限 G 数量」来推。
+
+<Quiz q="把 GOMAXPROCS 设为 1，两个 goroutine 交替对同一个共享 int 各加 1000 次且不加锁，go test -race 会怎样？" :options='["全绿，单 P 不会真并行所以没有竞争","报 WARNING: DATA RACE，因为调度顺序不构成 happens-before","编译报错","结果恒为 2000 且无任何提示"]' answer="1" explain="数据竞争的定义看「有无同步排序」，不看是否物理并行；G 在单 P 上交替、写之间仍无 happens-before，编译器与 CPU 仍可重排。同步只能来自 channel、Mutex、atomic、WaitGroup 或 go 语句，不能靠 GOMAXPROCS 或 Gosched。" />
+
 ## 4. 工程实践
 
 绝大多数服务**不需要手动设置 GOMAXPROCS**：默认取逻辑 CPU 数，对 CPU 密集任务已是最优解，对 I/O 密集任务也不构成瓶颈。需要显式干预的通常是容器场景——若默认值没识别出 cgroup 的 CPU 限额，程序会按宿主机核数起太多 P，带来多余的上下文切换与 GC 开销（Go 1.25 起运行时已会参考容器限额）。
@@ -158,6 +287,12 @@ GODEBUG=schedtrace=1000 go run main.go
 ```
 
 输出里 `gomaxprocs` 是当前 P 数，`idleprocs` 是空闲 P 数，`runqueue` 是全局队列长度。若长期看到大量 `idleprocs` 而请求延迟仍高，说明瓶颈在锁、I/O 或下游，而不是 P 不够——这时调大 GOMAXPROCS 只会掩盖问题。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-040-gmp`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-040-gmp)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

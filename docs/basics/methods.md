@@ -250,7 +250,117 @@ func main() {
 | 指针接收者方法里直接解引用 | nil 调用时 panic | 方法开头判 `if c == nil` |
 | 给别包的类型加方法 | 编译失败 | 只能给本包定义的类型加方法 |
 
-<Predict no="18-3" q="SafeCounter 内含 sync.Mutex，若把 Add 误写成值接收者 func (c SafeCounter) Add，再起 100 个 goroutine 各加 1，go vet 与 go test -race 分别会怎样？" :options='["都通过，结果稳定","vet 报 passes lock by value，race 报 DATA RACE","只 race 报错","编译失败"]' answer="1" output="go vet 报 passes lock by value，go test -race 报 DATA RACE" explain="值接收者把 Mutex 拷了一份，各副本锁不住同一份数据；copylocks 静态能查出拷贝锁，race 运行时能查出并发读写，两道检查都指向「必须改成指针接收者」。" />
+<Predict q="SafeCounter 内含 sync.Mutex，若把 Add 误写成值接收者 func (c SafeCounter) Add，再起 100 个 goroutine 各加 1，go vet 与 go test -race 分别会怎样？" :options='["都通过，结果稳定","vet 报 passes lock by value，race 报 DATA RACE","只 race 报错","编译失败"]' answer="1" output="go vet 报 passes lock by value，go test -race 报 DATA RACE" explain="值接收者把 Mutex 拷了一份，各副本锁不住同一份数据；copylocks 静态能查出拷贝锁，race 运行时能查出并发读写，两道检查都指向「必须改成指针接收者」。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-018-methods`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-018-methods)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与类型检查器，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：方法集怎么算、自动转换从哪来
+
+方法集的计算规则写在规范「Method sets」里：类型 `T` 的方法集是所有接收者为 `T` 的方法，`*T` 的方法集是接收者为 `T` 或 `*T` 的全部方法。这不是约定而是编译器类型检查阶段的查表规则——`go doc go/types.NewMethodSet` 给出的 `func NewMethodSet(T Type) *MethodSet` 正是为类型算出这张表的入口，`cmd/compile/internal/types2` 在类型检查时做同样的事；接口赋值 `var s Speaker = Cat{}` 就是拿表里的条目逐条对接口方法签名，`Cat` 只有 `(*Cat).Speak` 时表里没有 `Speak`，于是编译报 `Cat does not implement Speaker`。调用侧的自动转换也来自规范「Calls」：当 `x` 可寻址、`m` 是 `*T` 的方法时，`x.m()` 等价于 `(&x).m()`；反过来 `*p` 调值方法等价于 `(*p).m()`。所以「指针变量能调值方法」「值变量能调指针方法」都是编译器插的取址或解引用，不改变「方法内部拿到的是副本还是原值」这一事实。含 `sync.Mutex` 的类型必须指针接收者，则从拷贝语义直接推出：值接收者把锁连同字段一起拷一份，两个副本各锁各的；`go vet` 的 copylocks 检查器把它报成 `passes lock by value`，静态就能判定。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：值接收者完全改不到原对象，所以只读方法用值接收者毫无风险。** 值拷贝只保证结构体这一层，引用型字段仍共享底层数据。
+
+<Compare title="值接收者与引用型字段" :panels='[{"label":"错误：以为改不到原对象","code":"func (u User) Rename() {\n    u.Tags[0] = \"x\"\n}","note":"切片字段只拷描述符，改元素会回写"},{"label":"正确：指针接收者加显式拷贝","code":"func (u *User) SetTags(t []string) {\n    u.Tags = append([]string(nil), t...)\n}","note":"语义清晰，需要隔离时显式深拷贝"}]' />
+
+这与第 17 讲的浅拷贝是同一条规则：字段本身是描述符，副本里的描述符仍指向同一份数据。
+
+**误解二：类型实现了接口的全部方法，值 `T` 和指针 `*T` 就都能赋给该接口。** 只由指针接收者实现的方法不进 `T` 的方法集。
+
+<Compare title="接口赋值看方法集" :panels='[{"label":"错误：传值给指针实现","code":"func (c *Cat) Speak() string { return \"miao\" }\nvar s Speaker = Cat{}","note":"编译失败，Cat 的方法集不含 Speak"},{"label":"正确：传地址或改值接收者","code":"var s Speaker = &Cat{}\nvar _ Speaker = (*Cat)(nil)","note":"编译期断言，签名一改当场报错"}]' />
+
+把 `var _ Interface = (*T)(nil)` 放在实现方包里，接口签名变动会在编译阶段立刻暴露，不用等到调用点。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go vet ./...
+go doc go/types.NewMethodSet
+```
+
+```text
+# example.com/demo
+./main.go:9:9: Add passes lock by value: example.com/demo.C contains sync.Mutex
+func NewMethodSet(T Type) *MethodSet
+    NewMethodSet returns the method set for the given type T. It always returns
+    a non-nil method set, even if it is empty.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `./main.go:9:9` | 出错方法声明的位置：文件、行、列 |
+| `passes lock by value` | copylocks 检查器：按值接收者会复制锁 |
+| `contains sync.Mutex` | 触发检查的具体字段 |
+| `func NewMethodSet(T Type) *MethodSet` | 类型检查器算方法集的入口 |
+| `even if it is empty` | 方法集允许为空；值类型不满足只由指针实现的接口 |
+
+`go vet` 是静态判定，`go test -race` 是运行时判定：把锁去掉跑并发，`-race` 会报 `DATA RACE`；加上就干净。两条命令配合，能自己把「为什么必须指针接收者」验证一遍。
+
+下面这段把方法集与「值接收者改引用字段」跑成确定输出：
+
+```go
+package main
+
+import "fmt"
+
+type Speaker interface{ Speak() string }
+
+type Dog struct{}
+
+func (Dog) Speak() string { return "wang" }
+
+type Cat struct{}
+
+func (c *Cat) Speak() string { return "miao" }
+
+type Team struct {
+	Name    string
+	Members []string
+}
+
+// 值接收者：改引用型字段会回写到共享底层数组
+func (t Team) RenameFirst(v string) {
+	t.Members[0] = v
+}
+
+func main() {
+	var s Speaker
+	s = Dog{}
+	fmt.Println("值类型满足 =", s.Speak())
+	s = &Cat{}
+	fmt.Println("指针满足 =", s.Speak())
+
+	team := Team{Name: "a", Members: []string{"go", "rust"}}
+	team.RenameFirst("zig")
+	fmt.Println("值接收者改切片字段后 =", team.Members)
+
+	var _ Speaker = (*Cat)(nil)
+}
+```
+
+<OutputBox title="运行结果" output="值类型满足 = wang\n指针满足 = miao\n值接收者改切片字段后 = [zig rust]" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.9 | 引入类型别名 `type B = A` | 不能给别名再定义新方法，仍受「只能给本包类型加方法」约束 |
+| Go 1.18 | 泛型类型可声明方法，接收者须重列类型参数 | 见第 22 讲 |
+| Go 1.18 | `any` 别名引入，接口实现判定不变 | 与 `interface{}` 等价 |
+| 全版本 | `T` 只含值接收者方法、`*T` 含两类 | 结论与版本无关 |
+
+还有一条边界不随版本变：只能给本包定义的类型加方法，给 `time.Time`、内置类型或别包结构体加方法都编译失败；想扩展就包一层新类型。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 会展开 itab 与方法表，把「接口赋值查方法集」落到运行时结构；[第 26 讲](/core/value-semantics) 量化值接收者的整份拷贝成本；[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 看接收者何时逃逸。工程上，[第 51 讲](/engineering/code-style) 把 `go vet` 接进 CI 拦住 copylocks，[第 53 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 全部用指针接收者，[第 118 讲](/projects/ai-gateway) 的多供应商适配则靠接口把行为差异收在一处。
 
 ## 动手练一练
 

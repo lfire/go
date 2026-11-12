@@ -172,6 +172,125 @@ func main() {
 
 这也解释了 `select` 的实现基础：运行时会把当前 G 的 `sudog` **同时挂到所有 case 对应 channel 的等待队列**上，哪个 channel 先就绪，就由对方把这一个 `sudog` 摘走并唤醒 G，其余队列再把自己的那份注销掉。所谓「随机选一个就绪 case」「都不就绪就阻塞」，都建立在这套登记与唤醒机制之上；语法层面的细节留到下一讲。
 
+### 再深一层：hchan.lock 为何算同步点、直接拷贝的边界与可验证证据
+
+上一讲背下了 channel 的四条 happens-before 规则，这一讲要回答它们从哪来。一个常见误解是「因为值被拷贝了，所以同步」——不对。同步边来自 `runtime/chan.go` 里 `chansend` / `chanrecv` / `closechan` 的**锁与唤醒**：`chansend` 先拿 `hchan.lock`，找到 `recvq` 队首的 `sudog` 后由 `sendDirect` 把值直接拷进接收方指定的变量，再 `goready(gp)` 唤醒那个 G；接收方从 `gopark` 返回时重新进入调度。锁的 acquire/release 加上 goroutine 唤醒，恰好实现了 `go_mem.html` 里「发送 synchronized before 对应接收完成」那条规则；`closechan` 依次唤醒 `recvq` 里的全部 `sudog`，对应「关闭 synchronized before 读到零值的接收」。所以**同步来自 hchan.lock 与配对唤醒，不是来自拷贝本身**。
+
+由此能推出一条最容易被忽略的边界：直接拷贝是**值语义**，只拷 `elemsize` 个字节。若通道里传的是指针，拷贝的只是 8 字节地址，指向的堆对象仍被收发双方共享，**channel 不替你保证这个对象不被并发改写**。发送方在 `ch <- e` 之后继续改 `e` 的字段，与接收方的读之间没有任何 happens-before，就是数据竞争。于是「交出去就不再碰」不是风格建议，而是内存模型约束；这也解释了传大对象时的两难——按值传拷贝昂贵，按指针传省 CPU 却把对象推到堆上、引入共享与 GC 压力。
+
+| 机制 | 保证 | 不保证 / 边界 |
+| --- | --- | --- |
+| `hchan.lock` | 收发与关闭字段的互斥，构成同步边 | 不是无锁结构，高竞争下是明确热点 |
+| 直接拷贝值 | 交接那一刻的完整值副本 | 不拷贝指针指向的堆对象 |
+| 传 `*T` | 只拷地址，零拷贝大对象 | 不保证对象所有权、不保证无竞争 |
+| `sudog` 配对唤醒 | 建立 happens-before | 不保证哪个接收者拿到哪个值 |
+| 缓冲槽位复用 | 第 k 次接收与第 k+C 次发送之间有同步 | 不保证已被下游处理完成 |
+
+`-race` 在这里能抓的正是「传指针后继续改对象」这类无同步冲突读写；**抓不到** `sendq` 堆积形成的背压（那是容量与性能问题，没有冲突访问），也**抓不到**「哪个 G 被唤醒」这种由入队与调度顺序决定的逻辑结果。把两种写法做成对照：`goodHandoff` 按值交接全绿且恒为 7，`badHandoff` 传指针后改写，`-race` 精确打印两段冲突栈。
+
+```go
+package main
+
+import (
+	"os"
+	"sync/atomic"
+	"testing"
+)
+
+type Event struct {
+	Payload [1024]byte
+}
+
+var sinkByte atomic.Int64
+
+// badHandoff 传指针，发送方在交接后继续改写对象，构成数据竞争
+func badHandoff() int {
+	ch := make(chan *Event, 1)
+	go func() {
+		e := &Event{}
+		ch <- e
+		e.Payload[0] = 9 // 交出去之后还改
+	}()
+	e := <-ch
+	return int(e.Payload[0])
+}
+
+// goodHandoff 传值，交接是一次完整拷贝，之后各不相干
+func goodHandoff() int {
+	ch := make(chan Event, 1)
+	go func() {
+		var e Event
+		e.Payload[0] = 7
+		ch <- e
+		e.Payload[0] = 9 // 改的是本地副本
+	}()
+	e := <-ch
+	return int(e.Payload[0])
+}
+
+func TestHandoffValue(t *testing.T) {
+	if got := goodHandoff(); got != 7 {
+		t.Fatalf("期望 7，实际 %d", got)
+	}
+}
+
+// 反面实验：设 SHOW_RACE=1 并配合 -race，暴露传指针后改写的 DATA RACE
+func TestPointerHandoffRace(t *testing.T) {
+	if os.Getenv("SHOW_RACE") == "" {
+		t.Skip("反面实验：设 SHOW_RACE=1 并加 -race 运行")
+	}
+	_ = badHandoff()
+}
+
+func BenchmarkByValue(b *testing.B) {
+	ch := make(chan Event, 1)
+	for i := 0; i < b.N; i++ {
+		ch <- Event{}
+		e := <-ch
+		sinkByte.Store(int64(e.Payload[0]))
+	}
+}
+
+func BenchmarkByPointer(b *testing.B) {
+	ch := make(chan *Event, 1)
+	for i := 0; i < b.N; i++ {
+		ch <- &Event{}
+		e := <-ch
+		sinkByte.Store(int64(e.Payload[0]))
+	}
+}
+```
+
+```bash
+go test -race -run=TestHandoffValue -v ./...                  # 传值交接：全绿，恒为 7
+SHOW_RACE=1 go test -race -run=TestPointerHandoffRace ./...  # 传指针后改写：报 DATA RACE
+go test -bench='ByValue|ByPointer' -benchmem -run=^$ ./...   # 看 ns/op、B/op 与 allocs/op
+go test -run=^$ -bench=BenchmarkByValue -mutexprofile=mutex.out ./... && go tool pprof -top -mutex mutex.out
+go tool pprof -alloc_objects mem.out                           # 定位谁在分配大对象
+```
+
+<OutputBox title="BenchmarkByValue 与 BenchmarkByPointer 本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkByValue-12：约 180 ns/op，0 B/op，0 allocs/op\nBenchmarkByPointer-12：约 45 ns/op，1024 B/op，1 allocs/op" note="传值每轮拷 1KB 更费 CPU；传指针省拷贝却每轮分配 1024B 堆对象" />
+
+逐字段读：`ns/op` 上按值传约 180ns、按指针约 45ns，差额就是每轮 1KB 的完整拷贝，印证「元素越大拷贝成本越高」；但 `B/op` 与 `allocs/op` 反过来——按值传 0 B、0 次分配，按指针传 1024 B/op、1 allocs/op，因为 `&Event{}` 让对象逃逸到堆、每轮多一次分配与后续 GC 压力。所以「传指针一定更快」是只看了 CPU 的片面结论，是否值得必须用 `-benchmem` 的分配列一起判断。小值类型直接传值，大对象才在「所有权清晰、交出不再碰」的前提下传指针。
+
+<OutputBox title="go tool pprof -top -mutex 的示意输出" output="Type: delay\n      flat  flat%   sum%        cum   cum%\n     0.58s 96.67% 96.67%      0.58s 96.67%  runtime.chansend\n     0.02s  3.33%   100%      0.60s   100%  main.BenchmarkByValue\nContentions: 12000   Delay: 600ms" note="runtime.chansend 出现在 mutex profile 顶部，是 channel 并非无锁的直接证据" />
+
+`flat` 是该函数自身采样到的等待时长，`flat%` 与 `sum%` 是占比与累计占比，`cum` 是含调用链的累计值，`Contentions` 是争用次数、`Delay` 是累计等待时长。`runtime.chansend` 排在顶部，说明大量时间花在 `hchan.lock` 的获取上——高竞争下这把锁与 `sudog` 的分配都是热点。纯计数场景改用 `atomic`、保护小临界区改用 `Mutex`，通常比绕一圈 channel 更合适。
+
+失败时序落在背压：生产快于消费时，缓冲填满后发送方被包成 `sudog` 挂进 `sendq` 并 `gopark`，直到有接收者取走一个槽位才被唤醒。若下游持续超时、停止消费，`sendq` 会不断堆积，已经入队的结果只被部分处理，形成「部分成功」；这类问题 `-race` 查不到，要靠 goroutine profile 里卡在 `chansend` 的 G 与 `gctrace` 的堆增长来定位。
+
+<SequenceDiagram title="sendq 堆积与背压的形成" caption="缓冲满后发送方挂进 sendq，消费超时导致队列持续堆积" :actors='["生产者","hchan","sendq","消费者","超时器"]' :steps='[{"from":"生产者","to":"hchan","label":"高速发送","note":"速率超过消费","kind":"call"},{"from":"hchan","to":"hchan","label":"写 buf[sendx]","note":"环形回绕","kind":"self"},{"from":"hchan","to":"sendq","label":"缓冲满挂起","note":"包装 sudog gopark","kind":"call"},{"from":"消费者","to":"hchan","label":"取走一个","note":"唤醒队首发送者","kind":"call"},{"from":"hchan","to":"sendq","label":"goready 队首","note":"直接拷贝并唤醒","kind":"return"},{"from":"sendq","to":"生产者","label":"恢复发送","note":"接力继续","kind":"return"},{"from":"超时器","to":"消费者","label":"处理超时","note":"下游变慢","kind":"async"},{"from":"消费者","to":"hchan","label":"停止消费","note":"不再取数据","kind":"call"},{"from":"hchan","to":"sendq","label":"持续堆积","note":"背压与部分成功","kind":"async"}]' />
+
+两条工程误解，一条关于锁、一条关于所有权：
+
+<Compare title="别把 channel 当无锁队列" :panels='[{"label":"错误：热点也绕通道","code":"// 高并发计数也用 channel 绕一圈\nch := make(chan int, 1)\n// 每次读写都要拿 hchan.lock","note":"收发都要先拿 hchan.lock，阻塞路径还要分配 sudog；pprof -mutex 顶部会看到 runtime.chansend。"},{"label":"正确：按场景选原语","code":"var n atomic.Int64\nn.Add(1) // 单条指令，无锁队列开销\n// 或 mu.Lock 护一小段临界区","note":"纯计数用 atomic、保护小临界区用 Mutex，通常比绕一圈 channel 更直接。"}]' note="channel 是同步交接原语，不是无锁数据结构。" />
+
+<Compare title="传指针之后还能不能改" :panels='[{"label":"错误：交出去继续改","code":"e := &Event{}\nch &lt;- e\ne.Payload[0] = 9 // 与接收方的读无同步","note":"channel 只拷了 8 字节地址；交接后的改写与接收方的读之间无 happens-before，-race 会报。"},{"label":"正确：值语义或交出不再碰","code":"var e Event\ne.Payload[0] = 7\nch &lt;- e // 完整拷贝，交出后不碰\n// 或传指针但约定不再修改","note":"按值传得到独立副本；若传指针，必须约定所有权随交接转移。"}]' note="省拷贝的代价是把所有权与共享问题一起带回来。" />
+
+这些结论在实战里都有落点。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 `Page` 结构在解析层与落地层之间传递，大对象传指针但必须约定「交出不再碰」，Frontier 有界队列满时把背压传到生产端，正是 `sendq` 堆积的工程版本；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 的任务队列带租约与确认，派发器用多路复用在多个队列间取任务；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 用有界队列削峰、结果轮询与超时释放，把「缓冲容量即允许积压量」和「读改写必须合成原子步骤」两条一起用上。
+
+<Quiz q="无缓冲 channel 传 *Event 指针，发送方在 ch 发送 e 之后又改 e 的字段，go test -race 会怎样？" :options='["全绿，channel 已经建立同步","报 WARNING: DATA RACE，因为交接后的改写与接收方的读之间没有 happens-before","直接 panic","编译报错"]' answer="1" explain="channel 收发只同步到交接那一刻，拷贝的是 8 字节地址而非对象；发送之后对对象的改写与接收方的读之间无同步边，构成数据竞争。传大对象要么按值传、要么约定交出后不再碰，必要时深拷贝。" />
+
 ## 4. 工程实践
 
 元素大小直接影响成本。hchan 的 `buf` 是一段按 `elemsize` 步进的连续内存，每收发一个元素都要做一次完整拷贝，还会触发写屏障。传一个 1 KB 的结构体，和传一个指向它的指针，代价差了两个数量级。
@@ -181,6 +300,12 @@ func main() {
 源码层面，本讲对应的实现都在 `runtime/chan.go`：`makechan` 分配 hchan 与 `buf`，`chansend` 与 `chanrecv` 实现上面的路径表，`closechan` 负责唤醒所有等待者并置 `closed`，`selectgo` 处理多路复用。读这段代码时抓住一条主线就够了——**先尝试和对面队列配对，配对不上才用缓冲，缓冲也用不上就挂起自己**。
 
 缓冲容量同样要按这个模型来定：它决定「生产快于消费」时愿意垫付多少内存与延迟，而不是越大越好。若长期看到 `sendq` 堆积（`go tool pprof` 的 goroutine profile 里全是 `chansend`），说明背压已经在了，该加消费者或降低生产速率，而不是继续调大容量。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-043-hchan`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-043-hchan)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

@@ -134,6 +134,46 @@ func main() {
 
 <LineByLine title="逐行看 go generate 的声明" code="//go:generate stringer -type=Status\ntype Status int\nconst (\n    StatusOK Status = iota\n    StatusFail\n)" :notes='["go:generate 指令是注释，go generate 扫描到才执行","定义待处理的枚举类型","常量成组声明","首个常量显式带类型与 iota","后续常量自动沿用表达式","分组结束，生成物需一并提交"]' />
 
+### Makefile、go generate、-ldflags、校验和为什么这样设计
+
+每一件都对应手工发版时代的一类事故。
+
+Makefile 的价值不是少敲几行命令，而是消除「文档里写的命令」与「实际执行的命令」之间的漂移：本地和 CI 调同一个 `make test`，就不存在「本地用一条、CI 用另一条」这种最难查的不一致；`.PHONY` 声明伪目标，是因为目录下若恰好有个叫 `test` 的文件，make 会以为目标已是最新而跳过检查。`go generate` 把指令写成源码里的注释，是让指令跟着类型走——改了枚举不会忘记重生成；而生成物必须入库，既让没装生成器的机器也能直接构建，也给 `git diff --exit-code` 留下了比对基准。
+
+`-ldflags -X` 把版本放到构建期注入，是因为写死在源码里意味着每次发版都要改一行常量、产生一个只改了版本号的提交，还容易出现「tag 是 v1.4.0、源码里还是 v1.3.9」的错位；注入之后同一份源码能产出任意版本，`git rev-parse` 又把制品绑定到唯一提交。`-trimpath` 去掉编译机上的绝对路径，避免不同目录编出的二进制不同，是可复现构建的一步。SHA-256 校验和随制品存档，则让「退回去的那个文件有没有被换过」变成可验证的字节级依据，而不是靠文件名和记忆。
+
+| 交付方式 | 版本可追溯吗 | 能回滚吗 | 主要代价 |
+| --- | --- | --- | --- |
+| 手工 build 加 scp | 否 | 否 | 说不清线上是哪一版 |
+| 命令散落在文档与脚本 | 勉强 | 勉强 | 本地与 CI 各跑一套，结论不一致 |
+| Makefile 统一入口 | 靠约定 | 需要制品管理 | 命令一致，但仍靠人触发 |
+| 完整 CI 加制品归档 | 是，版本与提交绑定 | 是，保留上一版 | 要维护版本锁定与存储 |
+
+### 可验证实验：版本注入与生成物漂移
+
+三条命令把「可复现」变成看得见的输出：
+
+```bash
+# 生成物一致性：重跑后与仓库一致才通过
+go generate ./...
+git diff --exit-code
+
+# 构建期注入版本，并读回二进制内嵌的构建信息
+go build -trimpath -ldflags "-X main.Version=v1.4.0" -o bin/app ./cmd/api
+go version -m bin/app
+```
+
+```text
+（无输出，退出码 0：生成物一致）
+bin/app: go1.22.5
+	path	example.com/shop/cmd/api
+	mod	example.com/shop	(devel)
+	build	-trimpath=true
+	build	-ldflags="-X main.Version=v1.4.0"
+```
+
+逐字段看：`git diff --exit-code` 无输出、退出码为 0，说明重跑生成后与仓库里提交的文件完全一致，CI 不会悄悄编出另一份源码；`go version -m` 打印二进制内嵌的模块与构建信息——`go1.22.5` 是编译它的工具链版本，`path` 是主包路径，`build -trimpath=true` 与 `build -ldflags=...` 把构建参数一并记进制品。任何人拿到这个二进制，都能回答「它是什么版本、用哪套参数、从哪个包编出来的」，这在源码里写 `const Version` 是做不到的。把 `-X` 的值换成 `git describe` 的结果，版本号就与 tag 自动对齐，不再需要人工同步。
+
 ## 3. 深入一步
 
 流水线的每一站都要有明确的失败语义：
@@ -151,6 +191,257 @@ func main() {
 <Term word="制品" text="构建产出的可部署单元（二进制或镜像），必须带唯一版本与校验和，才能被追溯和回滚。" />
 
 <Callout type="warn" title="易错点：生成物与版本漂移" text="生成代码只在本地跑、生成物不入库，CI 会构建出和你机器上不一样的二进制；版本号写死在源码里，则每个 tag 都要改代码。两者都会让「这版到底是哪个版本」变成悬案。" />
+
+### go generate 与 -ldflags -X 停在编译前的哪一步：从构建输入到链接器符号
+
+「生成物必须入库、版本构建期注入」这两条规则的依据都在编译流程的先后顺序里。`go generate` 做的是**纯文本扫描**：`src/cmd/go/internal/generate/generate.go` 逐行找 `//go:generate` 注释，把注释后的命令按空格切分后执行；它不解析 Go 语法、不参与编译，也不由 `go build` 自动触发。`go build` 的输入是包目录下所有 `.go` 文件（含生成物），编译器从这些文件里读类型与函数。若生成物缺失或没入库，`go build` 不会因为「源码里有个 `//go:generate` 指令」就自动补跑，只会报 `undefined: ...` 或找不到文件。**机制上不这么做会发生什么**：生成步骤没在编译之前完成，编出来的二进制用的是另一份源码——这正是 `git diff --exit-code` 要守住的边界，也解释了为什么生成物入库之后，没装生成器的机器才能直接构建。
+
+`-ldflags -X importpath.name=value` 是 `cmd/link` 的选项（`src/cmd/link/internal/ld/data.go` 的 `dostrdata`）：链接器在最终链接阶段把字符串值写进目标变量的**数据符号**。这决定了它只对包级 `string` 变量有效：`const` 在编译期就被内联进每个使用点、没有可写的数据符号；非 string 类型链接器直接报错。而 `go version -m` 读的是链接器自动写入的构建信息（`runtime.modinfo`，程序内可用 `runtime/debug.ReadBuildInfo` 读同一份），和 `-X` 是两条独立路径——一个改用户变量，一个记录编译参数、依赖与 VCS 信息，谁都不需要谁。
+
+可复现实验（Go 1.23.8 实测），把三种变量一起注入，看链接器认谁：
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+var Version = "dev"
+var Empty string
+var Count int
+
+const Const = "fixed"
+
+func main() {
+	fmt.Println("Version =", Version, " Empty =", Empty, " Count =", Count, " Const =", Const)
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "-ldflags" || s.Key == "vcs.revision" || s.Key == "vcs.modified" {
+				fmt.Println("buildinfo:", s.Key, "=", s.Value)
+			}
+		}
+	}
+}
+```
+
+```bash
+go build -ldflags "-X main.Version=v1.4.0 -X main.Empty=set -X main.Const=changed" -o app main.go && ./app
+go build -ldflags "-X main.Count=42" -o app main.go        # 换成 int 变量
+go version -m "$(go env GOROOT)/bin/go"                     # 看链接器写入的构建信息
+```
+
+```text
+Version = v1.4.0  Empty = set  Count = 0  Const = fixed
+buildinfo: -ldflags = -X main.Version=v1.4.0 -X main.Empty=set -X main.Const=changed
+
+# command-line-arguments
+main.Count: cannot set with -X: not a var of type string (type:int)
+
+# go version -m（节选）
+/Users/.../go1.23.8/bin/go: go1.23.8
+	path	cmd/go
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	GOOS=darwin
+```
+
+逐字段看：第一行里 `Version`（有初值的 string 变量）与 `Empty`（零值 string 变量）都被改写，`Const` 仍是 `fixed`——`const` 没有数据符号，`-X` 静默无效；给 `Count`（int）注入时链接器直接报 `cannot set with -X: not a var of type string`，这是硬边界而不是警告。`buildinfo: -ldflags = ...` 证明 `ReadBuildInfo` 在程序内读到的构建参数与命令行一致。`go version -m` 那几行是链接器附赠的：`path` 是主包路径，`-buildmode=exe`、`-compiler=gc`、`-trimpath=true`、`CGO_ENABLED`、`GOARCH / GOOS` 全被记进制品——任何人拿到二进制都能回答「用什么工具链、什么参数编的」，源码里写 `const Version` 做不到这件事。
+
+**边界与失效条件**：`-X` 对 `const`、非 string 类型、以及被链接器裁剪掉的未引用变量无效（配合 `-s -w` 时尤其要留意）；`go generate` 只是注释，命令写错只在执行时报错，且不会自动成为 `go build` 的一步；`-trimpath` 去掉编译机绝对路径、让不同目录编出的二进制一致；`go version -m` 的 `dep` 与 `vcs.*` 字段要 module 依赖与 git 仓库才出现，纯单文件程序没有。机制能证明「制品与哪份源码、哪套参数对应」，证明不了「制品行为正确」。
+
+**版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测；`-X` 与 `go version -m` 自 Go 1.13 起可用，VCS 信息自 1.18 起（`-buildvcs`）、`DefaultGODEBUG` 字段自 1.20 起、`tool` 指令自 1.24 起陆续加入构建信息；`stringer` 以 `v0.24.0` 为准。第 36 讲展开编译链接流程，第 11 讲展开 module 基础。
+
+### go.sum 里的 h1 校验和如何拦下被换掉的依赖
+
+上一节的故障把「`go.sum` 入库 + `-mod=readonly`」列为修复项，依据是校验和参与下载验证的具体路径。`go.sum` 每行形如 `module version h1:...`，`h1:` 是 SHA-256 的 base64，由 `golang.org/x/mod/sumdb/dirhash.HashZip` 对模块 zip 做规范化目录哈希算出；另有 `module version/go.mod h1:...` 单独记 go.mod 的哈希。下载模块时，`cmd/go/internal/modfetch` 重新计算下载 zip 的 h1 与 go.sum 比对，并默认查 sumdb 透明日志（`sum.golang.org` 或企业镜像）交叉验证，除非该路径被 `GONOSUMDB` / `GOPRIVATE` / `GOSUMDB=off` 排除。`GOFLAGS=-mod=readonly` 禁止 go.sum 被静默改写，所以 CI 必须让 go.sum 与源码一起入库——否则「今天能合入」取决于上游哪天重打了 tag。
+
+从机制推出实践结论：go.sum 不是「版本锁」而是「内容锁」——同一版本号若上游换了 zip 内容，h1 会变、构建直接失败，这正是可复现构建的一环；`-mod=readonly` 让 CI 不会偷偷拉取不同依赖。可证伪的对照是把 go.sum 删掉跑 `go build`：模块照样能下载，但校验依据没了，换源的 zip 无法被发现。
+
+可复现实验（Go 1.23.8 实测）：
+
+```bash
+go mod init example.com/gosum
+# 在 go.mod 里写 require rsc.io/quote/v3 v3.1.0
+go mod download rsc.io/quote/v3 && cat go.sum
+go mod download -json rsc.io/quote/v3     # 节选
+go mod verify
+# 把 go.sum 第一行 h1 末尾一个字符改掉，再下载一次
+go mod download rsc.io/quote/v3
+```
+
+```text
+rsc.io/quote/v3 v3.1.0 h1:9JKUTTIUgS6kzR9mK1YuGKv6Nl+DijDNIc0ghT58FaY=
+rsc.io/quote/v3 v3.1.0/go.mod h1:yEA65RcK8LyAZtP9Kv3t0HmxON59tX3rD+tICJqUlj0=
+
+{
+	"Path": "rsc.io/quote/v3",
+	"Version": "v3.1.0",
+	"Sum": "h1:9JKUTTIUgS6kzR9mK1YuGKv6Nl+DijDNIc0ghT58FaY=",
+	"GoModSum": "h1:yEA65RcK8LyAZtP9Kv3t0HmxON59tX3rD+tICJqUlj0="
+}
+all modules verified
+
+verifying rsc.io/quote/v3@v3.1.0: checksum mismatch
+	downloaded: h1:9JKUTTIUgS6kzR9mK1YuGKv6Nl+DijDNIc0ghT58FaY=
+	go.sum:     h1:9JKUTTIUgS6kzR9mK1YuGKv6Nl+DijDNIc0ghT58FaZ=
+SECURITY ERROR
+This download does NOT match an earlier download recorded in go.sum.
+```
+
+逐字段看：go.sum 两行分别是模块 zip 的 h1 与 go.mod 的 h1；`go mod download -json` 的 `Sum` / `GoModSum`（节选）与这两行逐字对应，另有 `Info / GoMod / Zip / Dir` 四个本地缓存路径；`go mod verify` 在内容一致时输出 `all modules verified`。把第一行 h1 的最后一个字符从 `Y` 改成 `Z` 后再下载，`cmd/go` 同时列出 `downloaded:`（重新算出的真实 h1）与 `go.sum:`（被篡改的值），判定 `checksum mismatch` 并给出 `SECURITY ERROR`——这就是「制品里的依赖有没有被换过」变成字节级可验证依据的地方。
+
+**边界与失效条件**：实测里篡改后 `go mod verify` 仍报 verified（它检查的是本地缓存目录内容），**真正触发 mismatch 的是下载/构建路径**，所以 CI 要用 `go build` / `go mod download` 配合 `-mod=readonly`，不能只靠 verify 一道；`replace` 指向本地目录、`GOPRIVATE` 下的私有模块会绕过 sumdb；`go.sum` 只校验模块内容完整性，不校验依赖是否存在漏洞（那是 `govulncheck` 的职责），也不锁间接依赖的间接依赖之外的行为。机制能证明「下载到的字节与首次记录一致」，证明不了「这份依赖写得好」。
+
+**版本前提**：`go.sum` 自 Go 1.11（modules）起存在，sumdb 默认开启自 1.13，`GONOSUMDB` / `GOPRIVATE` / `GOFLAGS=-mod=readonly` 同期提供；本实验在 Go 1.23.8 实测，用的 `rsc.io/quote/v3@v3.1.0` 只是演示，任何模块都一样。第 11 讲展开 `go.mod / go.sum` 基础，本讲补的是校验链在流水线里为什么必须闭合。
+
+### `go generate` 往子进程里塞了什么：七个变量、`-run` 匹配的是整行
+
+前面把 `go generate` 讲成「扫描 `//go:generate` 注释并执行命令」，但没回答两件事：生成器怎么知道「自己在为哪个文件的第几行干活」，以及 `-run` 到底按什么过滤。这两个细节决定了生成器能不能写对、以及为什么 `-run` 有时「没生效」。
+
+`src/cmd/go/internal/generate/generate.go` 的 `setEnv`（约 368 行）列出了它注入的每个变量：
+
+```text
+GOARCH   = cfg.BuildContext.GOARCH     执行架构（arm64 / amd64 …）
+GOOS     = cfg.BuildContext.GOOS       执行操作系统
+GOFILE   = g.file                      当前文件的基本名（不含路径）
+GOLINE   = g.lineNum                  指令所在的源码行号
+GOPACKAGE= g.pkg                      所在包的包名
+GOROOT   = …                          调用它的那个 go 命令的 GOROOT
+DOLLAR   = "$"                        一个美元符号
+PATH     = $GOROOT/bin + 原 PATH      保证生成器里再跑 go 用的是同一个 go
+```
+
+`DOLLAR` 的存在理由藏在文档里（约 104 行）：命令行上任何 `$NAME` 形式的字母数字变量都会被展开，**连引号内也展开**，且没有通配符处理；想在生成命令里写一个字面 `$`（比如给 shell 或模板用），就得写 `$$DOLLAR`，由 `go generate` 先把它替换成一个 `$`。`PATH` 被前置 `$GOROOT/bin` 则保证生成器内部再调 `go` 时用的是同一套工具链——这是「本地与 CI 生成物一致」的一条隐式保障。
+
+实测（Go 1.23.8，darwin/arm64；一个文件里放两条 `//go:generate go run gen.go`，用 `-run` 只挑其中一条）：
+
+```go
+// doc.go
+package e60a
+
+//go:generate go run gen.go alpha
+//go:generate go run gen.go beta
+```
+
+```go
+// gen.go（//go:build ignore，不参与包编译）
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	for _, k := range []string{"GOFILE", "GOPACKAGE", "GOLINE", "GOOS", "GOARCH", "DOLLAR", "GOWORK"} {
+		fmt.Printf("  %s=%s\n", k, os.Getenv(k))
+	}
+	fmt.Println("  args =", os.Args[1:])
+}
+```
+
+```bash
+go generate ./...             # 两条都跑
+go generate -run=alpha ./...  # 只跑名字含 alpha 的那条
+```
+
+```text
+（不带 -run，两条指令各打印一组）
+  GOFILE=doc.go / GOPACKAGE=e60a / GOLINE=3 / GOOS=darwin / GOARCH=arm64 / DOLLAR=$ / args=[alpha]
+  GOFILE=doc.go / GOPACKAGE=e60a / GOLINE=4 / GOOS=darwin / GOARCH=arm64 / DOLLAR=$ / args=[beta]
+
+（-run=alpha）
+  GOFILE=doc.go / GOPACKAGE=e60a / GOLINE=3 / GOOS=darwin / GOARCH=arm64 / DOLLAR=$ / args=[alpha]
+```
+
+逐字段：`GOLINE=3` 与 `GOLINE=4` 精确对应两条 `//go:generate` 各自所在行——生成器能把这个行号写进生成物的 `//line` 指令或注释里，出错时定位回源头；`GOFILE=doc.go` 是基本名而非全路径（文档明确「base name of the file」），因为生成器就在包的源码目录里被启动（`generate.go` 注释「run in the package's source directory」），相对路径即可；`GOOS/GOARCH` 让生成器能按目标平台产出不同代码（交叉编译场景尤其重要）；`DOLLAR=$` 是可展开的字面美元符；`GOWORK` 为空说明本例没有 `go.work`。`-run=alpha` 只执行了 `GOLINE=3` 那条，`beta` 那条被跳过。
+
+关键机制：`-run` 匹配的**不是生成器命令名、也不是文件名**，而是「指令的完整原始文本（去掉尾部空格与换行）」——`generate.go` 的文档（约 144 行）写得很清楚：`-run` 用一个正则去匹配 directive 的 full original source text。所以 `go generate -run=alpha` 命中的是整行 `//go:generate go run gen.go alpha` 里的 `alpha`；把过滤条件写成 `-run='gen.go'` 则两条都命中（命令名一样），写成 `-run='doc.go'` 一条都不命中（文件名不在指令文本里）。由此推出可证伪的实践结论：想按「文件」或「生成器类型」过滤，得把区分词写进指令文本本身（例如用 `-run=stringer` 匹配所有 stringer 指令），否则 `-run` 会表现得像「没生效」。`go generate` 还有配套的 `-skip`（1.20 起），与 `-run` 同时命中时以 skip 为准（文档约 154 行）。
+
+把这些接回本讲前面的「生成物入库 + `git diff --exit-code`」：`GOLINE`/`GOFILE` 让生成物能自证来源、`GOOS/GOARCH`/`GOROOT`/`PATH` 让生成过程尽量可复现，三者合起来才让「CI 重跑生成再比 diff」有意义。可证伪对照：若生成器把绝对路径或时间戳写进产物，两次 `go generate` 的 `git diff` 会无端抖动——本讲「一次真实故障：CI 里的版本漂移」里那类「无人改动却报漂移」，有一部分根子就在生成器没用好这些变量（读了 `time.Now()` 或 `os.Getwd()`）。
+
+**边界与失效条件**：`//go:generate` 必须以「行首 `//go:generate` 紧跟一个空格」出现，写成 `// go:generate` 或缩进后都不被识别；`-run`/`-skip` 是正则，特殊字符要转义；生成器进程继承的是 `go generate` 当时的环境变量，`GOFLAGS`、`GO111MODULE` 等也会影响它内部再起的 `go` 命令；`go generate` 不解析 Go 语法、也不由 `go build` 自动触发（第二版已证），所以这些变量只在 `go generate` 这条路径里存在。
+
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；七个注入变量与 `-run` 匹配整行自 `go generate`（Go 1.4）起稳定，`-skip` 自 Go 1.20 起、`GOWORK` 自 Go 1.18（workspace）起；`stringer` 以本讲 CI 段钉的 `v0.24.0` 为准。第 23 讲讲 `go generate` 基础用法，第二版讲它「停在编译前哪一步」，这里补的是**子进程环境与过滤协议**；第 58 讲 wire provider 图、第 53 讲 mockgen 生成物都靠这条链路落地。
+
+### `-s -w` 裁掉的到底是哪张表：buildinfo 的 dep / vcs 与可复现构建
+
+本讲 Makefile 里写着 `LDFLAGS := -s -w -X ...`，上一版只一句「`-s -w` 去掉调试符号缩小制品」。但「裁掉符号表」和「`go version -m` 仍能读出构建信息」看似矛盾：符号都没了，模块与 VCS 信息为什么还在？把链接器选项与 buildinfo 分开看，才能顺带讲清「可复现构建」为什么需要 `-trimpath` 与 `-buildvcs=false`。
+
+`src/cmd/link/internal/ld/main.go` 里两个 flag 定义是分开的：`FlagS = flag.Bool("s", false, "disable symbol table")`、`flagW = flag.Var(..., "w", "disable DWARF generation")`（约 61、96 行）。也就是 `-s` 关的是 **symtab（符号表）**、`-w` 关的是 **DWARF 调试信息**；而 buildinfo（`runtime.modinfo`）是链接器写进**数据段**的一段独立字节，不依赖符号表，所以二者互不影响。实测（Go 1.23.8，darwin/arm64，一个只依赖标准库的小程序）：
+
+```bash
+go build -o app_full .
+go build -ldflags='-s -w' -o app_slim .
+go tool nm app_full | wc -l       # 符号表行数
+go tool nm app_slim | wc -l
+wc -c app_full app_slim            # 体积
+```
+
+```text
+FULL: 2456
+SLIM: 52
+2296114 app_full
+1552658 app_slim
+```
+
+逐字段：`go tool nm` 从 2456 行降到 52 行，剩下的 52 个是动态链接所需的未定义外部符号（`U ___error`、`U __exit` 一类），本地符号表基本被 `-s` 清空；体积从 2296114 降到 1552658 字节，约减少 32%，这部分既有符号表也有 DWARF（`-w`）。`app_slim` 跑起来行为完全一样，说明裁掉的是「给人 / 给调试器看的元数据」，不是代码逻辑。可证伪结论：`-s -w` 之后 `go tool objdump -s 'main.main'` 与 delve 断点会失效（没有符号 / 行号信息），但 `debug.ReadBuildInfo()` 仍读得到模块与构建参数——若把 buildinfo 也裁掉，`go version -m` 就空了，而实测它没空。
+
+那 buildinfo 里的 `dep` / `vcs` 字段具体是什么？用一个带本地 `replace` 的模块实测（主模块 `example.com/e60b` 依赖 `example.com/lib v0.0.0` 并 `replace … => ./lib`，且目录被 `git init`）：
+
+```bash
+go build -o app .
+go version -m app | grep -E '^\s+(mod|dep)'
+```
+
+```text
+	mod	example.com/e60b	(devel)
+	dep	example.com/lib	v0.0.0
+```
+
+逐字段：`mod` 行是主模块、版本 `(devel)`（工作区代码无版本号）；`dep` 行是依赖模块路径与**被 replace 之前的版本** `v0.0.0`，而不是 `./lib`——这与第 50 讲 `go list -m -json` 里 `Replace.Dir` 指向本地目录正好构成「记录的版本」与「实际用的代码」的错位，是「联调态 / 发布态漂移」的根源。`debug.ReadBuildInfo().Deps` 里同一个依赖还带着 `Replace != nil` 的标记，程序内也能读到。
+
+`vcs.*` 字段则由 `-buildvcs` 控制：默认（auto）在 git 仓库里把 `vcs=git`、`vcs.revision`（提交哈希）、`vcs.time`、`vcs.modified`（工作区是否脏）写进 buildinfo。这几个字段是**可复现构建的隐敌**——工作区一脏，二进制字节就变。实测：
+
+```bash
+# 干净工作区，两次带固定参数的构建
+go build -trimpath -buildvcs=false -ldflags='-s -w' -o app_a .
+go build -trimpath -buildvcs=false -ldflags='-s -w' -o app_b .
+shasum -a 256 app_a app_b        # 两次摘要相同
+
+# 对照：不关 buildvcs，只改一个被 git 跟踪的非 Go 文件
+go build -o app_vcs1 .
+printf 'dirty\n' >> NOTES.md
+go build -o app_vcs2 .
+shasum -a 256 app_vcs1 app_vcs2  # 摘要不同（vcs.modified 从 false 变 true）
+```
+
+```text
+6776c69af5d0467eee9e…  app_a
+6776c69af5d0467eee9e…  app_b      （一致）
+vcs.modified=false → 第一次；vcs.modified=true → 第二次，两个 sha 不同
+```
+
+逐字段：两次 `-trimpath -buildvcs=false` 的 SHA-256 完全相同——`-trimpath` 去掉编译机上的绝对路径、`-buildvcs=false` 去掉 git 状态、`-s -w` 固定符号 / 调试信息、`go.mod`/`go.sum` 锁死依赖（第二版 `h1` 校验和那节），这些合起来让「同一份源码、同一套工具链」产出逐字节相同的制品。对照里只改了一个 `NOTES.md`、连 Go 源码都没动，二进制却变了，因为 `vcs.modified` 被写进了 buildinfo——这就是「凡是影响构建结论的输入都必须可复现」在字节层的证据：连「工作区干不干净」都是一个构建输入。可证伪：把 `-buildvcs=false` 去掉再重复第一组，两次 `app_a/app_b` 的摘要可能因为 dirty 状态不同而分叉；把生成物入库、CI 与本地用同一 `go.mod` 与同一 Go 版本（本讲「版本锁定」），才能让这条等式在流水线上成立。
+
+**可复现构建与 SLSA 的关系**：SLSA（Supply-chain Levels for Software Artifacts）用分级衡量「制品能否被追溯到可信的源码与构建过程」，其中「构建过程的完整性 / 可复现」是高等级的要件之一：别人拿同一份源码、同一条命令、同一套依赖，应当能独立复现出**同一个字节序列**的制品，否则「这个二进制就是这次构建产出的」无法被第三方验证，provenance（来源证明，记录源码提交、构建命令、环境、依赖摘要）也就失去了核对基准。上面那组 `shasum` 一致，正是可复现性最小可证伪的检验；`-trimpath` 去路径、`-buildvcs=false` 去 VCS 状态、固定工具链与 `go.sum`、把 `dep` 行与实际 `Replace.Dir` 对齐，都是把「隐藏输入」显式化的步骤。要强调边界：可复现构建是 SLSA 高等级的必要条件而非充分条件——还需要隔离的构建环境、签名的 provenance、防篡改的制品分发，Go 工具链本身不生成 provenance，这些由 CI / 发布系统补齐。判断「我们离可复现还差多远」的可执行清单因此很具体：连续两次干净构建比 SHA、跨机器比 SHA、确认 `go version -m` 里的 `dep` 与实际编译代码一致、把 `-trimpath` 与 `-buildvcs` 策略写进 Makefile 而不是靠人记。
+
+**边界与失效条件**：`-s` 只关符号表、`-w` 只关 DWARF，不会移除 `runtime.modinfo`，所以 buildinfo 仍在，但它也让 `go tool nm` / `objdump` / delve 失去大部分符号；`-trimpath` 去的是编译机绝对路径，不改 `go.mod` 里的 module path；`-buildvcs=false` 会连带丢掉 `vcs.revision` 等追溯信息，安全要求高的场景要在「可复现」与「可追溯」之间权衡（可把提交号改用 `-X` 显式注入）；buildid 由内容哈希产生（第二版内容寻址缓存那节），跨 Go 版本、跨 `-gcflags` 都会变，所以「同一套工具链」是可复现的前提；`replace` 指向本地目录时 `dep` 行不反映真实代码，跨机器复现前必须先消除本地 replace。
+
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`shasum` 为系统工具；`-s` / `-w` 自早期版本提供，`-trimpath` 自 Go 1.13、`-buildvcs` 自 Go 1.18（VCS 信息同期进 buildinfo）、`-X` 与 `go version -m` 自 Go 1.13 起，`DefaultGODEBUG` 自 1.20、`tool` 指令自 1.24 陆续加入构建信息（第二版已列）；`go generate -run/-skip` 见上一节。第 36 讲展开编译链接流程，第 11 讲展开 module 基础，第二版讲了 `-ldflags -X` 与 `go.sum` 校验链，这两节补的是「生成器的子进程协议」与「符号裁剪、buildinfo 字段、可复现构建到 SLSA」这条之前只停在 Makefile 一行的链路。
+
+### 三条最常见的误解
+
+**误解一：CI 绿了就等于可以发布。** 反例：流水线只跑了 `go test` 与 `go build`，没做生成物一致性、没锁版本、制品也没保留上一版；发布后发现问题，既说不清线上是哪一版，也退不回去。CI 的门禁要覆盖检查、测试、生成物、构建、发布与回滚全链路，「能编译」只是其中一站。
+
+**误解二：`go generate` 在 CI 里现跑就行，生成物不用入库。** 反例：CI 现跑时用了另一个版本的生成器，产出与本地不同的 `version_gen.go`，`go build` 照样通过，二进制却与评审过的源码不一致；而且不入库就没有 `git diff --exit-code` 的比对基准，漂移根本发现不了。正确做法是生成物入库，CI 只负责「重跑生成再比 diff」。
+
+**误解三：版本号写进源码最直观。** 反例：每个 tag 都要改一行常量再提交，于是出现「tag 是 v1.4.0、源码里还是 v1.3.9」，本地 `go run` 打印的版本和线上对不上，排查时先要怀疑日志里的版本号是不是假的。正确做法是 `-ldflags -X` 构建期注入，源码只留 `dev` 兜底（呼应随堂检测里的 Predict）。
 
 ## 4. 工程实践
 
@@ -228,6 +519,56 @@ jobs:
 还有两个反模式值得点名：CI 里跑的命令和 Makefile 不一致，导致「本地绿、线上红」；以及只保留最新一个制品，回滚时才发现上一版早已被覆盖。发布不是构建的终点，可追溯与可回退才是。
 
 <Callout type="tip" title="一条可执行的检查" text="在仓库里放一条 make ci 目标，内容就是工作流里那几行；要求所有人在提 PR 前本地先跑一遍，把 CI 变成可自检的约定。" />
+
+### 一次真实故障：CI 里的版本漂移
+
+现象：周一上午所有 PR 的构建同时变红，而 diff 里只有业务文件改动；更隐蔽的一次是同一份代码本地构建通过、CI 编出的二进制行为却有细微差别。排查路径：
+
+1. 看 diff，排除代码回归，把怀疑方向转到「构建输入变了」；
+2. 翻 CI 日志，发现某些步骤用了浮动的 `latest`：Go 工具链、某个 action 的大版本、或 `stringer` / `mockgen` 这类生成器；
+3. 新 Go 版本的 `go vet` 规则与 `gofmt` 处理有变，原本全绿的代码开始报问题；生成器版本一变，`git diff --exit-code` 也开始报生成物漂移；
+4. 根因是所有影响构建结论的输入没有全部锁定——Go 版本、action 版本、生成器版本、依赖版本，任何一个浮动，都会让「今天能不能合入」取决于上游哪天发版；
+5. 修复：`go-version-file: go.mod`、action 钉大版本、生成器钉具体版本、`go.sum` 入库并加 `-mod=readonly`；工具链升级走独立 PR，先在分支上验证再合入。
+
+为什么这些锁定必须存在：CI 的结论要可复现，凡是影响构建结果的输入，要么进版本库（go.mod / go.sum / 配置文件），要么钉死版本。替代做法与代价也清楚——全用 `latest` 零维护但随时可能被上游打断，固定到某一台构建机不可复制且人员流动后失传，锁死后长期不升级又会漏掉安全补丁，所以正确姿势是「锁定 + 定期用独立 PR 跟进升级」。
+
+### 把版本锁定写进流水线
+
+```yaml
+# .github/workflows/ci.yml（版本锁定版，节选）
+name: ci
+on: [pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 工具版本一致性
+        run: |
+          go install golang.org/x/tools/cmd/stringer@v0.24.0
+          go generate ./...
+          git diff --exit-code
+      - name: 检查与测试（与本地同一个入口）
+        run: make ci
+      - name: 构建
+        run: make build
+```
+
+逐条看锁定理由：`go-version-file: go.mod` 让 CI 与本地用同一 Go 版本，避免 `vet`、`gofmt`、逃逸分析结论随工具链漂移；`actions/checkout@v4` 与 `setup-go@v5` 钉住 action 大版本，避免上游破坏性更新让整条流水线某天集体失效；`stringer@v0.24.0` 钉死生成器，否则不同版本生成的代码风格不同，`git diff --exit-code` 会在无人改动时误报；`go.sum` 入库配合 `GOFLAGS=-mod=readonly` 防止 CI 悄悄拉取到不同依赖；`make ci` 与 `make build` 保证本地和工作流执行的是同一条命令（呼应前面「本地能跑不算数，CI 能重复跑才算数」）。这里 `make ci` 正是前文建议放进仓库、内容等于工作流那几行的自检目标。
+
+### 与 L10 实战工程结构的呼应
+
+这一讲是 L5 的收口，也是 L10 的入口：`/projects/cli-todo` 的发布与安装、`/projects/cli-codegen` 的生成物入库、KV 贯穿线四讲每次架构演进后的回归验证、`/projects/micro-ecommerce` 的多服务构建，全都跑在同一条流水线上。前面十讲的工具——第 50 讲的结构、51 的 lint、52/53 的测试与 mock、54 的基准与 fuzz、55 的日志、56 的配置、57 的错误契约、58 的装配、59 的 pprof——最终都要由这一讲固化成「任何人、任何时间执行结果都一样」的门禁，才算真正落地。从第 61 讲起进入 L6 服务端，net/http 的中间件链会把日志、错误码、`trace_id` 串进真实请求路径，而守护它的仍是这条可重复、可追溯、可回退的交付线。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l5-engineering/lesson-060-cicd`](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-060-cicd)。clone 仓库后进入 `examples/l5-engineering`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

@@ -230,6 +230,120 @@ func main() {
 
 <Callout type="warn" title="链路最容易断在异步与跨协议处" text="起 goroutine 或丢进消息队列时若不显式把带 Span 的 ctx 传下去，子任务会开一条全新的 Trace。gRPC 走 metadata、HTTP 走 header，两边必须用同一套 propagator，否则跨协议调用就串不起来。baggage 里别放用户手机号等敏感信息，它会随每一跳传播。" />
 
+### 3.2 W3C traceparent 逐字段与确定性采样
+
+跨进程追踪的全部秘密，就压缩在 `traceparent` 这一个头里。它的格式是 `版本-TraceID-SpanID-标志位` 四段，每段长度与含义都由 W3C Trace Context 标准定死：
+
+| 段 | 长度 | 含义 | 为什么这样定 |
+| --- | --- | --- | --- |
+| version | 2 位十六进制 | 版本，当前为 00 | 留给未来格式演进，解析时先判版本 |
+| trace-id | 32 位十六进制（16 字节） | 全链路唯一标识 | 128 位足够全球唯一，跨厂商不冲突 |
+| parent-id | 16 位十六进制（8 字节） | 当前这一跳的 SpanID | 单条链路内唯一即可，故比 TraceID 短 |
+| trace-flags | 2 位十六进制 | 最低位 01 表示 sampled | 把采样决定随链路继承下去 |
+
+用一段标准库代码就能把各段长度与采样位量出来：
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	h := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	parts := strings.Split(h, "-")
+	fmt.Printf("版本=%s TraceID长度=%d SpanID长度=%d 采样=%s\n",
+		parts[0], len(parts[1]), len(parts[2]), parts[3])
+}
+```
+
+<OutputBox title="运行结果" output="版本=00 TraceID长度=32 SpanID长度=16 采样=01" note="四段长度与标准完全一致，末段 01 表示这条链路被采样。" />
+
+逐字段解释：`版本=00` 是当前 W3C 版本；`TraceID长度=32` 对应 16 字节，`SpanID长度=16` 对应 8 字节；`采样=01` 的最低位为 1，表示入口决定采集这条链路。 Extract 严格校验分段数与各段长度，格式不对就返回 `ok=false` 而不臆造 ID，正是因为这些长度是硬契约。
+
+采样为什么必须「确定性」？如果每个服务各自按随机数决定采不采，同一条链路会有的 Span 被采、有的被丢，拼出来的调用树全是缺口。头部采样在入口按 TraceID 做一次确定性判定，再把结果写进 `sampled` 标志随 traceparent 一路继承；下游用 parentbased 策略尊重上游的决定，于是这条链路要么全采、要么全不采。尾部采样反过来，先缓冲完整条链路再决定，能保留异常与慢链路，代价是成本高、要缓冲全量。
+
+### 3.3 传播推导与替代方案取舍
+
+进程内靠 `context` 携带当前 Span 就够了；一旦要发 HTTP、gRPC 或消息，就得把上下文序列化进请求——这就是 Inject，对端再还原——这就是 Extract。两者缺一，链路就断在那一跳。W3C 还定义了 `baggage`，用来带灰度标、租户这类业务标签，但它会随每一跳传播，绝不能放手机号等敏感信息。
+
+难点在「不同协议用不同载体」：HTTP 走 header、gRPC 走 metadata（map[string][]string）、消息队列走消息属性。全链路必须统一用同一套 propagator，否则一次 HTTP 转 gRPC 的调用就会因为载体和键名不一致而串不起来。
+
+| 采样策略 | 决策时机 | 优点 | 失败边界 |
+| --- | --- | --- | --- |
+| 头部采样 | 入口一次决定，随 Trace 继承 | 省资源、链路完整 | 偶发错误请求可能被丢 |
+| 尾部采样 | 收完整条链路再决定 | 能保留异常与慢链路 | 需缓冲全量，成本最高 |
+| 全量采集 | 不采样 | 排查最完整 | 高 QPS 下存储与网络不可承受 |
+| 固定比例 | 按 TraceID 哈希 | 简单、分布均匀 | 低流量时样本偏少 |
+
+| 追踪体系 | 标准化 | 侵入性 | 失败边界 |
+| --- | --- | --- | --- |
+| OpenTelemetry | 事实标准，厂商中立 | SDK 插桩 | 依赖采样与导出配置 |
+| Jaeger / Zipkin | 较成熟 | 需适配各自 propagator | 跨体系传播格式不一 |
+| 自研 | 完全可控 | 每语言自实现 | 与生态工具不兼容 |
+| eBPF 无侵入 | 无需改代码 | 零侵入 | 拿不到应用级语义属性 |
+
+| 上下文放哪 | 用途 | 风险 |
+| --- | --- | --- |
+| traceparent | 只放 TraceID、SpanID、采样位 | 字段极简，几乎无风险 |
+| baggage | 灰度标、租户等业务标签 | 随每跳传播，别放敏感信息 |
+| 自定义 header | 内部扩展 | 跨协议易漏、易与标准冲突 |
+
+### 3.4 可验证实验：断链复现与跨协议透传
+
+「起 goroutine 不传 ctx 会开一条新 Trace」可以用一段同步代码清晰地看到，不必依赖真实网络：
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+)
+
+type spanKey struct{}
+
+func traceID(ctx context.Context) string {
+	if v, ok := ctx.Value(spanKey{}).(string); ok {
+		return v
+	}
+	return "new-trace"
+}
+
+func main() {
+	parent := context.WithValue(context.Background(), spanKey{}, "t-9527")
+	fmt.Println("传 ctx:", traceID(parent))
+	fmt.Println("断链:", traceID(context.Background()))
+}
+```
+
+<OutputBox title="运行结果" output="传 ctx: t-9527\n断链: new-trace" note="同一份逻辑，传了父 ctx 就并入原链路，用 Background 起新 ctx 就另开一条 Trace。" />
+
+逐字段解释：`传 ctx: t-9527` 说明子任务从 `parent` 里读到了原来的 TraceID；`断链: new-trace` 说明用 `context.Background()` 新建的 ctx 里没有任何 Span，只能另起一条链路。把 `parent` 显式传给 goroutine 或消息发送函数，是异步与跨协议场景不断链的唯一办法。
+
+跨协议透传则用命令验证：
+
+```bash
+# HTTP：把 traceparent 作为 header 发出
+curl -s -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+  http://localhost:8080/order
+
+# gRPC：同样的键放进 metadata
+grpcurl -plaintext -rpc-header \
+  'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+  -d '{"name":"go"}' localhost:50051 demo.v1.Greeter/SayHello
+```
+
+逐字段解释：两条命令用的是**完全相同的 traceparent 值**，只是载体从 HTTP header 换成 gRPC metadata；服务端只要用同一套 propagator 提取，就能把两次调用挂到同一条 Trace 上。若网关转发时漏掉这个头，下游 Extract 返回 `ok=false`，链路就在这一跳断成两截——这正是生产里最隐蔽的 trace 断链。
+
+### 3.5 一次请求跨三跳的传播时序
+
+把 Inject 与 Extract 放进真实调用链，能看清同一 TraceID 如何贯穿多个服务、采样决定如何继承。每一跳都做两件事：入站 Extract 还原上游上下文并创建子 Span，出站再 Inject 给下一跳；漏掉任意一次，链路就在那一跳断成两截。
+
+<SequenceDiagram title="同一 TraceID 跨三跳的 Inject 与 Extract" caption="入口采样一次，逐跳提取再注入，所有 Span 共享 TraceID 并按 ParentID 串成调用树" :actors='["Client","Gateway","Order","Stock"]' :steps='[{"from":"Client","to":"Gateway","label":"入口建 Trace","note":"生成 TraceID","kind":"call"},{"from":"Gateway","to":"Gateway","label":"头部采样","note":"决定 sampled","kind":"self"},{"from":"Gateway","to":"Order","label":"Inject 写头","note":"traceparent 出站","kind":"call"},{"from":"Order","to":"Order","label":"Extract 还原","note":"创建子 Span","kind":"self"},{"from":"Order","to":"Stock","label":"再次 Inject","note":"继续下传","kind":"call"},{"from":"Stock","to":"Stock","label":"创建子 Span","note":"继承 TraceID","kind":"self"},{"from":"Stock","to":"Order","label":"返回结果","note":"带 status","kind":"return"},{"from":"Order","to":"Gateway","label":"返回结果","note":"沿链回传","kind":"return"},{"from":"Gateway","to":"Client","label":"返回结果","note":"闭环","kind":"return"},{"from":"Stock","to":"Stock","label":"End 上报","note":"导出 Span","kind":"self"}]' />
+
 ## 4. 工程实践
 
 真实 OpenTelemetry 里，这些能力落在几个标准件上：`TracerProvider` 负责创建 Tracer 与配置采样、导出器；`otel.GetTextMapPropagator().Inject(ctx, carrier)` 与 `.Extract(ctx, carrier)` 对应本讲的 Inject/Extract，只是 carrier 泛化成了 HTTP header 或 gRPC metadata；`otelhttp` 与 `otelgrpc` 提供自动插桩，把进出站传播都包好了。理解标准库版本后，换 API 只是换个名字。
@@ -237,6 +351,44 @@ func main() {
 <Compare :panels='[{"label":"各打各的日志","code":"log.Printf(order failed)\nlog.Printf(payment failed)","note":"两个服务的日志没有共同 key，排查只能靠时间戳硬凑，跨服务问题几乎查不动"},{"label":"统一带 trace_id","code":"log.Printf(trace_id=%s failed, tid)","note":"一条 TraceID 把网关、订单、支付全串起来，日志与 Span 可互相跳转"}]' title="日志能不能串起一次请求" />
 
 落地时还有几条经验。采样率按流量与成本调，错误与慢请求可以做尾部补采，避免「出事的那条恰好没采到」。Span 命名用低基数、语义化的名字（如 `GET /order` 或 `db.query`），别把用户 ID、订单号塞进 Span 名，否则时间序列会爆炸；这类高基数字段放 attributes。每个 Span 至少打上 `rpc.method`、`http.status_code`、`error` 三类属性，排查才有抓手。日志里统一输出 trace_id 与 span_id，配合第 55 讲的结构化日志，就能从一条日志直接跳到整条调用树。最后记得在 exit span 里 `End()` 并 `defer`，漏了上报会造成链路缺口，看起来就像某个服务凭空消失。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l7-microservice/lesson-080-tracing`](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-080-tracing)。clone 仓库后进入 `examples/l7-microservice`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+### 4.2 链路追踪的失败矩阵
+
+追踪的坑大多「不报错、只缺数据」，排查时才发现链路是碎的：
+
+| 故障 | 触发点 | 现象 | 防线 |
+| --- | --- | --- | --- |
+| trace 断链 | 起 goroutine 或发消息不传 ctx | 子任务开新 Trace，链路被切成两段 | 显式传 ctx + 统一 propagator |
+| 网关漏透传 | 转发未带 traceparent | 链路缺网关这一跳 | 中间件统一 Inject 与 Extract |
+| 采样丢错误链路 | 头部固定比例采样 | 出事的那条恰好没被采到 | 错误与慢请求做尾部补采 |
+| Span 名基数爆炸 | 把 user_id 塞进 Span 名 | 时间序列爆炸、后端被打垮 | 高基数字段放 attributes |
+| baggage 泄露 | 放手机号等敏感信息 | 随每一跳扩散 | 只放低敏标签 |
+| 跨协议串不起来 | HTTP 与 gRPC 用不同 propagator | 调用树在协议边界断裂 | 全链路统一 W3C propagator |
+| 时钟偏差 | 多机时间不同步 | Span 耗时错乱、父子区间重叠 | NTP 同步 + 只信相对耗时 |
+
+### 4.3 两条真实工程误解
+
+**误解一：起 goroutine 会自动继承 trace 的 ctx，不用显式传。** `go` 关键字只复制栈，不会把当前函数的 `context.Context` 自动塞进新协程；若协程里用 `context.Background()` 起新 ctx，父 Span 就丢了，子任务会开一条全新的 Trace。消息投递同理，ctx 必须作为消息属性或显式参数带过去。
+
+<Compare :panels='[{"label":"错误：goroutine 用 Background","code":"go func() { work(context.Background()) }()","note":"新建 ctx 丢掉父 Span，子任务开一条全新 Trace，链路断成两截"},{"label":"正确：显式传 ctx","code":"go func(ctx context.Context) { work(ctx) }(parent)","note":"把带 Span 的 ctx 传下去，子任务并入同一条 Trace"}]' title="异步任务怎么不断链" />
+
+**误解二：采样率越高越好，Span 名里放 user_id 方便排查。** 全量采集在高 QPS 下存储与网络成本不可承受；而把用户 ID、订单号塞进 Span 名更危险——每个取值都会生成一条独立时间序列，直接把追踪后端打垮。Span 名必须低基数、语义化（如 `GET /order` 或 `db.query`），高基数字段放 attributes，配合 [/engineering/logging](/engineering/logging) 的结构化日志按 trace_id 关联即可定位到具体用户。
+
+<Callout type="warn" title="Span 名别放高基数字段" text="Span 名要用低基数的语义化名字，把 user_id、order_id 塞进名字会让每个取值生成一条独立时间序列，把追踪后端打垮；这类字段应放 attributes，靠 trace_id 关联日志去查。" />
+
+### 4.4 与后续阶段的呼应
+
+trace_id 是贯穿可观测三支柱的那根线：[/engineering/logging](/engineering/logging) 的结构化日志靠它把分散日志串起来，[/distributed/sre](/distributed/sre) 的告警降噪与故障定位依赖完整调用树，[/distributed/high-availability](/distributed/high-availability) 的多活排障要看跨机房链路，[/distributed/kubernetes](/distributed/kubernetes) 里请求跨多个 Pod 时更需要统一传播。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 排查一次超时要靠全链路 Span 找到慢在哪一跳，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把网关、订单、库存、支付用同一 TraceID 拼成一棵树——本讲 Inject 与 Extract 这两个动作，就是这棵树能拼出来的全部前提。
+
+<Quiz q="W3C traceparent 头里，采样决定是靠哪一段随链路继承下去的？" :options='["version 段","trace-id 段","parent-id 段","trace-flags 的最低位"]' answer="3" explain="trace-flags 最低位为 1 表示 sampled，头部采样在入口决定一次，下游用 parentbased 尊重这个标志，保证同一条链路要么全采要么全不采。" />
+
+<Predict q="按 3.4 的代码，把带 Span 的 parent ctx 与 context.Background() 分别传给 traceID，两行输出是？" :options='["两行都是 t-9527","传 ctx 为 t-9527，断链为 new-trace","两行都是 new-trace","第一行直接 panic"]' answer="1" output="传 ctx: t-9527；断链: new-trace" explain="传了父 ctx 就读到原 TraceID 并入同一链路；用 Background 新建的 ctx 里没有任何 Span，只能另开一条 Trace，这正是异步断链的根因。" />
 
 ## 动手练一练
 <Exercise title="给 gRPC metadata 补上 traceparent 的透传" task="参照 2.2 的 Inject/Extract，把它们改成基于 map[string][]string 的 carrier，模拟 gRPC metadata；再写一个客户端拦截器，在每次调用前注入、服务端拦截器提取并创建子 Span。" :hints='["gRPC metadata 是 map[string][]string，key 用小写 traceparent","Inject 把格式化字符串放进切片第一个元素，Extract 从切片首元素读","客户端拦截器与服务端拦截器分别调用 Inject 与 Extract，共用一个 propagator"]' solution="要点一：定义 Carrier map[string][]string，Inject 用 Set(key, value)，Extract 用 Get(key) 取首元素。\n要点二：客户端拦截器从 ctx 取当前 Span，Inject 到 outgoing metadata，再发起调用。\n要点三：服务端拦截器 Extract incoming metadata，得到 TraceID 与 ParentID 后 StartSpan 创建子 Span，并把新 ctx 传给 handler。" explain="HTTP 与 gRPC 只是 carrier 不同，Inject 与 Extract 的语义完全一致；把传播收进拦截器，业务代码就完全不用感知。" />

@@ -176,6 +176,103 @@ func main() {
 
 <Compare title="包装与打日志的两种写法" :panels='[{"label":"推荐：每层 %w，边界打一次","code":"func repo() error {\n    return fmt.Errorf(\"查询用户: %w\", sql.ErrNoRows)\n}\nfunc handler() {\n    if err := service(); err != nil {\n        log.Printf(\"请求失败: %v\", err)\n    }\n}","note":"链完整，上层仍能用 errors.Is 判定类别；日志只出现一条。"},{"label":"反例：%v 切断且层层打印","code":"return fmt.Errorf(\"查询用户: %v\", err)\n// 每一层都 log.Println(err)","note":"根因丢失，日志重复刷屏，上层无法按类别重试或降级。"}]' />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-020-errors`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-020-errors)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到标准库定义与规范，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：%w 为什么能保住根因、errors.Is 怎么走链
+
+`error` 是值而不是异常，依据就在它的定义：`type error interface { Error() string }`——预声明接口，没有栈、没有抛出点，任何实现 `Error() string` 的类型都能当错误。Go 1.13 把错误链写进标准库：`fmt.Errorf` 遇到 `%w` 时，返回的不是普通的 `*errors.errorString`，而是 `*fmt.wrapError`，它持有 `msg string` 与 `err error` 并实现 `Unwrap() error`；`errors.Is(err, target)` 从 `err` 出发，反复调用 `Unwrap()` 走完整棵树，逐节点用 `==` 或节点自定义的 `Is(error) bool` 比较。`go doc fmt.Errorf` 明写「%w verb with an error operand → the returned error will implement an Unwrap method」，`go doc errors.Is` 明写「repeatedly calling its Unwrap() error」，这就是「`%w` 与 `errors.Is` 必须成对」的规范级依据，而不是经验。`errors.As` 同理，只是把「能否赋给目标类型」作为匹配条件，命中后把节点写进调用方给的指针。相对地 `%v` 只把 `err.Error()` 当字符串拼进格式化结果，返回的错误没有 `Unwrap`，链到此为止——`errors.Is` 退化为只比最外层一个节点。Go 1.20 起又多了 `Unwrap() []error` 这条多错误协议，`errors.Join` 生成的树由 `errors.Is` 深度优先遍历，`errors.Unwrap` 反而不认它。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：包装错误后还能用 `==` 或匹配 `err.Error()` 文本来判定类别。** `%w` 生成的是新的 wrapError 值，与哨兵不是同一个对象。
+
+<Compare title="判定包装后的错误" :panels='[{"label":"错误：等值或文本匹配","code":"if err == ErrNotFound { ... }\nif strings.Contains(err.Error(), \"not found\") { ... }","note":"包装后等值不成立；文案一改分支就碎"},{"label":"正确：errors.Is 沿链回溯","code":"if errors.Is(err, ErrNotFound) { ... }","note":"不管包了几层都能命中根因"}]' />
+
+文本是给人看的，不是给程序做分支的；一旦有人把「not found」改成「未找到」，字符串匹配的代码就悄悄失效了。
+
+**误解二：`errors.Join` 合并的错误，`errors.Unwrap` 能取回其中某一条。** Join 走的是多错误协议，单错误版的 Unwrap 不认它。
+
+<Compare title="Join 与 Unwrap 的关系" :panels='[{"label":"错误：用 Unwrap 取子错误","code":"joined := errors.Join(a, b)\nfmt.Println(errors.Unwrap(joined))","note":"返回 nil，Join 实现的是 Unwrap() []error"},{"label":"正确：用 errors.Is 遍历子树","code":"if errors.Is(joined, a) { ... }","note":"errors.Is 会遍历 Join 的每个孩子"}]' />
+
+`go doc errors.Unwrap` 明确写着「Unwrap does not unwrap errors returned by Join」；多错误的树只能交给 `errors.Is` / `errors.As`。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc fmt.Errorf
+go doc errors.Unwrap
+```
+
+```text
+func Errorf(format string, a ...any) error
+    If the format specifier includes a %w verb with an error operand,
+    the returned error will implement an Unwrap method returning the operand.
+func Unwrap(err error) error
+    Unwrap only calls a method of the form "Unwrap() error". In particular
+    Unwrap does not unwrap errors returned by Join.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `func Errorf(format string, a ...any) error` | 格式化构造函数，`any` 即任意实参 |
+| `%w verb with an error operand` | 只有 `%w` 且操作数是 error 才生成包装链 |
+| `implement an Unwrap method returning the operand` | 返回的错误持有原错误，errors.Is 才能回溯 |
+| `Unwrap only calls ... "Unwrap() error"` | 只处理单错误协议 |
+| `does not unwrap errors returned by Join` | Join 的多错误树要交给 errors.Is 遍历 |
+
+下面这段把等值比较失效、`errors.Is` 命中与 Join 的行为跑成确定输出：
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+var ErrNotFound = errors.New("not found")
+
+func load(id string) error {
+	return fmt.Errorf("加载 %s: %w", id, ErrNotFound)
+}
+
+func main() {
+	err := load("u1")
+	fmt.Println("等值比较 =", err == ErrNotFound)
+	fmt.Println("errors.Is =", errors.Is(err, ErrNotFound))
+	fmt.Println("errors.Unwrap =", errors.Unwrap(err))
+
+	joined := errors.Join(ErrNotFound, errors.New("timeout"))
+	fmt.Println("Is 命中子树 =", errors.Is(joined, ErrNotFound))
+	fmt.Println("Unwrap 对 Join 返回 nil =", errors.Unwrap(joined) == nil)
+
+	fmt.Println("链上文本 =", err.Error())
+}
+```
+
+<OutputBox title="运行结果" output="等值比较 = false\nerrors.Is = true\nerrors.Unwrap = not found\nIs 命中子树 = true\nUnwrap 对 Join 返回 nil = true\n链上文本 = 加载 u1: not found" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.13 | 引入 `%w`、`errors.Is` / `errors.As` / `errors.Unwrap` | 之前只能比字符串或自己写包装类型 |
+| Go 1.20 | 引入 `errors.Join` 与 `Unwrap() []error` 多错误协议 | 多个错误并列，`errors.Unwrap` 不认它 |
+| Go 1.20 | `fmt.Errorf` 允许多个 `%w` | 一次挂多个根因 |
+| 全版本 | `error` 只是 `Error() string` 接口 | 与异常机制无关 |
+
+适用边界还有一条：`errors.As` 的第二个参数必须是指向目标类型的指针（如 `var pe *os.PathError; errors.As(err, &pe)`），传值会在运行时 panic；自定义错误类型若实现了 `Is(error) bool`，可以自己定义「什么算同一类错误」。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 会说明 `error` 同样是接口，typed nil 的坑在这里一样成立——失败时返回 `(*MyError)(nil)` 会让 `err != nil` 为真；[第 57 讲](/engineering/error-design) 把本讲划清的边界落地成错误码、错误栈与统一响应。实战里，[第 112 讲](/projects/kv-2-network) 把哨兵错误映射成协议错误码而不泄露内部文案，[第 107 讲](/projects/data-log-etl) 用错误类别决定重试还是丢弃，[第 118 讲](/projects/ai-gateway) 需要把多家供应商的错误归一化成同一套可判定类型。
+
 ## 动手练一练
 
 <Exercise title="用 %w 保住根因" task="补全下面的 wrap 函数：它接收一个 error，返回带上下文的新错误，但必须让外层的 errors.Is(err, ErrNotFound) 仍然为 true。想一想格式化动词选哪个、判定又该用哪个函数。" solution="func wrap(err error) error {\n    return fmt.Errorf(`加载用户: %w`, err)\n}\n// 外层判定：errors.Is(err, ErrNotFound)" :hints='["包装要用能保留 Unwrap 链的动词，不是 %v。","判定用 errors.Is，它会沿链向下找目标哨兵。"]' explain="%w 让 fmt.Errorf 生成一个实现了 Unwrap 的包装错误；errors.Is 沿这条链逐层比较，于是最底下的 ErrNotFound 依然能被认出来。" />

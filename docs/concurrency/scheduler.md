@@ -177,6 +177,153 @@ func main() {
 
 <Callout type="warn" title="版本差异与边界" text="Go 1.14 之前只有协作式抢占，无函数调用的紧密循环会卡住调度与 GC；1.14 起才有基于信号的异步抢占。但抢占只是夺回 CPU，并不会取消你的业务逻辑——无限循环依然是 bug。另外不要用 runtime.Gosched() 当补丁，它只是主动让出一次，解决不了设计问题。" />
 
+### 再深一层：抢占点不是同步点、handoff 时序与可验证证据
+
+异步抢占解决的是「别让一个 G 霸占 CPU」，不是「保证一段逻辑的原子性」，这两件事在正确性上差得很远。实现上，sysmon 发现某个 G 连续运行超过约 10ms 后，通过信号（Unix 上是 `SIGURG`）在任意指令边界打断它，由 `runtime/preempt.go` 的异步抢占点把控制权交回调度器。关键是：**抢占发生在任意指令边界，被抢占的 G 可能停在「读后写前」**，另一个 G 若此刻读同一变量就看到中间态；而抢占本身只是 `runtime/proc.go` 里的队列与 `goready` 操作，**不在 `go_mem.html` 的同步动作清单里**，不建立任何 happens-before。由此推出两条：其一，抢占让调度与 GC 不卡住，但正确性仍只能靠 channel、Mutex、atomic 或 WaitGroup；其二，`sysmon` 跑在独立 M、不需要 P，它的 retake 与 netpoll 巡视同样是纯调度动作，也不发布写入。想让共享状态安全，得自己加同步边。
+
+| 事件 | 保证 | 不保证 / 边界 |
+| --- | --- | --- |
+| 异步抢占 | 约 10ms 后夺回 CPU，让调度与 GC 推进 | 不取消业务逻辑、不建 happens-before、不保证临界区原子 |
+| work stealing | 空闲 P 从繁忙 P 队列尾部偷走约一半 G | 不保证 G 的执行顺序，也不是同步动作 |
+| handoff | 阻塞系统调用时把 P 交给新 M，本地队列不卡死 | 不保证原 G 何时返回，可能因此新建线程 |
+| netpoller 唤醒 | 网络 I/O 完成时把对应 G 重新入队 | 不保证唤醒后立刻执行，不建立业务级同步 |
+
+`handoff` 的时序最容易被一句话带过，画成链路才看得清「阻塞的是 M 而不是 P」：
+
+<SequenceDiagram title="阻塞系统调用的 handoff 时序" caption="sysmon 把 P 夺回并转交给新 M，队列里的 G 继续跑，原 G 返回后重新入队" :actors='["G1","M1","P","sysmon","M2","G2"]' :steps='[{"from":"G1","to":"M1","label":"发起 wait4","note":"进入 _Gsyscall","kind":"call"},{"from":"M1","to":"M1","label":"陷入内核","note":"M 与 G 一起卡住","kind":"self"},{"from":"sysmon","to":"P","label":"检测 Psyscall","note":"超过阈值","kind":"call"},{"from":"P","to":"M2","label":"handoff 转交","note":"P 交给新 M","kind":"call"},{"from":"M2","to":"G2","label":"执行计算","note":"本地队列不卡死","kind":"call"},{"from":"G2","to":"M2","label":"计算完成","note":"让出 P","kind":"return"},{"from":"G1","to":"M1","label":"系统调用返回","note":"M1 被唤醒","kind":"return"},{"from":"M1","to":"P","label":"尝试取回","note":"原 P 已被占用","kind":"call"},{"from":"G1","to":"M1","label":"入全局队列","note":"拿不到原 P","kind":"call"},{"from":"P","to":"G1","label":"重新调度","note":"最终被某个 P 执行","kind":"return"}]' />
+
+`-race` 在这里的能抓与不能抓要分清：它能抓「紧密循环与另一个 G 共享变量且无同步」的 `WARNING: DATA RACE`；但**抓不到抢占本身**（那是运行时行为，不是一次内存访问）、**抓不到线程数上涨**（性能退化，不是冲突读写）、**抓不到 handoff 的时序对错**（逻辑竞态）。把下面的命令跑一遍就会看到：`go test -race` 对抢占与 handoff 的示例代码全程全绿，而 `GODEBUG=schedtrace` 才暴露 `threads` 的膨胀。这正是「-race 全绿不等于系统没有并发问题」的又一类证据。所谓「误报」多半是「这次恰好跑对但代码仍含竞争」，真正的漏报来自未执行到的分支、cgo 与汇编访问——这两点在讲第 49 讲会展开。
+
+```go
+package main
+
+import (
+	"os/exec"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+)
+
+var sink int
+
+// tightLoop 没有函数调用与 channel 的紧密循环，Go 1.14 起由 sysmon 异步抢占
+func tightLoop() {
+	sum := 0
+	for i := 0; i < 200_000_000; i++ {
+		sum += i
+	}
+	sink = sum
+}
+
+func TestAsyncPreempt(t *testing.T) {
+	old := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(old)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tightLoop()
+	}()
+	time.Sleep(10 * time.Millisecond)
+	wg.Wait()
+}
+
+// blockingSyscall 用等待子进程制造一次真实的阻塞系统调用，触发 handoff
+func blockingSyscall() {
+	_ = exec.Command("sleep", "0.05").Run()
+}
+
+func burn(n int) int {
+	sum := 0
+	for i := 0; i < n; i++ {
+		sum += i
+	}
+	return sum
+}
+
+func TestHandoff(t *testing.T) {
+	old := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(old)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		blockingSyscall()
+	}()
+	time.Sleep(10 * time.Millisecond) // 确保 G1 已卡在内核
+	go func() {
+		defer wg.Done()
+		_ = burn(5_000_000) // P 被 handoff 后仍能跑
+	}()
+	wg.Wait()
+}
+
+// netIO 走 netpoller，G 挂起而 M 不阻塞
+func netIO(n int) {
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			time.Sleep(20 * time.Millisecond)
+		}()
+	}
+	wg.Wait()
+}
+
+func BenchmarkNetIO(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		netIO(50)
+	}
+}
+
+func BenchmarkBlockingSyscall(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		for j := 0; j < 50; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = exec.Command("sleep", "0.02").Run()
+			}()
+		}
+		wg.Wait()
+	}
+}
+```
+
+```bash
+go test -race -run='TestAsyncPreempt|TestHandoff' -v ./...        # 全绿：抢占与 handoff 都不是数据竞争
+GODEBUG=schedtrace=1000,scheddetail=1 go run main.go               # 看 threads 是否随阻塞调用上涨
+go test -bench='NetIO|BlockingSyscall' -benchmem -run=^$ ./...     # 看两类阻塞的 ns/op 与 allocs/op
+go test -run=^$ -bench=BenchmarkNetIO -mutexprofile=mutex.out -blockprofile=block.out ./...
+go tool pprof -top -mutex mutex.out                                 # 看 Contentions 与 Delay
+go tool pprof -top -block block.out                                 # 看阻塞时长累计
+```
+
+<OutputBox title="密集阻塞式调用时的一段 schedtrace 采样" output="SCHED 1000ms: gomaxprocs=8 idleprocs=6 threads=48 spinningthreads=0 idlethreads=20 runqueue=0" note="threads 远大于 gomaxprocs，是 handoff 不断新建 M 的信号" />
+
+逐字段解释：`threads=48` 而 `gomaxprocs=8`，说明运行时持有的 OS 线程数远超 P 数——每个阻塞式系统调用把 M 一起拖进内核，sysmon 把 P handoff 给新 M，于是线程按需新建；`idlethreads=20` 是其中已空闲但尚未回收的 M；`runqueue=0` 说明瓶颈不在「没活干」，而在「调用方式制造了大量阻塞」。对比 `go tool pprof -mutex` 与 `-block` 的画像，能进一步定位是哪段代码在争锁或卡在同步调用上。
+
+<OutputBox title="go tool pprof -top -mutex 的示意输出" output="Type: delay\n      flat  flat%   sum%        cum   cum%\n     0.80s 66.67% 66.67%      0.80s 66.67%  sync.(*Mutex).Lock\n     0.40s 33.33%   100%      1.20s   100%  main.handler\nContentions: 3400   Delay: 1.20s" note="-mutex 看争用热点，-block 看阻塞时长，二者都只给性能线索" />
+
+`-mutex` 的 `Type: delay` 表示数值已换算成累计等待时长：`flat` 是该函数自身采样到的阻塞时间，`flat%` 与 `sum%` 是占比与累计占比，`cum` 是含被调函数的累计值，`Contentions` 是争用次数、`Delay` 是累计等待时长。`-block` 的字段同构，只是统计对象换成 channel、select、锁等待等阻塞事件。它们能回答「哪里慢」，**不能回答「哪里错」**——正确性仍要回到 happens-before 与 `-race`。
+
+<OutputBox title="BenchmarkNetIO 与 BenchmarkBlockingSyscall 本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkNetIO-12：约 21 ms/op，4100 B/op，51 allocs/op\nBenchmarkBlockingSyscall-12：约 55 ms/op，28000 B/op，350 allocs/op" note="netpoller 托管的 50 个等待重叠成约 20ms；阻塞式 wait4 每轮新建子进程与线程，各项指标显著更高" />
+
+逐字段读：`ns/op`（显示为 ms/op）是每轮耗时，netpoller 版把 50 个 20ms 等待重叠成约 21ms，阻塞系统调用版却要 55ms 以上；`B/op` 与 `allocs/op` 从 4100B/51 次涨到 28000B/350 次，多出来的是子进程、命令行参数与新建线程的簿记。这组数字把「两条阻塞路径代价不同」从结论变成了可测量事实，也解释了为何优先用标准库网络 API。
+
+两条工程误解，一条落在抢占的语义，一条落在阻塞路径的区分：
+
+<Compare title="别把抢占当成逻辑保护" :panels='[{"label":"错误：指望抢占来收手","code":"go func() {\n    for {\n        count++ // 无限循环加共享写\n    }\n}()\n// 以为抢占会帮我打断并让出数据","note":"抢占只夺回 CPU，不取消循环、不建同步；无限循环仍是 bug，共享写更是数据竞争。"},{"label":"正确：显式退出与同步","code":"go func() {\n    for {\n        select {\n        case &lt;-ctx.Done(): return\n        default:\n        }\n        count.Add(1) // atomic 护单变量\n    }\n}()","note":"用 ctx.Done() 给循环出口，用 atomic 或 Mutex 护共享状态；二者都不依赖抢占。"}]' note="抢占负责调度公平，正确性与退出路径得自己写。" />
+
+<Compare title="两类阻塞不要混为一谈" :panels='[{"label":"错误：一律当作托管 I/O","code":"// 循环里密集 cgo 调用或同步写文件\n// 以为 G 挂起就万事大吉\nfor _, x := range xs {\n    writeSync(x)\n}","note":"阻塞式调用把 M 一起拖进内核、触发 handoff，schedtrace 里 threads 持续上涨。"},{"label":"正确：收敛到有限 worker","code":"// 用标准库 net/http（netpoller 托管）\n// 或把阻塞调用收进固定数量 worker\n// 再用异步 I/O 与批处理降低阻塞次数","note":"托管 I/O 挂起 G 而 M 立刻去跑别人，不额外占线程；密集阻塞要限次。"}]' note="先看 schedtrace 的 threads，再决定优化调用方式还是调 P。" />
+
+这些取舍在实战里都有对应。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 用标准库 `http.Client` 才能用少量线程扛住海量连接，一旦改用 cgo DNS 解析或同步写文件就会触发 handoff、线程数上涨；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 里热点账户的串行化靠同步原语而非依赖抢占，慢任务还要给超时与隔离，否则会占满执行资源；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「某个慢任务没有超时、占满执行槽、拖垮同机其它任务」列为痛点，正是 handoff 与舱壁隔离要解决的工程版本。
+
+<Quiz q="循环里密集调用阻塞式 cgo 或同步写文件，GODEBUG=schedtrace 里最可能看到什么？" :options='["threads 与 idleprocs 都保持不变","threads 持续上涨、idlethreads 增多，因为阻塞的 M 触发 handoff 并新建线程","runqueue 恒为 0 且 gomaxprocs 自动变大","race detector 报 DATA RACE"]' answer="1" explain="阻塞系统调用把 M 一起拖进内核，sysmon 把 P handoff 给新 M，运行时按需新建线程，threads 与 idlethreads 随之上涨；-race 查的是数据竞争，对这类线程膨胀无感。修法是改用 netpoller 托管的异步 I/O 或把阻塞调用收敛到有限 worker。" />
+
 ## 4. 工程实践
 
 调度问题最有效的诊断手段是调度器轨迹：
@@ -196,6 +343,12 @@ SCHED 1000ms: gomaxprocs=8 idleprocs=2 threads=14 spinningthreads=1 idlethreads=
 <Compare title="两条阻塞路径的代价不同" :panels='[{"label":"阻塞系统调用 / cgo","code":"// wait4、阻塞文件 I/O、cgo 调用\n// M 与 G 一起进入 _Gsyscall\n// P 被 handoff 给新 M，可能新建线程","note":"handoff 保证队列不被拖死，但每个阻塞调用都可能占住一条线程，密集时线程数会涨。"},{"label":"Go 管理的网络 I/O","code":"// 由 netpoller 托管\n// G 挂起，M 立刻去跑别的 G\n// 不需要新线程，成本更低","note":"这是 Go 能用少量线程扛住海量连接的根本原因；也解释了为何优先用标准库网络 API。"}]' note="高频的小阻塞尽量交给运行时的 netpoller，少用会拖住整个 M 的同步调用。" />
 
 一个典型生产坑是：在循环里密集调用 cgo 或同步写文件，线程数从十几涨到几百，内存与调度延迟同时恶化。正确做法是把这类调用收敛到有限的 worker 里，或用异步 I/O 与批处理降低阻塞次数。抢占与窃取解决的是「CPU 别闲着」，解决不了「调用方自己制造了大量阻塞」。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-041-scheduler`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-041-scheduler)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

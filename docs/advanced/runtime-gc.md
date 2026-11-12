@@ -198,6 +198,37 @@ gc 13 @3.502s 1%: 0.021+1.3+0.019 ms clock, 0.16+0.28/1.1/0+0.15 ms cpu, 5->6->3
 
 <Callout type="tip" title="源码阅读建议" text="先读 mgc.go 的 gcTrigger 与 gcStart 理清触发和两次 STW，再读 mgcpacer.go 的 findRunnableGCWorker 看 worker 预算，最后才看 mbarrier.go 的写屏障；work 全局结构里的 heap0、heap1、bytesMarked 是串起各阶段的主线字段，别一上来就钻汇编屏障。" />
 
+### 常见误读与反例
+
+GC 的误读几乎都把「目标堆」当成「硬阈值」、把「并发」当成「没有停顿」。下面三条用 `gctrace` 一行输出与第 2 节程序就能推翻。
+
+| 误读 | 为什么站不住（源码推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「GOGC=100 表示堆每涨 100 字节就 GC 一次，堆到 goal 就必须立刻停下」 | `goal`（即 `NextGC`）约等于上一轮标记结束时的存活堆乘以 `(1 + GOGC/100)`，是**相对存活堆的增长目标**，不是绝对阈值；`gcTriggerHeap` 在 `mallocgc` 里按分配量检查，`goal` 是软目标，存活对象真超过它时堆仍会继续涨，只是调步算法更早开工、派更多 worker | 第 2 段程序里 `NextGC` 随存活堆上升而抬高；`GOGC=off` 时堆无界增长、`gc N` 不再增加，正好反证触发由 `gcTrigger` 控制而非某个固定字节数 |
+| 「写屏障只在 GC 开始时开一次且全程 STW，有了混合写屏障就不需要第二次 STW」 | `gcStart` 第一次 STW 切到 `_GCmark` 并开启混合写屏障，`src/runtime/mbarrier.go` 在并发标记期间同时把旧值与新值标灰，屏障一直生效到收尾；`gcMarkDone` 进 `gcMarkTermination` 做第二次 STW 才关闭屏障、算下一轮 `heapGoal` | `gctrace` 的 `ms clock` 三段 `0.018+1.1+0.017` 里，中间的 1.1 是并发标记，前后两段才是 STW，两者之和才是用户能感知的停顿；两次 STW 缺一不可 |
+| 「调大 GOGC 是免费提速，GC 次数越少越好」 | GOGC 调大抬高 `heapGoal`，GC 变少、标记 CPU 让给业务，但两次 GC 之间堆积的对象更多，峰值堆成倍上涨，还会抬高页表与缓存压力，容器环境里甚至先触发 OOM | 第 4 节表里 GOGC 从 100 到 400 吞吐只涨约 18%、峰值堆从 78 MiB 涨到 268 MiB；在线服务反而要配合 `MemoryLimit` 压堆，按 `gctrace` 建基线、只改一个变量、`benchstat` 验证的闭环决策 |
+
+<Quiz q="gctrace 一行里的 0.018+1.1+0.017 ms clock，用户能感知的停顿主要来自哪几段？" :options='["中间那段 1.1 ms 并发标记","前后两段 STW 之和","三段相加的总和","与 clock 无关，只看 goal"]' answer="1" explain="三段依次是第一次 STW、并发标记、第二次 STW；并发标记与业务同时跑，只有前后两段 STW 会暂停所有 G，二者之和才是停顿。" />
+
+### 观测手段的能证与不能证
+
+第 3 节给了 `gctrace` 的字段速查表，这里补上证据边界，避免把周期账单当成请求级归因。
+
+| 手段 | 能证明什么 | 不能证明什么 |
+| --- | --- | --- |
+| `GODEBUG=gctrace=1` | 每轮的 `goal`、两段 STW、标记 CPU 占比、存活堆变化与 GC 频率 | 单次请求延迟就是 GC 造成的（它是周期账单，不按请求归因），也不能证明 `goal` 是硬上限 |
+| `runtime.ReadMemStats` | `NumGC`、`HeapAlloc`、`NextGC` 的瞬时值 | 看不出时间分布；`ReadMemStats` 本身会触发一次 STW，高频调用反而制造停顿 |
+| `GOGC=off` 对照 | 触发条件确实由 `gcTrigger` 控制 | 不能用来评估真实负载的吞吐与 OOM 风险（堆无界增长） |
+| `benchstat` 对比 | 多轮采样下 `1%` 与两段 STW 之和的变化是否显著 | 单次抖动得不出结论；实验室 delta 也不能直接当线上 QPS 收益 |
+
+一句话记边界：`gctrace` 证明「这一轮 GC 花了多少、目标堆多大」，`MemStats` 证明「此刻堆是什么状态」，两者都不证明「某次 p99 尖刺一定来自 GC」——那要靠 `go tool trace` 把 GC 事件与请求时间线对齐。
+
+### 与 L10 源码级实战的呼应
+
+- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：流量削峰与预扣减会在极短时间内产生海量短命对象，GC 的 `1%` 与两段 STW 直接决定 p99 尾延迟；本讲「gctrace 建基线、只改 GOGC、benchstat 验证」正是「压测与预案」里定 GOGC 与 MemoryLimit 的方法。
+- [实战 03 · 短链服务](/projects/net-shortlink)：高并发读服务把热点映射常驻缓存时，调大 GOGC 可换吞吐；一旦容器内存受限，就要加 `MemoryLimit` 压堆，避免被 OOM kill——这就是「内存换 CPU」的边界判断，不能只看吞吐一列。
+- KV 贯穿线 ④ [分片、复制与 Raft](/projects/kv-4-distributed)：Raft 快照与日志复制会产生大块存活堆，`heapGoal` 抬高后 `gcAssistAlloc` 的分配反压会拖慢写入；在「成员变更与压测」阶段要用 `gctrace` 确认 GC 没有成为吞吐拐点，而不是把单机版的 GOGC 结论直接搬过来。
+
 ## 4. 工程实践
 一次在线服务调优这样闭环：先用 `GODEBUG=gctrace=1` 采集基线，记录每轮 GC 频率、标记占用 CPU 比例与 `goal`；再只改一个变量，用固定压测脚本复跑；最后用 `benchstat` 对比，确认收益不是噪声。下表是某 JSON 聚合服务在同样压测下的代表性数据。
 
@@ -214,6 +245,12 @@ GODEBUG=gctrace=1 ./aggregator 2> gc.log
 结论很直白：调大 GOGC 是内存换 CPU，吞吐涨约 18%，峰值堆涨三倍多；加 MemoryLimit 压住堆，代价是 GC 更频繁、吞吐小幅下降。批任务选前者，在线服务选后者。
 
 <Compare title="两种调优取向" :panels='[{"label":"吞吐优先","code":"debug.SetGCPercent(400)\nserve()","note":"GC 更少、CPU 让给业务，适合离线批任务，代价是常驻内存更大"},{"label":"内存可控","code":"debug.SetGCPercent(100)\ndebug.SetMemoryLimit(536870912)\nserve()","note":"堆受软上限约束、延迟平稳，适合在线服务"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-096-runtime-gc`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-096-runtime-gc)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 gctrace 读一轮 GC" task="给第二段程序加上 GODEBUG=gctrace=1 运行，找出 goal 字段，说明它与 NextGC 的关系。" :hints='["gctrace 每行以 gc 编号开头", "goal 单位 MB，NextGC 单位字节"]' solution="runtime.GC()\nvar m runtime.MemStats\nruntime.ReadMemStats(&m)\nfmt.Println(m.NumGC, m.NextGC)\nfmt.Println(debug.SetGCPercent(-1))" explain="gctrace 的 goal 与 MemStats.NextGC 是同一个目标堆，只是单位不同。SetGCPercent(-1) 只查询不修改，可确认调优是否生效。" />

@@ -262,6 +262,26 @@ RenderBaseline-12  2.21kB ± 0%  0.00kB ± 0%  -100.00%  (p=0.000 n=6+6)
 
 <Callout type="tip" title="源码阅读建议" text="先读 testing/benchmark.go 里 Benchmark 怎么自适应 b.N，再读 runtime/pprof 的 Lookup 与 runtime/mprof.go 的 SetMutexProfileFraction，就能明白 ns/op、B/op、contentions 三个数字各自从哪来；最后才看 mgcpacer.go 的 heapGoal，把 GOGC 调优和 GC 源码接上。" />
 
+### 常见误读与反例
+
+性能案例里最贵的错误不是优化得不够，而是把局部指标当成了全局结论。下面三条用第 3 节的递进表与 `benchstat` 输出就能推翻。
+
+| 误读 | 为什么站不住（证据推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「热路径 ns/op 降了 6.75 倍，服务 QPS 就会快 6.75 倍」 | `ns/op` 是单 goroutine 微基准，不含网络、锁竞争与全局 GC 效应；第 3 节表里热路径 6.75x，端到端 QPS 只从 4.5w 到 30w，且那一步还靠把全局锁按 key 分片才拿到 | 局部结论只用来定位热点；对外承诺的 QPS 与 p99 必须另跑固定并发、固定数据集的端到端压测，两者用同一份脚本串起来 |
+| 「一次把三处都改了，反正都变快了；单次 bench 的百分比就够写结论」 | 一次改多处无法归因，收益说不清来自哪一处；`benchstat` 依赖多组样本，`(p=0.000 n=6+6)` 才排除机器抖动，只跑一次得到的 delta 可能是噪声 | 按第 1 节闭环「一次只改一处、每改必测」；用 `go test -benchmem -count=6` 各存 old.txt 与 new.txt，再看 benchstat 的 delta 与 p 值 |
+| 「`allocs/op` 是唯一指标，GC 次数不用看；CPU profile 里 flat 最高的函数就该优化」 | GOGC 调大让 GC 变少但峰值堆翻三倍，可能触发页错误或容器 OOM；`flat` 只算函数自身，热点还要结合 `cum` 调用链，并与 heap 的 `alloc_space`、mutex 的 `delay` 交叉验证 | 按第 3 节七行表同时看 ns/op、B/op、GC 次数、QPS 与 p99；三条 profile 证据指向同一处热点才动手，避免照着一张 CPU 图改错地方 |
+
+<Quiz q="单次 go test -bench 看到 ns/op 下降 10%，能否直接写进性能结论？" :options='["能，百分比已给出","不能，需要多组样本与 benchstat 的 p 值排除噪声","能，只要 QPS 没变就行","能，只要改的是热路径"]' answer="1" explain="单次 bench 的 delta 可能是机器抖动；benchstat 依赖 -count=6 这类多组采样，p 值足够小才能说收益是真实的。" />
+
+一句话记边界：`ns/op` 证明「这段函数在微基准里快了多少」，`benchstat` 证明「差异不是噪声」，两者都不证明「线上 QPS 会涨」——后者要靠第 3 节表最后那一行端到端压测，这也是「ns/op 下降不等于服务变快」那条 warn 的量化版本。
+
+### 与 L10 源码级实战的呼应
+
+- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：压测与预案里的 QPS、p99、错误率就是本讲「最后一行端到端」指标；流量削峰前后的对比必须固定并发与数据集、一次只改一处，否则分不清收益来自限流还是缓存。
+- KV 贯穿线 ④ [分片、复制与 Raft](/projects/kv-4-distributed)：成员变更与压测阶段，分片路由与 Raft 写入成为新的瓶颈来源，得重新走一遍 CPU、堆、mutex 三类 profile 建基线，而不是沿用单机版第四步的 `sync.Pool` 结论。
+- [实战 03 · 短链服务](/projects/net-shortlink)：压测若只盯跳转 QPS 而忽略 `B/op` 与 GC 次数，缓存命中率一变就会出现 p99 抖动；本讲「同时看五个指标」在这里直接决定压测报告是否可信。
+
 ## 4. 工程实践
 把流程固化成命令与门禁：压测脚本固定并发数与数据集，pprof 采样限定 30 秒，基准结果存成文本文件，用 benchstat 生成对比报告，CI 里对关键基准设阈值。线上采集要克制，CPU profile 有开销，优先在预发或低峰期短窗口抓。
 
@@ -272,6 +292,12 @@ benchstat old.txt new.txt
 ```
 
 <Compare title="热路径拼装写法" :panels='[{"label":"写法 A：逐条拼接","code":"var out string\nfor _, it := range items {\n    out = out + fmt.Sprint(it.Key, it.Value)\n}\nreturn out","note":"每次反射并生成中间字符串，分配次数随记录数线性增长"},{"label":"写法 B：预分配 Builder","code":"var b strings.Builder\nb.Grow(len(items) * 12)\nfor i := range items {\n    b.WriteString(items[i].Key)\n    b.WriteByte(61)\n}\nreturn b.String()","note":"一次分配、零反射、零中间串，用 -benchmem 可看到 B/op 接近 0"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-100-perf-case`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-100-perf-case)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="把验证写进 CI" task="给第三段程序加一条检查：优化版 allocs/op 必须小于基线，否则打印回归并退出码非零。" :hints='["BenchmarkResult 有 AllocsPerOp 方法", "用 os.Exit(1) 表示失败"]' solution="if fast.AllocsPerOp() &gt;= base.AllocsPerOp() {\n    fmt.Println(1)\n    os.Exit(1)\n}\nfmt.Println(0)" explain="把断言写成非零退出码，CI 就能在合并前拦住性能回归。完整可编译版本见第三段代码。" />

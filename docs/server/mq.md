@@ -293,7 +293,128 @@ func main() {
 
 三个参数值得单独记：`RequiredAcks = RequireAll` 是生产端「不丢」的开关（代价是延迟）；`Balancer = Hash` 把顺序责任交给分区键；`CommitInterval = 0` 关掉自动提交，把 ACK 时机交回业务。注意接口返回 202 而不是 200——消息「已收下」和「已处理完」是两件事，契约上必须区分。
 
+### 协议与契约：投递语义、分区顺序与 ACK 的推导
+
+**三种投递语义不是配置开关，而是「处理」与「确认」能否原子的必然结果。** 设一条消息从被取走到被处理完之间，进程可能崩溃、网络可能分区，而「业务处理」与「提交 offset / ACK」是两个独立动作，无法跨系统原子化。于是只能二选一：
+
+- **at-most-once**：收到即 ACK。崩溃窗口是「已 ACK 但未处理」，消息永久丢失，绝不重复。
+- **at-least-once**：处理成功后才 ACK。崩溃窗口是「已处理但未 ACK」，Broker 会重投，消息可能重复，但绝不丢（前提是生产确认与 Broker 持久化都到位）。
+- **exactly-once**：要同时不丢不重，就必须让「处理」与「offset 提交」原子。Kafka 用幂等生产者（PID 加序列号去重生产端重试）与事务（`__transaction_state` 协调）保证「读 Kafka → 处理 → 写 Kafka」这个**闭环内**不重不漏。
+
+由此推出最容易被误读的一点：只要消费端要写数据库、调 HTTP、发邮件，这些外部系统就不在 Kafka 事务里，exactly-once 立刻失效，仍要靠业务幂等。工程上准确的说法是「用 at-least-once 保证不丢，用幂等消费把『重』变成无害」，而不是「开了事务就一劳永逸」。
+
+**生产确认的推导链。** `acks=0` 是发出即成功，写完网卡缓冲区就返回，Broker 没落盘就丢；`acks=1` 要 leader 落盘，leader 宕且副本尚未同步时仍丢；`acks=all` 加 `min.insync.replicas` 要 ISR 全部确认，用延迟换「不丢」。生产端自身的超时重试又会制造重复，于是 `enable.idempotence` 用 PID 加单调递增序列号让 Broker 识别并丢弃重复写入。这三档是「持久化确认」与「去重」两个维度，缺一个都谈不上可靠投递。
+
+**分区顺序的边界要推导到扩容。** 每个分区是一条只能追加的日志，offset 单调，因此顺序**只在一个分区内成立**；想要全局有序只能退化成单分区，吞吐上限也就没了。把同一业务键（订单号、用户 ID）作分区键，`hash(key) % 分区数` 让它恒定落到同一分区，获得所需的局部有序。但增加分区会改变这个取模映射，历史 key 的分区归属随之变化，重平衡期间顺序可能被打乱；重试时把失败消息直接塞回队首，也会破坏同一 key 的相对顺序。所以「分区数决定并行度上限」与「加分区要评估历史顺序」是同一条推导的两面。
+
+**幂等键为什么必须来自业务。** offset 会在重平衡与分区扩容后变化，中间件的消息 ID 在重试重发时也可能变，只有「订单号加操作类型」这类业务唯一键稳定。判重与业务写入若不在同一事务，仍有「业务写成功、去重记录没写上」的窗口，因此去重表加唯一索引、判重写库记去重三者必须同进同退。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（推荐） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| offset 提交 | 自动提交 | 处理成功后手动 `CommitMessages` | 拿到消息即提交，进程崩溃即永久丢失 |
+| 生产确认 | `acks=0` 或 `acks=1` | `acks=all` 加幂等生产者 | 延迟最低但可能丢消息 |
+| 顺序保证 | 单分区全局有序 | 按业务键分区，局部有序 | 吞吐被单分区锁死 |
+| 幂等键 | offset / 中间件消息 ID | 业务唯一键加去重表唯一索引 | 重平衡或重发后键失效，仍会重复 |
+| 库与消息的原子性 | 先发消息再写库 | 本地消息表或事务消息 | 库失败却已对外产生副作用 |
+| 失败重试 | 无限重试、塞回队首 | 退避重试、独立重试主题、死信队列 | 毒消息阻塞整个分区并打乱顺序 |
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 超时 | 消费处理超过会话超时 | 反复重平衡、消息重复投递 | rebalance 次数 | 缩短处理、调会话超时 |
+| 重试放大 | 下游失败触发无限重试 | lag 不降反升，Broker 与 DB 压力翻倍 | lag 曲线、重试次数 | 退避、重试预算、死信 |
+| 幂等缺失 | at-least-once 重投且无业务键 | 重复计费、重复扣减 | 去重表冲突计数 | 业务幂等键加唯一索引 |
+| 连接池耗尽 | 消费者里做长耗时同步操作占住分区 | lag 单调上涨 | 分区处理耗时 | 只放任务描述，交给 worker pool |
+| 慢查询 | 去重表无索引 | 单条消费变慢，拖慢整个分区 | `EXPLAIN`、慢 SQL 日志 | 给幂等键建唯一索引 |
+| 消息重复 | 崩溃、超时、重平衡 | 同一事件被处理多次 | 事件 ID 命中日志 | 幂等消费，命中仍要 ACK |
+| 顺序破坏 | 加分区或失败消息塞回队首 | 同一 key 的操作乱序 | 分区与 key 分布 | 扩容评估、独立重试主题 |
+| 库写了消息没发 | 先写库再发消息中间崩溃 | 下游永远收不到变更 | 本地消息表积压 | 本地消息表或事务消息 |
+
+<SequenceDiagram title="可靠投递与失败重试链路" :actors='["Producer","Broker","Consumer","DB","DLQ"]' :steps='[{"from":"Producer","to":"Broker","label":"生产消息","note":"acks=all 等 ISR","kind":"call"},{"from":"Broker","to":"Producer","label":"确认写入","note":"持久化完成","kind":"return"},{"from":"Consumer","to":"Broker","label":"拉取消息","note":"offset 未前进","kind":"call"},{"from":"Broker","to":"Consumer","label":"交付","note":"按分区键保序","kind":"return"},{"from":"Consumer","to":"DB","label":"查幂等键","note":"业务唯一键","kind":"call"},{"from":"DB","to":"Consumer","label":"未命中","note":"首次处理","kind":"return"},{"from":"Consumer","to":"DB","label":"写业务加去重","note":"同一事务","kind":"call"},{"from":"Consumer","to":"Broker","label":"提交 offset","note":"处理成功后才 ACK","kind":"call"},{"from":"Broker","to":"Consumer","label":"崩溃重投","note":"未 ACK 再次交付","kind":"async"},{"from":"Consumer","to":"DB","label":"查重命中","note":"重复直接确认","kind":"call"},{"from":"Consumer","to":"Broker","label":"确认重复","note":"不再写业务","kind":"call"},{"from":"Broker","to":"DLQ","label":"超限入死信","note":"退避后仍失败","kind":"async"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把 lag 与幂等消费跑出来看
+
+**实验一：用消费者组命令观察 lag。** lag 是「还能不能追上生产速度」的第一指标，也是失败矩阵里多项故障的共同信号：
+
+```bash
+kafka-consumer-groups --bootstrap-server 127.0.0.1:9092 --describe --group order-service
+```
+
+<OutputBox title="消费者组 describe 输出（列已对齐）" output="GROUP          TOPIC   PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG\norder-service  orders  0          12040           12048           8\norder-service  orders  1          11990           11990           0" note="LAG 是分区级未消费消息数，持续增长即需扩容或排查慢消费" />
+
+逐字段解释：`GROUP` 是消费者组 ID，组内实例分摊分区；`TOPIC` / `PARTITION` 定位到具体分区；`CURRENT-OFFSET` 是该组已提交的位置，也是「处理成功后才 ACK」这条规则的落点；`LOG-END-OFFSET` 是分区最新位置；`LAG` 是两者之差，即堆积量。分区 0 的 LAG=8 说明该分区消费落后，若持续单调上涨就要扩分区或扩消费者；分区 1 的 LAG=0 说明已追平。把某个消费者里加一个 5 秒的慢 HTTP 调用再跑一次，会看到 LAG 稳步上涨、`CURRENT-OFFSET` 几乎不动——「消费者里做长耗时同步操作」的故障就这样被量化出来。消息重复则可通过让进程在处理后、提交前崩溃复现：重启后 `CURRENT-OFFSET` 停在旧位置，同一条消息会再次交付。
+
+**实验二：go test -race 证明幂等消费能把重复投递折叠成一次。** 下面这段完整可编译的测试文件让 20 个相同事件 ID 并发到达（模拟超时重试放大加重投），断言业务状态只变更一次：
+
+```go
+package main
+
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+type consumer struct {
+	mu      sync.Mutex
+	seen    map[string]bool
+	applied int32
+}
+
+func (c *consumer) handle(eventID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen[eventID] {
+		return // 命中去重，仍应向上层确认
+	}
+	c.seen[eventID] = true
+	atomic.AddInt32(&c.applied, 1)
+}
+
+func TestIdempotentConsumerCollapsesDuplicates(t *testing.T) {
+	c := &consumer{seen: make(map[string]bool)}
+	const duplicates = 20
+	var wg sync.WaitGroup
+	for i := 0; i < duplicates; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.handle("evt-1001")
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&c.applied); got != 1 {
+		t.Fatalf("业务被应用 %d 次，应为 1", got)
+	}
+}
+```
+
+```bash
+go test -race -run TestIdempotentConsumerCollapsesDuplicates -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestIdempotentConsumerCollapsesDuplicates\n--- PASS: TestIdempotentConsumerCollapsesDuplicates (0.00s)\nPASS\nok   example.com/server   1.302s" note="20 次重复投递只应用一次，且 race 检测无告警" />
+
+逐字段解释：`--- PASS` 说明 `applied` 最终为 1，即 19 次重复都被 `seen` 命中后直接返回；`-race` 无 `WARNING: DATA RACE`，证明「判重加登记」被互斥锁包成了原子单元。对照实验：把 `c.mu.Lock()` / `Unlock()` 删掉再跑，要么 `applied` 大于 1，要么 race detector 直接报警甚至 `concurrent map writes` 崩溃——这就把「判重与业务写入必须原子」从结论变成可证伪断言。生产里 `seen` 换成带唯一索引的去重表，且与业务写入同事务，原理完全一致；注意命中去重时仍要向 Broker 确认，否则消息会被反复重投，反而制造重试放大。
+
+<Predict q="把主题的分区数从 3 增加到 6，且不重建索引，最可能发生什么？" :options='["并行度提升且历史顺序完全不变","按订单号作键的历史消息可能落到不同分区，局部顺序被打乱","吞吐下降","自动触发全量重投"]' answer="1" output="hash(key) 取模的分母变了，同一业务键可能映射到新分区，重平衡期间顺序可能被打乱" explain="分区数决定 key 到分区的映射，扩容会改变映射；要求严格局部有序时，扩容前必须评估历史数据或改用可保序的方案。" />
+
+### 两条真实工程误解
+
+**误解一：开了 Kafka 事务就是 exactly-once，消费端不必再做幂等。** 错。事务与幂等生产者只覆盖「读 Kafka → 处理 → 写 Kafka」这个闭环；一旦处理要写数据库、调第三方 HTTP 或发邮件，这些系统不参与 Kafka 事务，崩溃重投照样会产生重复副作用。正确姿势仍是 at-least-once 加业务幂等键，把「不丢」和「不重」分别交给确认机制与业务去重。
+
+**误解二：增加分区只是提升并行度，对已有数据没有影响。** 错。分区键靠 `hash(key) % 分区数` 定位，分母一变，同一订单号的历史消息与新消息可能落到不同分区，分区内有序的前提被打破；重平衡期间消费者组重新分配分区，也会带来短暂的顺序与重复窗口。扩容前要评估历史顺序，或把失败消息放进独立重试主题而不是塞回队首。
+
+### 与后续阶段的呼应
+
+- 本讲的超时、退避、重试预算与死信，在 /microservice/resilience 会被形式化为熔断器状态机与雪崩推演；消息链路的跨服务串联则在 /microservice/tracing 变成 trace 透传。
+- 「库写了消息没发」的原子性问题在 /distributed/distributed-tx 展开为本地消息表、Saga 与可靠消息最终一致；业务幂等键与去重表状态机在 /distributed/distributed-lock 继续深入。
+- L10 的 /projects/micro-seckill 用消息队列做流量削峰，正是本讲「只把任务描述放进消息」的典型；/projects/micro-ecommerce 的订单状态流转依赖分区键保序，/projects/data-log-etl 的日志管道则把 lag 与背压当成核心监控量。
 
 生产端还有一处细节：数据库事务与发消息不是原子的。若先写库再发消息，进程在中间崩溃就会丢消息；反过来先发消息再写库，库失败消息却已经发出去了。正确姿势是本地消息表或事务消息，把「业务变更」与「待发消息」放进同一个本地事务，再由独立投递器保证最终发出。
 
@@ -302,6 +423,12 @@ func main() {
 <FlowTimeline title="一条消息的可靠旅程" :steps='[{"title":"生产确认","desc":"acks=all，等 ISR 副本都写入","tone":"blue"},{"title":"分区持久化","desc":"按 Key 落到固定分区，写入日志","tone":"purple"},{"title":"拉取消费","desc":"组内实例按分区分摊","tone":"orange"},{"title":"幂等处理","desc":"查业务幂等键，重复则直接确认","tone":"green"},{"title":"提交 offset","desc":"成功后才 ACK，失败进重试","tone":"blue"},{"title":"重试与死信","desc":"退避重投，超限进死信待人工处理","tone":"gray"}]' direction="horizontal" />
 
 监控上要盯住**堆积量（lag）**：消费速度持续低于生产速度，lag 会单调上涨，说明该扩分区或扩消费者了；同时要给重试次数、死信条数、处理耗时配告警。还有一个反模式是**消费者里做长耗时同步操作**（大文件处理、慢 HTTP 调用），它会让分区长时间被占用；这类工作应当只把「任务描述」放进消息，实际执行交给独立的 worker pool。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-068-mq`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-068-mq)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

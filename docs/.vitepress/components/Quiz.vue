@@ -54,7 +54,7 @@ function reset() { submitted.value = false; picked.value = [] }
   <div class="go-card go-quiz">
     <div class="go-eyebrow">随堂检测 · {{ isMulti ? '多选题' : '单选题' }}</div>
     <div class="q-head" style="margin-top:.35rem">
-      <span class="q-no">{{ no || 'Q' }}</span>
+      <span v-if="no" class="q-no">{{ no }}</span>
       <span class="q-text"><RichText :text="q" /></span>
     </div>
     <div class="go-options">

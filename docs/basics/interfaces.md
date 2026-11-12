@@ -297,7 +297,125 @@ func main() {
 | 实现方预先定义大接口 | 调用方被迫依赖多余方法 | 接口由使用方按需要定义 |
 | 在包内给外部类型加方法 | 编译失败 | 只能给本包类型加方法 |
 
-<Predict no="19-3" q="openReader(false) 失败时若图省事 return (*fileReader)(nil), err，调用方 r, _ := openReader(false) 后判断 r == nil 的结果是？" :options='["true，判空生效","false，判空失效","编译失败","panic"]' answer="1" output="false，判空失效" explain="接口含类型与数据两个字；装入 nil 的 *fileReader 后类型字写着该指针类型，整体不为 nil。正确写法是失败时显式 return nil, err，让两个字都为空。" />
+<Predict q="openReader(false) 失败时若图省事 return (*fileReader)(nil), err，调用方 r, _ := openReader(false) 后判断 r == nil 的结果是？" :options='["true，判空生效","false，判空失效","编译失败","panic"]' answer="1" output="false，判空失效" explain="接口含类型与数据两个字；装入 nil 的 *fileReader 后类型字写着该指针类型，整体不为 nil。正确写法是失败时显式 return nil, err，让两个字都为空。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-019-interfaces`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-019-interfaces)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与运行时结构，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：两个字、动态派发与隐式实现从哪来
+
+接口为什么是「两个字」：`runtime/runtime2.go` 里 `eface struct{ _type *_type; data unsafe.Pointer }`（空接口）与 `iface struct{ tab *itab; data unsafe.Pointer }`（非空接口），`itab` 又存着接口类型、动态类型与方法表。把一个具体值装进接口，编译器把类型信息写进第一个字、数据（或指向数据的指针）写进第二个字；`i == nil` 判定的是两个字是否都为空——装入 `(*T)(nil)` 时类型字写着 `*T`，所以整体不为 nil。类型断言 `i.(T)` 在运行时比对 `itab` 里的动态类型，`comma-ok` 形式失败返回零值加 false；单值形式比对不通过时由运行时调用 `panicdottypeE` 抛出 `interface conversion` panic，这正是「不确定就写 `v, ok := i.(T)`」的依据。隐式实现则由 `go doc go/types.Implements` 给出的 `func Implements(V Type, T *Interface) bool` 在编译期静态判定：只查 V 的方法集是否覆盖 T 的全部方法，不要求任何声明；`go doc io.ReadWriter` 能看到组合接口就是把两张方法表并起来。`any` 是 Go 1.18 的预声明别名 `type any = interface{}`，模块 `go` 指令低于 1.18 时用它直接编译失败。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：函数返回接口时，失败路径返回 `(*T)(nil)` 与返回 `nil` 等价，调用方 `if r != nil` 都能挡住。** 带类型的 nil 指针只清空了数据字，类型字仍写着具体类型。
+
+<Compare title="失败路径该返回什么 nil" :panels='[{"label":"错误：返回带类型的 nil","code":"func open(ok bool) Reader {\n    if !ok {\n        return (*fileReader)(nil)\n    }\n    return &fileReader{}\n}","note":"接口类型字非空，调用方判空失效"},{"label":"正确：显式返回 nil 字面量","code":"func open(ok bool) (Reader, error) {\n    if !ok {\n        return nil, errors.New(\"打开失败\")\n    }\n    return &fileReader{}, nil\n}","note":"两个字都为空，判空才生效"}]' />
+
+真实故障常出现在打开文件、建连接这类失败路径：错误返回了，接口却非空，兜底分支没进去，紧接着在 nil 接收者上调用方法就崩了。
+
+**误解二：`type switch` 的 case 只能写具体类型，不能写接口。** 其实接口是最贴合「按能力分支」的写法。
+
+<Compare title="type switch 的 case 能写什么" :panels='[{"label":"错误：只枚举具体类型","code":"switch v := x.(type) {\ncase int:\n    // 每种类型都要列一遍\n}","note":"漏掉一种就走 default"},{"label":"正确：接口也能当 case","code":"switch v := x.(type) {\ncase fmt.Stringer:\n    return v.String()\ncase nil:\n    return \"空值\"\n}","note":"按「有没有这个能力」分支，更稳"}]' />
+
+匹配条件是「动态类型是否实现该接口」，而不是「是不是某个具体类型」；这样新增实现方也不必回来改分支。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc builtin.any
+go doc go/types.Implements
+```
+
+```text
+type any = interface{}
+    any is an alias for interface{} and is equivalent to interface{} in all ways.
+func Implements(V Type, T *Interface) bool
+    Implements reports whether type V implements interface T.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `type any = interface{}` | any 是别名，不是新类型 |
+| `equivalent ... in all ways` | 老代码里 `interface{}` 与 `any` 可互换 |
+| `Implements(V Type, T *Interface) bool` | 编译期静态判定实现关系，无需 `implements` 声明 |
+| `V` 与 `T` | 分别是待检查类型与接口类型，返回值即方法集是否覆盖 |
+
+把 `go.mod` 的 `go` 指令临时改成 1.17 再 `go build`，会看到 `predeclared any requires go1.18 or later (-lang was set to go1.17; check go.mod)`——语言特性受 `go` 指令约束，而非机器上装了哪个版本的 Go。
+
+下面这段把 typed nil、显式 nil 与「接口作 case」跑成确定输出：
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Reader interface{ Read() string }
+
+type fileReader struct{ data string }
+
+func (f *fileReader) Read() string { return f.data }
+
+func open(ok bool) (Reader, error) {
+	if !ok {
+		return nil, errors.New("打开失败")
+	}
+	return &fileReader{data: "hello"}, nil
+}
+
+type Code int
+
+func (c Code) String() string { return fmt.Sprintf("CODE-%d", int(c)) }
+
+func stringify(v any) string {
+	switch x := v.(type) {
+	case fmt.Stringer:
+		return x.String()
+	case nil:
+		return "空值"
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func main() {
+	var p *fileReader
+	var i Reader = p
+	fmt.Println("装入 nil 指针后 i == nil =", i == nil, "动态类型 =", fmt.Sprintf("%T", i))
+
+	bad, err := open(false)
+	fmt.Println("显式 nil =", bad == nil, "出错 =", err != nil)
+
+	fmt.Println("能力分支 =", stringify(Code(7)))
+	fmt.Println("空值分支 =", stringify(nil))
+}
+```
+
+<OutputBox title="运行结果" output="装入 nil 指针后 i == nil = false 动态类型 = *main.fileReader\n显式 nil = true 出错 = true\n能力分支 = CODE-7\n空值分支 = 空值" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.18 | `any` 别名与泛型同时引入 | `go` 指令低于 1.18 编译失败 |
+| Go 1.18 | 接口可含类型集（联合约束），但只能作约束、不能当变量类型 | 见第 22 讲 |
+| Go 1.20 | `comparable` 放宽，普通接口值可满足 comparable | 影响以接口为键的泛型 |
+| Go 1.22 | 循环变量每轮新建，遍历 `[]any` 时闭包捕获更安全 | 与第 15 讲衔接 |
+| 全版本 | 接口两个字、typed nil、隐式实现 | 结论与版本无关 |
+
+适用边界还有一条：接口变量只与 `nil` 可比，两个接口值之间若动态类型不可比较（如装了切片），用 `==` 会运行时 panic；判等前先确认动态类型可比较。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 会展开 `iface`/`eface`、`itab` 与动态派发成本，把这里「两个字」的模型落到结构；[第 26 讲](/core/value-semantics) 讲接口赋值的拷贝代价；[第 31 讲](/core/string-internals) 与反射一起解释空接口存值的布局。工程上，[第 53 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Storage` 是本讲「接受接口、返回结构体」的样板，[第 118 讲](/projects/ai-gateway) 的多供应商适配则把行为差异全收进接口。
 
 ## 动手练一练
 

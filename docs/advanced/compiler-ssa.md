@@ -177,6 +177,26 @@ main.add STEXT nosplit size=19 args=0x10 locals=0x0 funcid=0x0 align=0x0
 
 <Callout type="tip" title="源码阅读建议" text="先用 GOSSAFUNC=sum1 go build 生成 ssa.html，从左到右点几个 pass 看值节点怎么变少，再回头读 ssa/compile.go 的 pass 列表；内联与逃逸先各读一个函数就够，别一上来啃 inl.go 的全部代价表。记 pass 的效果比记 pass 的名字更耐用。" />
 
+### 常见误读与反例
+
+编译器优化的误读大多来自「把编译期决策当成运行期行为」或「把一个工具的结论外推到全部代码」。下面三条用 `-gcflags=-m` 与 `go tool compile -S` 就能推翻。
+
+| 误读 | 为什么站不住（源码推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「内联预算 80 是 80 行代码，函数短就一定被内联」 | `inline/inl.go` 的 `inlineMaxBudget = 80` 按**代价节点数**计分，调用、闭包、可变参数、`defer` 都额外加价，`//go:noinline` 会直接跳过；PGO 的 2000 也只对带 `default.pgo` 的热点函数生效 | 以 `go build -gcflags=-m` 输出的 `can inline` 与 `inlining call to` 为准，别数行数；第 2 段程序里 `add` 与 `noInline` 的对照就是现成反例 |
+| 「返回指针一定比返回值慢，逃逸了就说明代码有问题」 | `doesEscape` 返回局部指针触发 `runtime.newobject`，但小结构体返回值也可能因接口装箱、闭包捕获而逃逸，大结构体返回指针反而能避免整块拷贝。逃逸分析结论只是「是否堆分配」，不是「好坏」 | 用 `-gcflags=-m=2` 看清是哪个引用导致 `moved to heap`，再用 `go test -benchmem` 看 `B/op` 与 `allocs/op`；第 4 节 `Compare` 的两栏要配合基准数字读，不能只看返回类型 |
+| 「SSA 是运行时优化，汇编里没有 `runtime.panicIndex` 就证明源码不会越界」 | SSA 是**编译期** IR，`ssa/prove.go` 的 BCE 只删掉「可证明」的检查（如 `range` 约束的下标）；它证明的是编译器能推导，不代表所有路径都安全，也不代表链接后二进制完全一样 | `go tool compile -S` 看 `sum1` 里 `runtime.panicIndex` 是否消失，再用 `go tool objdump -s main.sum1 ./bin` 确认最终产物；两个工具一个看编译结果、一个看链接结果，不能互相替代 |
+
+<Quiz q="go tool compile -S 的输出里没有 CALL runtime.newobject，能证明什么？" :options='["这个函数运行期绝不分配堆内存","这个编译单元里该函数没有生成堆分配调用","整个程序零分配","链接后的二进制也没有分配"]' answer="1" explain="compile -S 只显示当前包编译出的汇编，没有 newobject 说明该函数这次编译未生成堆分配调用；跨包调用、内联进调用方以及链接后的产物都要另查，不能外推到整个程序。" />
+
+这三条有同一个根源：把某个观测手段能证明的范围当成了它能证明的全部。`-m` 证明「编译器这次怎么决策」，`compile -S` 证明「这个包生成了什么汇编」，`objdump` 证明「链接后还剩什么指令」，三者层层收窄，却没有一个能单独证明运行时行为——这正是第 3 节那张观测命令表按「观察对象」分列的原因。
+
+### 与 L10 源码级实战的呼应
+
+- [实战 02 · protoc 插件与代码生成器](/projects/cli-codegen)：生成的错误码注册代码若不小心返回指针或把值装箱成 `interface{}`，会让本可栈分配的对象逃逸；把 `-gcflags=-m` 接进「生成与格式化」之后的检查，就多了一道编译期质量门禁。
+- KV 贯穿线 ① [内存版与接口抽象](/projects/kv-1-memory)：内存版 Storage 的基准测试要用 `-benchmem` 看 `allocs/op`，本讲的逃逸分析正是解释「每次 Get 是否多一次分配」的工具；接口抽象带来灵活性的同时是否引入装箱，也靠它判断。
+- KV 贯穿线 ② [TCP 协议帧与网络层](/projects/kv-2-network)：协议帧编解码是热路径，`go tool compile -S` 里若出现 `runtime.newobject` 就说明帧对象逃逸；BCE 是否生效决定逐字节解析还剩几条边界检查，直接影响这条网络层的吞吐上限。
+
 ## 4. 工程实践
 写热路径代码时，与其猜编译器有没有优化，不如让编译器自己交代。`GOSSAFUNC=main go build` 会在当前目录生成 `ssa.html`，逐 pass 展示 SSA 图如何被化简；`go tool compile -S` 打印汇编，可数出循环里还剩几条边界检查。把这些命令接进 CI，能在性能回归合并之前就发现「某个改动意外让变量逃逸」这类问题。
 
@@ -186,6 +206,12 @@ go tool compile -S main.go
 ```
 
 <Compare title="返回指针还是返回值" :panels='[{"label":"写法 A：返回指针","code":"func f() *User {\n    u := new(User)\n    return u\n}","note":"对象逃逸到堆，每次调用一次分配，给 GC 增加压力"},{"label":"写法 B：返回值","code":"func f() User {\n    return User{}\n}","note":"小结构体留在栈或寄存器里，零堆分配，用 -gcflags=-m 可验证"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-098-compiler-ssa`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-098-compiler-ssa)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="找出逃逸点" task="用 -gcflags=-m 跑观察一，找出 escapes to heap 那一行；再把它改成返回值版本，确认该行消失。" :hints='["-m=2 会打印更详细的决策链", "关注 moved to heap 与 escapes to heap 两种措辞"]' solution="func doesEscape() *int {\n    y := 42\n    return &y\n}\nfunc noEscape() int {\n    y := 42\n    return y\n}" explain="返回局部指针时编译器判定 y 被外部引用，必须堆分配；改成返回值后变量留在栈上。完整可编译版本见第一段代码。" />

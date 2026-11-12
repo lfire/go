@@ -311,7 +311,140 @@ func main() {
 
 <OutputBox title="SSE 帧格式" output="id: 0\nevent: tick\ndata: 2026-11-11T10:00:00Z\n\n: ping" note="空行表示一个事件结束；id 供重连时通过 Last-Event-ID 续传，冒号开头的行是心跳注释" />
 
+### 协议与契约：握手、帧与半开连接的推导
+
+**握手为什么必须是一次标准 HTTP 请求。** RFC 6455 规定客户端发起带 `Upgrade: websocket`、`Connection: Upgrade`、`Sec-WebSocket-Key`（16 字节随机值的 base64）、`Sec-WebSocket-Version: 13` 的请求；服务端同意则回 `101 Switching Protocols`，并带 `Sec-WebSocket-Accept`。这个头不是回声，而是 `base64(SHA1(key + GUID))`，其中 GUID 是规范写死的 `258EAFA5-E914-47DA-95CA-C5AB0DC85B11`。推导：拼接固定 GUID 是为了让普通 HTTP 服务器或缓存代理不会「碰巧」返回一段被误认成升级响应的内容，Accept 值则让客户端确认对端真的理解 WebSocket 而非普通 200。101 之后这条 TCP 连接不再遵守请求-应答规则，双方改传帧——所以鉴权、Cookie、`Set-Cookie`、限流、灰度全都只能在握手阶段完成，升级成功后既没有新的 HTTP 头，也没机会再补一次校验。
+
+**帧格式解释了「单写」铁律。** RFC 6455 第 5.2 节的一个帧由 `FIN(1) + RSV(3) + opcode(4) + MASK(1) + 载荷长度(7/16/64 位) + 掩码键(0 或 4 字节) + 载荷` 组成。一条应用消息可以拆成多帧、靠 FIN 位标识结束，opcode 区分 text(0x1)、binary(0x2)、close(0x8)、ping(0x9)、pong(0xA)，控制帧必须 FIN=1 且载荷不超过 125 字节。由此推出并发写为什么不是「加锁就好」：若两个 goroutine 各自写帧，A 写了未置 FIN 的续帧，B 又插入一个 text 帧，帧序列交错后消息边界与 opcode 语义都被破坏，对端解析出错乱报文，gorilla/websocket 文档因此明确不支持并发写。规范还要求**客户端到服务端**的帧必须掩码（MASK=1），目的是防止历史上一类缓存污染攻击（RFC 6455 第 10.3 节），服务端到客户端不掩码——这层由库透明处理，但知道它存在才明白升级后不能再往连接里裸写字节。
+
+**心跳参数之间有严格的不等式。** `SetReadDeadline(now + pongWait)` 定义「多久没收到任何帧就判定连接已死」，服务端每 `pingPeriod` 发一次 Ping，对端回 Pong 时 `SetPongHandler` 把读超时往后推。推导：必须 `pingPeriod < pongWait`，否则心跳还没来得及刷新超时，正常连接已被误杀；再留一点余量，工程上取 `pongWait * 9 / 10`。`writeWait` 单独限制每次落笔，防止对端不读导致写阻塞。为什么不交给 TCP keepalive？因为系统默认探测间隔常以小时计，而 NAT、负载均衡器对空闲连接的静默清除往往是 60 到 350 秒；只有应用层心跳才能同时对抗「半开连接」与中间设备的空闲超时。这是第 61 讲四类超时在长连接上的变体，也说明 WebSocket 必须从短请求的 `WriteTimeout` 体系里豁免出来。
+
+**SSE 帧是纯文本协议，不是库的魔法。** `text/event-stream` 里每个事件由 `id:`、`event:`、`data:`、`retry:` 等行组成，空行表示事件结束，冒号开头的行是注释（正好用来做心跳、防止代理掐空闲连接）；浏览器 `EventSource` 断线后自动重连并带上 `Last-Event-ID` 请求头，服务端据此从断点补发。它是普通 HTTP 流，天然穿过各类代理与网关，却只支持服务端到客户端的单向 UTF-8 文本。理解帧格式才能解释两个高频坑：不调用 `Flusher.Flush()` 数据会卡在缓冲区里根本没发出去；注释行不加，长连接会被代理按空闲超时掐掉。
+
+### 设计取舍与替代方案
+
+| 维度 | 方案 A：WebSocket | 方案 B：SSE | 方案 C：长轮询 |
+| --- | --- | --- | --- |
+| 方向 | 全双工 | 服务端到客户端单向 | 半双工，靠反复请求模拟 |
+| 底层 | 独立帧协议，需 Upgrade | 普通 HTTP 流 | 普通 HTTP 请求 |
+| 自动重连 | 无，需自己写指数退避 | 浏览器原生，带 Last-Event-ID | 天然就是下一次请求 |
+| 代理与防火墙 | 可能被拦截或需特殊配置 | 兼容性最好 | 兼容性最好 |
+| 数据 | 文本与二进制帧 | 仅 UTF-8 文本 | 任意 |
+| 连接治理成本 | 心跳、并发写约束、扇出都要自己做 | 服务端代码少一半 | 请求头与握手开销重复 |
+| 主要代价 | 每个连接常驻 goroutine 与 fd | 无法双向、不能传二进制 | 延迟高、无效请求多 |
+
+第四种常被提起的替代是 HTTP/2 Server Push，但它面向资源预推送而非应用消息，且已被主流浏览器弃用，不作为实时推送方案。选型的判断只有一句：确实需要客户端高频回传或二进制才付 WebSocket 的连接治理成本，否则 SSE 更省。把「按方向选」换成「按热度选」，是这里最贵的错误。
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 半开连接 | 拔网线、NAT 静默断连 | 连接僵住，fd 与内存不释放 | 连接存活时长分布 | 读超时加 Ping/Pong 加读限制 |
+| 心跳错配 | `pingPeriod >= pongWait` | 正常连接被周期性误杀、频繁重连 | 断线原因码统计 | 保证 pingPeriod 小于 pongWait |
+| 慢消费者 | 广播循环里同步写 conn | 整场推送被最慢连接拖住 | 各连接 send 队列长度 | Hub 只投递缓冲通道，default 踢出 |
+| 并发写 | 多 goroutine 直接 WriteMessage | 帧错乱、解析失败甚至 panic | `panic: concurrent write` | 单写 goroutine 加缓冲 channel |
+| 断线风暴 | 断线后立刻无限重连 | 服务端恢复瞬间连接数打满 | 每秒新建连接数 | 指数退避加随机抖动 |
+| 消息漏收 | 重连不带断点 | 断线期间增量丢失，状态跳变 | 客户端序号连续性 | 消息编号加 Last-Event-ID 补发 |
+| 大帧 / 大内存 | 不设 SetReadLimit | 单帧吃满内存 | 进程 RSS 曲线 | 限制单条消息上限并拒绝 |
+| 跨站劫持 | CheckOrigin 恒返回 true | 任意站点带用户 Cookie 连上 | Origin 头审计 | 白名单校验 Origin |
+| 重试放大 | 断线即重连且无退避 | 重连请求把鉴权服务打满 | 入口与鉴权 QPS 对比 | 退避加抖动加连接数上限 |
+
+<SequenceDiagram title="握手、心跳、广播与断线补发" :actors='["Client","Proxy","Server","Hub","Store"]' :steps='[{"from":"Client","to":"Proxy","label":"Upgrade 请求","note":"携带 Sec-WebSocket-Key","kind":"call"},{"from":"Proxy","to":"Server","label":"转发握手","note":"鉴权在升级前完成","kind":"call"},{"from":"Server","to":"Client","label":"101 切换","note":"带 Sec-WebSocket-Accept","kind":"return"},{"from":"Server","to":"Hub","label":"注册连接","note":"分配缓冲 send 通道","kind":"call"},{"from":"Server","to":"Client","label":"Ping","note":"周期小于 pongWait","kind":"call"},{"from":"Client","to":"Server","label":"Pong","note":"刷新读超时","kind":"call"},{"from":"Store","to":"Hub","label":"新消息","note":"业务事件到达","kind":"async"},{"from":"Hub","to":"Server","label":"扇出投递","note":"非阻塞写 send 队列","kind":"call"},{"from":"Server","to":"Client","label":"推送帧","note":"单写 goroutine 落笔","kind":"call"},{"from":"Client","to":"Client","label":"断线","note":"心跳超时","kind":"self"},{"from":"Client","to":"Server","label":"带断点重连","note":"Last-Event-ID 或序号","kind":"call"},{"from":"Store","to":"Server","label":"补发增量","note":"回放断线期间消息","kind":"return"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把握手、帧格式和 Flush 跑出来看
+
+**实验一：curl 观察 101 升级与 SSE 帧。** 用 RFC 6455 第 1.3 节给出的固定样例 key 发起握手，再单独请求 SSE 端点看原始文本帧：
+
+```bash
+curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  http://127.0.0.1:8080/ws
+curl -i -N http://127.0.0.1:8080/events
+```
+
+<OutputBox title="握手响应与 SSE 原始帧" output="HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\n\nid: 0\nevent: tick\ndata: 2026-11-11T10:00:00Z\n\n: ping" note="101 之后不再有 HTTP 头；SSE 以空行分隔事件，冒号行是心跳注释" />
+
+逐字段解释：`101 Switching Protocols` 表示协议切换成功，此后这条连接改传帧；`Upgrade: websocket` 确认协商结果；`Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=` 正是 `base64(SHA1(key + GUID))` 的结果——它是可计算的，不是随机数，下面的实验二会把它断言出来；`id: 0` 供重连时通过 `Last-Event-ID` 续传；`event: tick` 是自定义事件名；`data:` 后跟载荷；中间的**空行**是事件结束标志；`: ping` 是注释心跳，用来防止代理按空闲超时掐连接。把 SSE Handler 里的 `flusher.Flush()` 注掉再请求，curl 会一直等不到 `data:` 行，直接验证「不 Flush 数据卡在缓冲区」。
+
+**实验二：用 Go 断言 Accept 计算与 SSE 帧，并加 go test -race。** 下面这段完整可编译的测试文件把「握手 Accept 可推导」和「SSE 帧必须带 Content-Type 且 Flush 后可读到完整事件」变成断言：
+
+```go
+package main
+
+import (
+	"crypto/sha1"
+	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+func acceptKey(clientKey string) string {
+	h := sha1.New()
+	_, _ = h.Write([]byte(clientKey + wsGUID))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+func TestSecWebSocketAccept(t *testing.T) {
+	// RFC 6455 第 1.3 节的固定样例，用来验证推导链。
+	const key = "dGhlIHNhbXBsZSBub25jZQ=="
+	const want = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+	if got := acceptKey(key); got != want {
+		t.Fatalf("accept=%s, want %s", got, want)
+	}
+}
+
+func TestSSEFrameAndFlush(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("id: 7\nevent: tick\ndata: hello\n\n"))
+		w.(http.Flusher).Flush()
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type=%s", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "data: hello\n\n") {
+		t.Fatalf("未读到完整事件帧: %q", body)
+	}
+}
+```
+
+```bash
+go test -race -run 'TestSecWebSocketAccept|TestSSEFrameAndFlush' -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestSecWebSocketAccept\n--- PASS: TestSecWebSocketAccept (0.00s)\n=== RUN   TestSSEFrameAndFlush\n--- PASS: TestSSEFrameAndFlush (0.00s)\nPASS" note="Accept 值与规范样例一致，SSE 帧经 Flush 后客户端能读到完整事件" />
+
+逐字段解释：第一个 `--- PASS` 证明 `Sec-WebSocket-Accept` 完全由 key 加常量 GUID 推导，任何人都能独立复算，握手校验不是黑盒；第二个 `--- PASS` 证明 `Content-Type` 正确、且 `Flush()` 之后 `data: hello` 加空行确实抵达客户端——若去掉 `Flush()` 这一行，`httptest` 的短连接虽会在 Handler 返回时冲刷，但在真实长连接里客户端会一直挂住，这正是生产事故与本地测试的差别；`-race` 无告警说明没有共享状态竞争。把 `wsGUID` 改一个字符再跑，第一个用例立即失败，握手契约的可验证性一目了然。
+
+<Predict q="把 pingPeriod 设成大于 pongWait，最可能发生什么？" :options='["连接更省带宽","正常连接被读超时周期性误杀","心跳自动适配","广播变快"]' answer="1" output="Pong 还没来得及刷新读超时，连接就因超时被判定为死连接并断开" explain="读超时由 pongWait 决定，心跳周期必须小于它并留余量；否则心跳失去意义，正常连接反复重连。" />
+
+### 两条真实工程误解
+
+**误解一：升级成 WebSocket 之后连接还是 HTTP，可以继续用中间件设置响应头、补发 Set-Cookie 或再校验一次令牌。** 错。101 响应之后这条 TCP 连接只传帧，不再有请求-应答，也没有新的 HTTP 头；令牌过期只能靠应用层消息主动踢下线或直接发 Close 帧（与 /server/auth 的吊销话题衔接）。把所有鉴权逻辑压在 `Upgrade` 之前，是长连接安全的第一条边界。
+
+**误解二：并发写 conn 只是偶发乱序，库内部加把锁就能解决，gorilla 没加锁是偷懒。** 错。根因是「一条消息可跨多帧、帧之间靠 FIN 与 opcode 维持边界」，即使库给每次 `WriteMessage` 加了锁，也无法保证一条**完整消息**的原子性，两个消息的各帧仍可能交错。库明确不支持并发写，正解是每个连接一个写 goroutine，其余 goroutine 只往带缓冲的 `send` 通道投递；再配合 Hub 的非阻塞 `default` 分支，把慢消费者隔离在它自己的队列里。
+
+### 与后续阶段的呼应
+
+- 本讲的 Hub 只持有本进程连接，多实例广播要经 Redis Pub/Sub 或消息队列跨机扇出，这直接接到 /server/redis 与 /server/mq；连接归属与实例变化则交给 /microservice/discovery 的健康检查与摘除。
+- L7 的 /microservice/gateway 必须显式放行 `Upgrade` 并对长连接单独放宽超时，否则握手在网关层就被掐断；/microservice/resilience 的指数退避加抖动正是本讲「断线风暴」的通用解法。
+- L10 的 /projects/ai-gateway 用 SSE 做 LLM 流式转发，几乎原封不动复用本讲的 `text/event-stream`、`Flush` 与心跳注释；/projects/micro-seckill 的库存与行情推送则需要 WebSocket 的全双工与连接治理。
 
 上生产前还要补齐几件事。第一，**鉴权前置**：WebSocket 握手仍是一次 HTTP 请求，Bearer Token 或 Cookie 校验要在 `Upgrade` 之前完成；升级成功后连接长期存活，令牌过期需要有踢下线机制（见第 70 讲的吊销话题）。第二，**连接数治理**：单机连接数受 fd 与内存限制，要设全局上限并按用户限流，广播队列要有容量与丢弃策略。第三，**水平扩展**：Hub 只持有本进程的连接，多实例部署时广播必须经由 Redis Pub/Sub 或消息队列做跨机扇出，否则用户连到 A 机器就收不到 B 机器发出的消息。
 
@@ -320,6 +453,12 @@ func main() {
 <FlowTimeline title="客户端断线重连的正确姿势" :steps='[{"title":"检测断开","desc":"onclose 或心跳超时触发","tone":"blue"},{"title":"指数退避","desc":"延迟按 1s、2s、4s 增长并加随机抖动","tone":"purple"},{"title":"携带断点","desc":"用 Last-Event-ID 或自增序号请求补发","tone":"orange"},{"title":"重建连接","desc":"重新走握手与鉴权","tone":"green"},{"title":"补齐消息","desc":"回放断线期间的增量，避免跳变","tone":"gray"}]' direction="horizontal" />
 
 还有一个反模式值得点名：**在广播循环里同步写 conn**。它既违反单写约束，又让广播耗时等于最慢客户端的耗时。正确形态永远是「Hub 只往各连接的缓冲通道投递，写泵自己负责落笔」，把慢客户端的影响隔离在它自己的队列里。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-064-websocket`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-064-websocket)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

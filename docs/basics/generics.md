@@ -180,6 +180,108 @@ func main() {
 
 配合上一讲的取舍一起记：接口表达「你能做什么」（一组行为），泛型表达「你是什么形状」（一组类型）。两者不是替代关系，第 19 讲的「接受接口、返回结构体」依旧适用。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-022-generics`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-022-generics)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与编译期检查，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：约束为什么是类型集、类型推断从哪来
+
+Go 1.18 把接口扩展成既能描述方法集、也能描述类型集：规范「Interface types」规定约束接口的元素可以是方法、类型项或联合项 `~T | ~U`；编译器的类型检查器为类型参数算出这个集合，并要求函数体里对 `T` 的每一个操作都对集合中所有类型合法。把约束从 `Number` 放宽成 `any` 后 `go build` 报 `invalid operation: operator + not defined on t (variable of type T constrained by any)`，就是这条规则的直接体现——集合越大，能做的操作越少。`comparable` 是预声明约束，描述「`==` / `!=` 完全有定义」的类型集合，与 map 键的可比较要求是同一套判定。类型推断也不是魔法：编译器从实参类型（如 `[]int`）反推 `T = int`，若类型参数只出现在返回值、线索不足，则必须显式写 `Sum[int](...)`；`go/types` 在类型检查阶段完成这套 unification。`go doc slices.Clone` 给出的 `func Clone[S ~[]E, E any](s S) S` 正好示范两层参数：`S` 用 `~[]E` 约束「切片形状」，`E` 约束元素类型，连自定义切片类型也能满足。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：约束写成 `any` 最灵活，函数体里想做什么都行。** 约束恰恰是「允许的操作」的上界。
+
+<Compare title="约束越宽能做的越少" :panels='[{"label":"错误：any 下做加法","code":"func Sum[T any](s []T) T {\n    var t T\n    for _, v := range s { t += v }\n    return t\n}","note":"编译失败：对 any 做加法不合法"},{"label":"正确：联合约束限定类型","code":"func Sum[T Number](s []T) T { ... }","note":"~int | ~float64 保证加法可用"}]' />
+
+`any` 的类型集包含 string、切片、结构体等不支持 `+` 的类型，编译器必须拒绝；约束写得越宽，函数体里能做的事反而越少。
+
+**误解二：泛型能替代接口表达「行为差异」，凡是多态都该用泛型。** 行为差异要交给接口（或带方法的约束）。
+
+<Compare title="形状与行为别搞反" :panels='[{"label":"错误：让 any 保证方法","code":"func Notify[T any](x T) { x.Send() }","note":"编译失败：any 不保证有 Send 方法"},{"label":"正确：接口表达行为","code":"func Notify(s Sender) { s.Send() }\n// 或 func Notify[T Sender](x T)","note":"由接口或方法约束列出能力"}]' />
+
+泛型抽象的是「类型的形状」，接口抽象的是「一组行为」；把行为差异塞给泛型，方向就反了。另外方法不能声明自己的类型参数，只有函数与类型可以。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go build ./...
+go doc slices.Clone
+```
+
+```text
+# example.com/demo
+./main.go:6:3: invalid operation: operator + not defined on t (variable of type T constrained by any)
+func Clone[S ~[]E, E any](s S) S
+    Clone returns a copy of the slice. The elements are copied using assignment,
+    so this is a shallow clone.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `./main.go:6:3` | 报错位置：文件、行、列 |
+| `operator + not defined on t` | 函数体里对 T 的操作超出类型集保证 |
+| `variable of type T constrained by any` | 编译器点明约束是 any，集合含所有类型 |
+| `func Clone[S ~[]E, E any](s S) S` | 两个类型参数：S 约束切片形状，E 约束元素 |
+| `~[]E` | 底层类型为 []E 的自定义切片类型同样满足 |
+| `shallow clone` | 元素按赋值拷贝，引用型元素仍共享 |
+
+下面这段把联合约束、自定义底层类型与标准库泛型函数跑成确定输出：
+
+```go
+package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+type Number interface{ ~int | ~float64 }
+
+func Sum[T Number](s []T) T {
+	var total T
+	for _, v := range s {
+		total += v
+	}
+	return total
+}
+
+func main() {
+	fmt.Println("Sum int =", Sum([]int{1, 2, 3}))
+	fmt.Println("Sum float =", Sum([]float64{1.5, 2.5}))
+
+	type Score int
+	fmt.Println("Sum 自定义 =", Sum([]Score{1, 2}))
+
+	src := []string{"a", "b"}
+	dst := slices.Clone(src)
+	dst[0] = "x"
+	fmt.Println("Clone 后 =", src, dst)
+}
+```
+
+<OutputBox title="运行结果" output="Sum int = 6\nSum float = 4\nSum 自定义 = 3\nClone 后 = [a b] [x b]" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.18 | 泛型、类型集、`any`、`comparable` 引入 | `go` 指令低于 1.18 不可用 |
+| Go 1.20 | `comparable` 放宽，普通接口值可满足 | 之前只有严格可比较类型满足 |
+| Go 1.21 | 内建 `min` / `max` / `clear`，`slices` 与 `maps` 包进标准库 | 通用算法优先复用标准库 |
+| Go 1.21 | 类型推断改进 | 复杂调用可少写类型实参 |
+| 全版本 | 方法不能声明自己的类型参数 | 只有函数与类型可声明类型参数 |
+
+适用边界还有一条：泛型的代价是更长的编译时间、更大的二进制体积和更绕的错误信息；只有一两个调用方的辅助函数直接写具体类型更清楚，业务层出现「泛型 Repository 基类」往往是抽象过头的信号。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 会讲接口的类型集与 `eface`，[第 36 讲](/core/compiler) 展开字典与 GCShape 模板、内联预算，把「泛型为什么有编译与体积代价」落到编译产物。工程上，[第 54 讲](/engineering/bench-fuzz) 用基准测试量化泛型与接口的差别。实战里，[第 108 讲](/projects/data-sql-tool) 要在「一套 AST 适配多种数据源」处判断用接口还是泛型，[第 118 讲](/projects/ai-gateway) 的多供应商适配也是同一类选择题。
+
 ## 动手练一练
 
 <Exercise title="写一个泛型 Contains" task="实现 Contains：对任意可比较类型的切片，判断 target 是否在其中，返回 bool。要求不使用类型断言，也不使用反射。" solution="func Contains[T comparable](s []T, target T) bool {\n    for _, v := range s {\n        if v == target {\n            return true\n        }\n    }\n    return false\n}" :hints='["约束选 comparable，这样相等比较才被允许。","遍历切片逐个比较，命中就提前返回。"]' explain="comparable 保证 == 合法；循环里一旦命中立刻返回 true，走完仍未命中则返回 false。调用时编译器自动推断 T。" />

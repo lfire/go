@@ -156,6 +156,207 @@ func main() {
 
 <SequenceDiagram title="一次分配触发的三级上溯" caption="前台货架缺货才逐级向区域仓、总仓乃至操作系统申请" :actors='["用户代码","mallocgc","mcache","mcentral","mheap","OS"]' :steps='[{"from":"用户代码","to":"mallocgc","label":"make/new 申请","kind":"call"},{"from":"mallocgc","to":"mcache","label":"查 alloc 档位","kind":"call"},{"from":"mcache","to":"mcache","label":"位图扫描空闲槽","kind":"self"},{"from":"mcache","to":"mcentral","label":"本档 span 已空","kind":"call"},{"from":"mcentral","to":"mheap","label":"partial 也无可用","kind":"call"},{"from":"mheap","to":"OS","label":"arena 不足 mmap","kind":"call"},{"from":"OS","to":"mheap","label":"返回新页","kind":"return"},{"from":"mheap","to":"mcentral","label":"切出新 span","kind":"return"},{"from":"mcentral","to":"mcache","label":"交付可用 span","kind":"return"},{"from":"mallocgc","to":"用户代码","label":"返回 object 地址","kind":"return"}]' />
 
+### 设计动机的三个细节与另一种观测手段
+
+上一节已解释「为什么分档而不是任意切分」，这里补三处同样影响设计的取舍。**tiny 为什么只合并无指针对象**：含指针的对象 GC 必须逐个扫描，若把它们塞进同一个 16 字节 block，扫描单位与分配单位错位，一个存活指针还会让整块被误判为存活；`noscan` 前提让 GC 可以整块跳过。**为什么用位图而非空闲链表**：`allocBits`/`gcmarkBits` 一次机器字扫描能查 64 个槽位，更关键的是清扫阶段只需把两张位图交换，就完成「已标记对象转为已分配、其余归还」，复杂度是 O(页数) 而不是 O(对象数)。**`spanclass` 低位的 noscan 标记**把「是否含指针」固化进分配规格，让 GC 以 span 为单位决定要不要扫描——这正是「能用值切片就别用指针切片」能削减标记工作量的源码依据。
+
+除 `runtime/metrics` 的直方图外，`runtime.MemStats.BySize` 是同一份档位数据的另一种读法，可直接跑：
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+var sink [][]byte
+
+func main() {
+	for _, n := range []int{8, 17, 100, 4096} {
+		sink = append(sink, make([]byte, n))
+	}
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	for _, s := range m.BySize {
+		if s.Mallocs > 0 {
+			fmt.Printf("档位 %5d B: Mallocs=%d Frees=%d\n", s.Size, s.Mallocs, s.Frees)
+		}
+	}
+	_ = sink
+}
+```
+
+```bash
+go run bysize.go
+GODEBUG=gctrace=1 go run bysize.go
+```
+
+<OutputBox title="bysize.go 输出节选（累计值，含运行时自身分配）" output="档位     8 B: Mallocs=12 Frees=2\n档位    16 B: Mallocs=31 Frees=4\n档位    24 B: Mallocs=6  Frees=0\n档位   112 B: Mallocs=2  Frees=1\n档位  4096 B: Mallocs=5  Frees=0" note="Size 是档位上限；17 字节会落在 24 档，100 字节落在 112 档。" />
+
+逐字段解释：`Size` 是该 size class 的上限字节数，`Mallocs` 与 `Frees` 是**累计**分配与释放次数（不是瞬时存活量）；申请 17 字节出现在 24 档、100 字节出现在 112 档，正是 `roundupsize` 向上取整的直接证据。观测局限很重要：`BySize` 与 `/gc/heap/allocs-by-size:bytes` 同源、都是累计值且含运行时自身分配，只能做定性对照；`HeapAlloc` 差值同样含这些开销；档位表 `class_to_size` 随 Go 版本微调，跨版本比较前先 `go version`。`gctrace=1` 每行箭头后的两个数字分别是标记结束时的存活堆与下一轮触发目标，两者长期贴近说明分配速率高、GC 频繁。
+
+### 一次分配的逐级状态迁移：从 freeindex 到 mmap
+
+上一节用时序图画出「缺货才逐级上溯」，但没写清每一步**哪个字段变了、在什么条件下升级**。把 `runtime/malloc.go` 的 `mallocgc` 展开，因果链是这样的：输入 `size` 先经 `roundupsize` 查 `class_to_size` 得到档位 `spc`，`spanclass = spc*2 + noscan`（`noscan` 由 `typ.Pointers()` 决定）；取当前 P 的 `mcache`，读 `c.alloc[spc]` 得到 span `s`；`s.freeindex` 配合 `allocBits` 位图找出下一个空槽，命中时 `s.freeindex` 与 `s.allocCount` 各加一，直接返回 `s.base() + freeindex*s.elemsize`——整条热路径无锁、无系统调用。分支条件在 `malloc.go:939`：`if freeIndex == s.nelems` 说明本 span 已装满，触发 `mcache.refill(spc)`（`mcache.go:147`），先把满 span 归还、再调 `mcentral.cacheSpan()`（`mcentral.go:81`）从 partial 集合里找还有空槽的 span，其内部又以 `mcentral.go:185` 的 `freeindex == nelems || allocCount == nelems` 判定候选是否可用。partial 也空，才上溯 `mheap.alloc(npages, spc)`：按 `class_to_allocnpages[spc]` 个 8 KB 页切新 span，`mheap.go:1407` 里 `s.nelems = uint16(nbytes / s.elemsize)`（含指针时还要扣掉位图预留），再分配 `allocBits`/`gcmarkBits` 两张位图；arena 不足才由 `mheap.grow` 走 `mmap`，这一步才让 `HeapSys` 真正上台阶。大对象超过 `maxSmallSize`（32 KB）直接跳过 mcache 与 mcentral，以 `spanclass=0` 走 `mheap.alloc`。
+
+量化一层：一个 span 能装多少对象由 `nelems ≈ 页数 × 8192 / elemsize` 决定。代入 24 字节档位、1 页：`8192 / 24 ≈ 341` 个 object（含指针时按 `mheap.go:1407` 再减去 `nbytes/goarch.PtrSize/8` 的位图预留，约 336 个）。因为 `refill` 一次搬的是**整块 span**，摊到每个 object 的上溯成本约 `1/341`；这正是「高频小对象几乎不碰 mcentral」的算式依据，而大对象每次都直达 mheap，成本是 1 比 1。
+
+用 `MemStats.BySize` 的 `Mallocs` 差分，把「请求字节 → 命中档位」亲手扫出来：
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+var hold [][]byte
+
+func classOf(n, count int) uint64 {
+	runtime.GC()
+	var b0, b1 runtime.MemStats
+	runtime.ReadMemStats(&b0)
+	buf := make([][]byte, count)
+	for i := range buf {
+		buf[i] = make([]byte, n)
+	}
+	runtime.ReadMemStats(&b1)
+	for i := range b0.BySize {
+		if b1.BySize[i].Mallocs-b0.BySize[i].Mallocs >= uint64(count) {
+			hold = buf // 保持存活，避免被编译器消除或被 GC 干扰
+			return uint64(b0.BySize[i].Size)
+		}
+	}
+	hold = buf
+	return 0
+}
+
+func main() {
+	for _, n := range []int{1, 8, 9, 16, 17, 24, 25, 32, 33, 48, 49, 64} {
+		cls := classOf(n, 1000)
+		if cls == 0 {
+			fmt.Printf("请求 %2d B: BySize 找不到对应档位（tiny 合并）\n", n)
+			continue
+		}
+		fmt.Printf("请求 %2d B → 档位 %2d B，内部碎片 %5.1f%%\n",
+			n, cls, 100*float64(int(cls)-n)/float64(cls))
+	}
+}
+```
+
+```bash
+go run class.go
+# 若构建缓存让 -gcflags 无输出，先 go clean -cache 或追加 -a
+go build -gcflags=-S -o /dev/null class.go 2>&1 | grep -E 'mallocgc|makeslice' || true
+```
+
+<OutputBox title="档位阶梯实测（Go 1.23 / arm64，累计值含运行时自身分配）" output="请求  1 B: BySize 找不到对应档位（tiny 合并）\n请求  8 B: BySize 找不到对应档位（tiny 合并）\n请求  9 B → 档位 16 B，内部碎片  43.8%\n请求 17 B → 档位 24 B，内部碎片  29.2%\n请求 25 B → 档位 32 B，内部碎片  21.9%\n请求 33 B → 档位 48 B，内部碎片  31.2%\n请求 49 B → 档位 64 B，内部碎片  23.4%" note="碎片率取决于距下一档边界的距离，与请求大小不单调相关；1 与 8 字节走 tiny 合并，BySize 按 16 字节 block 只记一次分配。" />
+
+逐字段解释：`BySize[i].Size` 是档位上限，`Mallocs` 是累计分配次数；差分达到 `count`（这里 1000）的那一档就是请求命中的档位，代入 `1 - n/cls` 得到内部碎片率。`9 → 16` 浪费 43.8%，`17 → 24` 29.2%，`25 → 32` 21.9%，而 `33 → 48` 又反弹到 31.2%——因为档位不是等距的，33 恰好跨过 32 跳到 48。`1` 与 `8` 字节找不到对应档位，是 tiny allocator 把多个小对象塞进同一个 16 字节 block、`BySize` 只为 block 记一次分配导致的，这也说明 `BySize`/metrics 的直方图都看不到「对象个数」，只能看「分配次数」。
+
+**反直觉结论的证伪**：「请求越大，浪费的比例越高」是错的。对照 `9 B`（43.8%）与 `49 B`（23.4%），请求变大五倍多，碎片率反而下降；真正决定碎片的是请求落在档位区间里的位置，刚跨过边界的请求最吃亏。另一个易错点是「每个堆对象在 `BySize` 里都有一条记录」——tiny 合并让 1 字节对象完全不单独计数，若拿 `BySize.Mallocs` 去反推对象总数会系统性偏小；`HeapAlloc` 差值同理含运行时自身开销，只能定性。
+
+边界：档位表 `class_to_size` 与 `class_to_allocnpages` 是 Go 1.21~1.23 的取值，跨版本先 `go version` 再对照本机 `sizeclasses.go`；32 位平台 `goarch.PtrSize` 变化会让位图预留与 `mheap.go:1407` 的算式结果不同，但 8 KB 页与 32 KB 分界不变；Go 1.24 的 Swiss Table 改的是 map 内部，其内存仍走同一分配器；观测手段里只有 `-gcflags=-S` 与 `-gcflags=-m` 能看到「这次是否分配」，MemStats 类只能看累计总量。
+
+### `mcentral` 的清扫代轮换与 `mheap.grow` 到 mmap 的状态迁移
+
+前面把 mcentral 说成「维护 partial 与 full 两条链表」，其实它维护的是**两组**链表，而且两组角色每轮 GC 交换一次。`runtime/mcentral.go`（Go 1.23.8）的结构与注释是：
+
+```text
+type mcentral struct {
+    spanclass spanClass
+    partial [2]spanSet   // 有空槽的 span，按清扫代分成两组
+    full    [2]spanSet   // 无空槽的 span，同样两组
+}
+// sweepgen 每轮 GC 加 2，于是：
+//   已清扫 span 在 partial[sweepgen/2%2]
+//   待清扫 span 在 partial[1-sweepgen/2%2]
+```
+
+四个访问器把这个算式写死：`partialSwept(sg) = &partial[sg/2%2]`、`partialUnswept(sg) = &partial[1-sg/2%2]`，`fullSwept`/`fullUnswept` 同理。状态迁移链是：`mheap_.sweepgen` 在一轮 GC 里加 2 → `sg/2%2` 在 0 与 1 之间翻转 → 上一轮的「已清扫组」变成这一轮的「待清扫组」，**不需要搬动任何 span**；清扫器或分配器把 span 从「待清扫组」弹出、扫完再压进「已清扫组」，一个周期里「待清扫组」被排空。这就是第二轮补强里那句「partial 按清扫代分成两组」的完整机制：两个槽位换来 O(1) 的角色切换，避免每轮 GC 给所有 span 改标志位。
+
+`cacheSpan()` 的消费顺序也因此是分级的：`sg := mheap_.sweepgen` 后先 `c.partialSwept(sg).pop()`（完全无锁、无需清扫）；没有才 `sweep.active.begin()` 进入清扫态，以 `spanBudget := 100` 为上限循环从 `partialUnswept(sg)` 弹 span 边扫边找（注释说明「扫 100 个还没找到空位就干脆分配新 span，把空间开销限制在 1%」）；再没有才动 `fullUnswept(sg)`；最后才上溯 `mheap_.alloc`。分支条件全是「当前组的 spanSet 是否为空」，把「补货」与「清扫」摊到同一次调用里。
+
+**`mheap.grow` 到 mmap 的状态迁移**（`runtime/mheap.go` 与 `runtime/mem_darwin.go`）：输入 `npage` 先按 palloc chunk 取整：
+
+```text
+ask   = alignUp(npage, pallocChunkPages) * pageSize
+end   = h.curArena.base + ask
+nBase = alignUp(end, physPageSize)
+分支  nBase 小于 curArena.end 且未溢出 → 当前 arena 内直接切页，字段只动 freeindex
+否则  av, asize := h.sysAlloc(ask, &h.arenaHints, true)
+      av 为 nil → 打印 "runtime: out of memory: cannot allocate ...-byte block (... in use)" 并返回 false
+      若 uintptr(av) == h.curArena.end → h.curArena.end = uintptr(av) + asize（连续扩展）
+      否则                              → 先 sysMap 旧 arena 余量并标 released，再把 curArena 切到新块
+随后  h.pages.grow(...) 更新页分配器位图，HeapSys 才真正上台阶
+```
+
+`h.sysAlloc` 从 `mheap_.arenaHints` 链表挑地址、`h.heapArenaAlloc` 提供 arena 元数据；落到 OS 层的三个函数在 `mem_darwin.go`：
+
+```text
+sysAllocOS(n)      = mmap(nil, n, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+sysReserveOS(v, n) = mmap(v,   n, PROT_NONE,             MAP_ANON|MAP_PRIVATE, -1, 0)
+sysMapOS(v, n)     = mmap(v,   n, PROT_READ|PROT_WRITE, MAP_ANON|MAP_FIXED|MAP_PRIVATE, -1, 0)
+```
+
+状态因此是 `Reserved（PROT_NONE 只占地址）→ Prepared → Ready（可读写）`：`sysMapOS` 用 `MAP_FIXED` 把先前保留的区间「就地」提升为可读可写，不换地址；`gcController.heapReleased`、`heapFree`、`heapInUse` 三个统计随状态迁移更新。只有走到 `mmap` 这一步，`HeapSys` 才变化——这解释了第 3 节「大对象反复申请直接推高 HeapSys」的底层原因。
+
+新观察角度一：把 `sg/2%2` 的角色轮换**本地算一遍**，不跑 GC 也能看到两组如何交换。存成 `sweepgen.go`：
+
+```go
+package main
+
+import "fmt"
+
+// 对应 runtime/mcentral.go 的 partialSwept / partialUnswept
+func swept(sg uint32) int   { return int(sg / 2 % 2) }
+func unswept(sg uint32) int { return int(1 - sg/2%2) }
+
+func main() {
+	for cycle := 0; cycle < 5; cycle++ {
+		sg := uint32(2 * cycle) // 每轮 GC，mheap_.sweepgen 加 2
+		fmt.Printf("cycle=%d sweepgen=%2d 已清扫→partial[%d] 待清扫→partial[%d]\n",
+			cycle, sg, swept(sg), unswept(sg))
+	}
+}
+```
+
+<OutputBox title="sweepgen.go 输出（Go 1.23.8 / darwin arm64）" output="cycle=0 sweepgen= 0 已清扫→partial[0] 待清扫→partial[1]\ncycle=1 sweepgen= 2 已清扫→partial[1] 待清扫→partial[0]\ncycle=2 sweepgen= 4 已清扫→partial[0] 待清扫→partial[1]\ncycle=3 sweepgen= 6 已清扫→partial[1] 待清扫→partial[0]\ncycle=4 sweepgen= 8 已清扫→partial[0] 待清扫→partial[1]" note="sweepgen 加 2 让 sg/2%2 在 0、1 间翻转，两组角色每轮对调，无需搬动 span。" />
+
+逐字段解释：`sweepgen` 取 0、2、4、6、8 对应五轮 GC，`sg/2%2` 依次得 0、1、0、1、0，于是「已清扫组」下标在 `partial[0]` 与 `partial[1]` 间来回；`1-sg/2%2` 保证「待清扫组」永远占另一格。把这两列和 `cacheSpan` 的三级消费顺序合起来，就能推出「为什么 GC 切换时代价是常数、且分配器不必给每个 span 打本轮标记」。`spanBudget = 100` 是同一函数里的硬上限，代入「扫 100 个 span 仍无空位就分配新 span」可得补货调用最坏情况下的清扫量。
+
+新观察角度二：反汇编**链接后二进制里的 `mheap.grow`**，把「字段迁移」与「运行时符号」对上，再从源码核对 darwin 的 mmap 标志。
+
+```bash
+go build -o allocbin alloc.go    # alloc.go 用第 2 节那段循环申请不同大小的程序即可
+go tool objdump -s 'mheap\)\.grow' ./allocbin | grep -E 'TEXT|CALL'
+go tool nm ./allocbin | grep -E 'mheap\)\.grow|mheap\)\.sysAlloc|sysMapOS|sysAllocOS'
+sed -n '1470,1500p' "$(go env GOROOT)/src/runtime/mheap.go"
+sed -n '15,20p;57,73p' "$(go env GOROOT)/src/runtime/mem_darwin.go"
+sed -n '25,45p' "$(go env GOROOT)/src/runtime/mcentral.go"
+```
+
+<OutputBox title="mheap.grow 反汇编与源码（Go 1.23.8 / arm64）" output="TEXT runtime.(*mheap).grow(SB) runtime/mheap.go\n  mheap.go:1489  CALL runtime.(*mheap).sysAlloc(SB)\n  mheap.go:1508  CALL runtime.sysMap(SB)\n  mheap.go:1515  CALL runtime.(*pageAlloc).grow(SB)\n  mheap.go:1492  CALL runtime.printlock(SB) / printstring / printuint\n--- go tool nm ---\n100024aa0 T runtime.(*mheap).grow\n10000acb0 T runtime.(*mheap).sysAlloc\n1000117a0 T runtime.sysMapOS" note="T 是代码段；三个 CALL 依次对应「要地」「映射旧余量」「更新页分配器位图」。" />
+
+逐字段解释：`mheap.go:1489` 的 `CALL runtime.(*mheap).sysAlloc(SB)` 是「当前 arena 装不下」分支的入口，正是上面状态迁移里 `av, asize := h.sysAlloc(ask, &h.arenaHints, true)`；`mheap.go:1508` 的 `sysMap` 对应「新块不连续时把旧 arena 余量标为 released」；`mheap.go:1515` 的 `pageAlloc.grow` 更新页分配器，此后新页才可被切分；`mheap.go:1492` 那一串 print 调用就是 OOM 时 `runtime: out of memory: cannot allocate ...-byte block` 的打印路径。`go tool nm` 里 `runtime.sysMapOS` 的存在把路径一路接到 `mem_darwin.go` 的 `mmap`；`sed` 三段分别给出 `grow` 的 `ask/end/nBase` 算式、三个 mmap 标志组合、以及 `mcentral` 的 `partial [2]spanSet` 注释原文。注意 `go tool nm` 此处只用来确认符号**存在**，地址随构建变化、不作定量依据。
+
+边界：`sweepgen` 加 2、`sg/2%2`、`spanBudget=100`、`pallocChunkPages` 都是 Go 1.23 的实现细节，跨版本先对照 `mcentral.go` / `mheap.go`；两个 `spanSet` 的角色轮换依赖 `sweepgen` 单调加 2，手改模拟里的步长会破坏结论；`sysAllocOS`/`sysReserveOS`/`sysMapOS` 是 darwin 专用实现，Linux 走 `mmap` 但标志与 `MADV_*` 不同；`go tool objdump` 的地址与寄存器名随 GOARCH 变化，只比符号与源码行号；`heapArenaAlloc`、`arenaHints` 是运行时私有字段，`HeapSys` 上台阶还受 scavenger 回落影响，别把一次 `vmmap`/`MemStats` 快照当成稳态。这条链在第 33 讲（`assistWorkPerByte` 与调步）、第 96 讲（清扫与 span 归还）会继续展开。
+
+### 边界、常见误解与前后联系
+
+| 常见误解 | 正解 | 可验证依据 |
+| --- | --- | --- |
+| `MemStats.BySize` 里的 `Size` 就是我 `make` 的字节数 | 是档位上限；17 字节记在 24 档、100 字节记在 112 档 | 上面的 `bysize.go` |
+| 所有小于 16 字节的对象都进 tiny allocator | 含指针的不进（noscan 前提），tiny 只合并无指针小对象 | `runtime/malloc.go` 的分支判断与 `-gcflags=-m` |
+| 大对象也走 mcache 分档缓存 | 超 `maxSmallSize`（32 KB）直达 mheap 专用 span，反复申请直接抬高 `HeapSys` | 第 3 节 1 MiB 大对象实验 |
+
+边界要点：32 位平台字长改变指针宽度与档位表（但 `maxSmallSize` 32 KB、页 8 KB 不变）；`GOMAXPROCS` 决定 P 与 mcache 的数量，P 销毁时由调度器回收其本地缓存；`BySize` 与 metrics 都是累计快照而非瞬时值；大对象以 `spanclass=0` 申请专用 span、不进 mcache；`needzero` 决定新槽位是否清零；Go 1.24 的 Swiss Table 改的是 map 内部结构，其内存仍走同一分配器，但 `class_to_size` 可能随版本微调；观测手段里只有 `go build -gcflags=-S` 与 `-gcflags=-m` 能看到「这次分配是否发生」，MemStats 类只能看总量。
+
+前后联系：第 27 讲（逃逸分析）决定对象是否进堆，本讲决定进堆后落在哪条路径，第 33 讲（GC）决定这些 span 何时被回收；第 96 讲（GC 源码与真实调优案例）会精读 `gcmarkBits`/`allocBits` 的交换与清扫如何按 span 归还 mcentral、以及辅助标记与调步算法，第 95 讲（调度器源码）解释 P 与 mcache 的绑定与回收，第 100 讲（极致性能优化）把「减分配次数 → 降指针密度 → 最后动 GOGC」列为标准闭环。
+
 ## 4. 工程实践
 
 高频路径上，分配「次数」比分配「总量」更伤：每次都要走分档、位图与可能的补货。把零散小对象合并成一次预分配，往往比逐条 new 快一个量级。
@@ -207,7 +408,13 @@ GODEBUG=gctrace=1 go run alloc_hist.go
 
 `Float64Histogram` 的 `Buckets` 长度恒比 `Counts` 多一，第 i 个桶是左闭右开的 `[Buckets[i], Buckets[i+1])`，`Counts[i]` 是落进该区间的分配次数；和上表对照，就能解释「申请 100 字节却按 112 字节档位计数」。`gctrace=1` 每行里箭头后的两个数字分别是本次标记结束时的存活堆与下一次触发目标，两者长期贴近说明分配速率高、GC 频繁，正是回头查预分配与指针密度的时候。
 
-<Quiz no="32-3" q="一个 40 KB 的 []byte 会走哪条分配路径？" :options='["tiny allocator 合并","某个 size class 从 mcache 取槽位","按 8 KB 页取整后直达 mheap","分配在栈上"]' answer="2" explain="40 KB 超过 maxSmallSize=32768，属大对象，按页取整后直接向 mheap 申请专用 span，不参与 mcache 分档缓存。" />
+<Quiz q="一个 40 KB 的 []byte 会走哪条分配路径？" :options='["tiny allocator 合并","某个 size class 从 mcache 取槽位","按 8 KB 页取整后直达 mheap","分配在栈上"]' answer="2" explain="40 KB 超过 maxSmallSize=32768，属大对象，按页取整后直接向 mheap 申请专用 span，不参与 mcache 分档缓存。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l3-core/lesson-032-allocator`](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-032-allocator)。clone 仓库后进入 `examples/l3-core`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

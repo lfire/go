@@ -215,6 +215,112 @@ func main() {
 
 <Compare title="运行时反射与编译前生成" :panels='[{"label":"运行时反射：灵活","code":"f := reflect.ValueOf(&u).Elem().FieldByName(name)\nif f.CanSet() {\n    f.SetString(val)\n}","note":"任意结构体都能用，但字段名写错只在运行时暴露，且每次调用都有开销。"},{"label":"代码生成：专用","code":"// 生成器为每个字段产出普通赋值\nu.Name = val","note":"编译期检查、速度最快，代价是每种结构体都要生成并维护。"}]' />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-023-reflect`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-023-reflect)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到标准库定义与运行时结构，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：可设置性与标签的规范级来源
+
+反射三定律的底层是接口的「两个字」：`reflect.TypeOf(i)` 与 `reflect.ValueOf(i)` 都接收 `any`，运行时把接口里的类型字包成 `reflect.Type`、数据字包成 `reflect.Value`。`go doc reflect.Value.CanSet` 写得很直白：「A Value can be changed only if it is addressable and was not obtained by the use of unexported struct fields. If CanSet returns false, calling Value.Set or any type-specific setter will panic」——这就是可设置性三个条件的来源：`ValueOf(x)` 拿到的是接口里的数据副本，不可寻址；`ValueOf(&x).Elem()`（`go doc reflect.Value.Elem`：返回指针指向的值）才拿到可寻址的原值；小写字段即使可寻址也被 `PkgPath` 标记挡住。标签则是 `reflect.StructField.Tag`，`go doc reflect.StructTag` 说明它是「key:"value" pairs」的字符串，编译期只存不校验，所以键名拼错不会有编译错误。`go generate` 走的是另一条路：`//go:generate` 指令由 `cmd/go` 扫描执行，产物是普通 `.go` 源码，类型检查与反射无关——这正是「编译期就能确定类型就别用反射」的依据。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`reflect.ValueOf(x)` 拿到的是原值，直接 `SetInt` 就能改 x。** `ValueOf` 的实参是 `any`，值传进去时已被拷贝一份。
+
+<Compare title="传值还是传指针" :panels='[{"label":"错误：对副本调用 Set","code":"v := reflect.ValueOf(x)\nv.SetInt(42)","note":"CanSet 为 false，运行时 panic"},{"label":"正确：指针加 Elem","code":"p := reflect.ValueOf(&x).Elem()\np.SetInt(42)","note":"拿到可寻址正本，改写生效"}]' />
+
+`go doc reflect.Value.CanSet` 明确只有 addressable 且非未导出字段的 Value 才能改；`Elem` 要求的 Kind 是 Pointer 或 Interface，对别的 Kind 调用会 panic。
+
+**误解二：只要传了指针，结构体里所有字段都能用反射写。** 反射同样遵守包可见性。
+
+<Compare title="可导出与未导出字段" :panels='[{"label":"错误：写小写字段","code":"p.FieldByName(\"name\").SetString(\"x\")","note":"未导出字段 CanSet 为 false，Set 会 panic"},{"label":"正确：先判 CanSet","code":"if f := p.FieldByName(\"Name\"); f.CanSet() {\n    f.SetString(\"x\")\n}","note":"字段可导出且先检查，才安全"}]' />
+
+`StructField.PkgPath` 非空即未导出，运行时给它打上只读标记；框架里 `if !f.CanSet() { continue }` 是必须，不是多余的防御。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc reflect.Value.CanSet
+go doc reflect.StructTag
+```
+
+```text
+func (v Value) CanSet() bool
+    CanSet reports whether the value of v can be changed. A Value can be
+    changed only if it is addressable and was not obtained by the use of
+    unexported struct fields. If CanSet returns false, calling Value.Set or any
+    type-specific setter (e.g., Value.SetBool, Value.SetInt) will panic.
+type StructTag string
+    By convention, tag strings are a concatenation of optionally space-separated
+    key:"value" pairs.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `func (v Value) CanSet() bool` | 写操作前的必查项 |
+| `addressable` | 必须可寻址，对应 `ValueOf(&x).Elem()` |
+| `not obtained by ... unexported struct fields` | 未导出字段一律不可写 |
+| `will panic` | 对 CanSet 为假的 Value 调 Set 不是静默失败 |
+| `type StructTag string` | 标签本质是字符串，编译器不校验语义 |
+| `key:"value" pairs` | 约定格式；`Tag.Get("json")` 只按 key 查 |
+
+下面这段把可设置性的三个条件与标签读取跑成确定输出：
+
+```go
+package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+type Config struct {
+	Port int `json:"port"`
+	name string
+}
+
+func main() {
+	c := Config{Port: 8080, name: "local"}
+
+	v := reflect.ValueOf(c)
+	fmt.Println("ValueOf(c).CanSet =", v.CanSet())
+
+	p := reflect.ValueOf(&c).Elem()
+	fmt.Println("Elem().CanSet =", p.CanSet())
+	fPort := p.FieldByName("Port")
+	fName := p.FieldByName("name")
+	fmt.Println("导出字段 CanSet =", fPort.CanSet(), "未导出字段 CanSet =", fName.CanSet())
+	if fPort.CanSet() {
+		fPort.SetInt(9090)
+	}
+	fmt.Println("改后 Port =", c.Port)
+
+	t := reflect.TypeOf(c)
+	fmt.Println("json 标签 =", t.Field(0).Tag.Get("json"), "拼错返回空串 =", t.Field(0).Tag.Get("jso") == "")
+}
+```
+
+<OutputBox title="运行结果" output="ValueOf(c).CanSet = false\nElem().CanSet = true\n导出字段 CanSet = true 未导出字段 CanSet = false\n改后 Port = 9090\njson 标签 = port 拼错返回空串 = true" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.18 | `any` 成为 `interface{}` 别名 | 反射入口 `TypeOf(i any)` 的写法统一 |
+| Go 1.20 | `reflect.Value` 增加 `Equal` 与 `Comparable` | 判断动态值能否比较、是否相等 |
+| Go 1.22 | `go generate` 行为不变，生成物仍须提交版本库 | 与反射无关，属编译前代码生成 |
+| 全版本 | 三定律、CanSet 三条件、标签是字符串 | 结论与版本无关 |
+
+适用边界还有两条：反射绕开编译期类型检查，字段改名、类型改了都不会在构建时报错，只会在运行时炸开；反射错误要在边界处转成普通 `error` 返回，别把 panic 漏给调用方。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 会展开 `eface` / `iface` 与反射入口的关系，[第 37 讲](/core/unsafe-cgo) 讲 `unsafe` 与反射各自的边界。工程上，[第 53 讲](/engineering/mock-test) 用 gomock 生成替身而非运行时猜类型，[第 60 讲](/engineering/cicd) 把 `go generate` 接进 CI 检查生成物有无 diff。实战里，[第 104 讲](/projects/cli-codegen) 用 AST 加模板把重复代码提前生成出来，[第 117 讲](/projects/cloud-operator) 的 CRD scheme 注册则靠反射把类型信息登记进运行时。
+
 ## 动手练一练
 
 <Exercise title="读出所有字段的 json 标签" task="实现 Tags：接收任意结构体值，按字段顺序返回每个字段的 json 标签名，没有标签的字段返回空串。想想该用 TypeOf 还是 ValueOf、该调哪个方法。" solution="func Tags(x any) []string {\n    t := reflect.TypeOf(x)\n    out := make([]string, 0, t.NumField())\n    for i := 0; i != t.NumField(); i++ {\n        out = append(out, t.Field(i).Tag.Get(`json`))\n    }\n    return out\n}" :hints='["标签属于类型信息，所以入口是 reflect.TypeOf。","用 NumField 与 Field 遍历，再调 Tag.Get。"]' explain="只读取不修改，不需要指针与 Elem；Type 上的 StructField 带着 Tag，Field(i).Tag.Get 就能取到反引号里的内容。" />

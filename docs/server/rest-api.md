@@ -300,10 +300,6 @@ func main() {
 }
 ```
 
-嗯，最后那行 `_ = errors.New("reserved")` 是为了用上 import，但很别扭。我去掉 errors import 和那行。让我修正：不需要 errors。我会在写入时去掉。
-
-实际上我 Write 的内容要正确。让我在最终内容里去掉 errors import 和那行 dummy。
-
 ## 3. 深入一步
 
 幂等性的工程解法是**幂等键**：客户端为一次业务操作生成唯一 ID，放在 `Idempotency-Key` 请求头；服务端在处理前查重，命中就直接返回上次的结果。注意「查重 + 写入」必须原子，通常用数据库唯一索引或 Redis SETNX，否则并发下仍会重复。这与后面消息队列讲的幂等消费是同一个原理。
@@ -429,7 +425,138 @@ func writeList(w http.ResponseWriter, v any) {
 
 生产里更常见的做法是用 `swaggo/swag` 从 Handler 上的注解生成 `docs/`，或用「schema 优先」先写 OpenAPI 再生成服务端骨架。无论哪种，目标都是**契约只有一处真相**，而不是靠人肉维护两份。
 
+### 协议与契约：幂等、状态码与版本从哪推导出来
+
+**幂等性不是风格，是对「三态超时」的回应。** 一次请求超时后，客户端只知道三种可能：成功、失败、**未知**——响应可能在回程丢了，服务端其实已经执行。RFC 9110 第 9.2.2 节对幂等的定义是「同一请求执行一次与执行多次，服务端预期状态相同」，注意它约束的是**服务端状态**，不是响应字节：DELETE 第一次删成功返回 204，第二次资源已不存在返回 404，状态一致，因此仍然幂等。PUT 同理，整体替换 N 次结果由最后一次请求体唯一决定。POST 是「从属于目标资源的新建」，重发就产生第二个从属资源；PATCH 若含 `balance += 1` 这类自增语义，重发会叠加。承认「重试必然发生」（超时、SDK 自动重发、消息重投），再为它设计，比祈祷前端别重复点可靠得多。
+
+**幂等键的难点全在原子性。** 「查重加写入」若写成两条独立语句，两个并发的相同键会同时通过查重、各自写入，幂等形同虚设。推导：设两个请求 A、B 同时到达，都执行 `SELECT` 未命中，再各自 `INSERT`，中间没有任何互斥，结果就是两份订单。所以要么把唯一约束交给数据库（`INSERT ... ON DUPLICATE KEY UPDATE` 或去重表唯一索引），要么用 Redis `SETNX`，且**判重与业务写入必须在同一事务**里，否则仍有「业务写成功、去重记录没写上」的窗口。回放时还要连状态码与响应体一起缓存，只回一个「已处理」字符串会让客户端拿不到首次的结果。
+
+**状态码是分层契约。** 201 依 RFC 9110 第 15.3.2 节必须带 `Location` 指向新资源；204 语义上不允许有响应体（写了就是协议违规）；202 表示「已接收、尚未处理完」，与 201「已建成」是两件事，第 68 讲的 `POST /orders` 返回 202 正源于此。400 来自语法错误，422 来自 RFC 4918 的「语义校验失败」，401 与 403 由 RFC 9110 分成「未认证」与「已认证但无权限」，409 表示资源冲突（唯一键重复），429 来自 RFC 6585 的限流。把这一切塞进 200 加自定义 code 的代价是具体的：CDN 会缓存错误响应、网关无法按状态做重试与熔断、监控无法按 5xx 告警、客户端必须解析 body 才知道成败。
+
+**版本与分页都是可推导的取舍。** 版本放 URL 前缀（`/v1`），网关按路径做灰度与路由零成本；放媒体类型协商（`Accept: application/vnd.x.v2+json`）更「RESTful」但工具链支持弱、缓存键要跟着变；放请求体最差，路由、缓存、日志、灰度全都得先解析 body 才能判断版本。分页 `offset/limit` 支持跳页，但深分页时数据库必须扫描并丢弃前 N 行，代价 O(offset)；游标分页以上一页最后一条的有序键为起点，代价恒定，代价是无法随机跳页。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（推荐） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| 幂等保障 | 前端按钮置灰、靠用户不重复点 | 服务端 `Idempotency-Key` 加唯一索引 | 超时发生在网关与客户端之间时用户毫无感知，重试由 SDK 自动完成，前端去重完全失效 |
+| 查重实现 | 先 SELECT 判重再 INSERT | 唯一索引冲突即命中，或 SETNX 加同事务 | 并发下两个请求同时判重通过，产生重复业务数据 |
+| 错误契约 | 万物皆 200，body 里塞自定义 code | 用真实 HTTP 状态码加统一错误体 | 缓存、重试、熔断、告警全链路失效 |
+| 版本位置 | 请求体或自定义头 | URL 前缀 | 网关灰度、CDN 缓存、日志检索都先要解析 body |
+| 分页 | 纯 offset/limit | 深分页改游标，并给 limit 设上限 | 深分页慢查询、单个大 limit 拖垮数据库 |
+| 演进方式 | 悄悄改已有字段语义 | 只加可选字段，破坏性变更才升版本 | 老客户端在某次发布后静默崩溃 |
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 超时重试放大 | POST 超时被自动重发且无幂等 | 两个内容相同的订单 | 幂等键命中日志 | 幂等键加唯一索引 |
+| 幂等键竞争 | 查重与写入不在同一事务 | 并发下仍产生重复 | 去重表唯一键冲突计数 | 唯一索引或 SETNX 加同事务 |
+| 缓存与 DB 不一致 | 写后更新缓存且并发写乱序 | 缓存留旧值，读到脏数据 | 缓存与库值比对 | 写后删缓存，必要时延迟双删（见 /server/redis） |
+| 深分页慢查询 | offset 极大且无上限 | 单请求扫描百万行 | `EXPLAIN`、慢 SQL 日志 | limit 设上限、改游标分页 |
+| 连接池耗尽 | 慢查询叠加高并发 | `WaitCount` 上涨、延迟毛刺 | `db.Stats()` | 索引、超时、并发上限 |
+| 版本静默破坏 | 悄悄改字段含义或删字段 | 老客户端发布后突然报错 | 契约测试差异比对 | 只加不删、Deprecation 与 Sunset |
+| 限流被误判 | 429 写成 503 | 客户端继续重试，流量越压越高 | 入口 429 与后端 QPS 对比 | 用 429 加 Retry-After（见 /microservice/resilience） |
+
+<SequenceDiagram title="幂等键重放：并发相同请求只落一次" :actors='["Client","Gateway","Server","Dedup","DB"]' :steps='[{"from":"Client","to":"Gateway","label":"POST 带键","note":"携带 Idempotency-Key","kind":"call"},{"from":"Gateway","to":"Server","label":"转发","note":"超时后自动重发同一键","kind":"call"},{"from":"Server","to":"Dedup","label":"原子登记","note":"唯一索引或 SETNX","kind":"call"},{"from":"Dedup","to":"Server","label":"首次登记成功","note":"获得处理权","kind":"return"},{"from":"Server","to":"DB","label":"写业务","note":"与去重记录同事务","kind":"call"},{"from":"DB","to":"Server","label":"提交成功","note":"结果回传","kind":"return"},{"from":"Server","to":"Gateway","label":"201 加结果","note":"缓存状态码与体","kind":"return"},{"from":"Gateway","to":"Client","label":"首次响应","note":"回程丢失","kind":"return"},{"from":"Client","to":"Gateway","label":"超时重发","note":"同一幂等键","kind":"call"},{"from":"Gateway","to":"Server","label":"再次转发","note":"键相同","kind":"call"},{"from":"Server","to":"Dedup","label":"查重命中","note":"唯一键冲突","kind":"call"},{"from":"Server","to":"Gateway","label":"回放结果","note":"不再写业务","kind":"return"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把状态码契约与幂等原子性跑出来看
+
+**实验一：curl 逐条核对状态码语义。** 启动第 2 节的 users 服务，按顺序发四条请求：
+
+```bash
+curl -i -X POST http://127.0.0.1:8080/v1/users -d '{"name":"go"}'
+curl -i -X DELETE http://127.0.0.1:8080/v1/users/1
+curl -i -X POST http://127.0.0.1:8080/v1/users -d 'not-json'
+curl -i 'http://127.0.0.1:8080/v1/users?limit=999999'
+```
+
+<OutputBox title="四条请求的状态行与关键头" output="POST    → HTTP/1.1 201 Created\nLocation: /v1/users/1\nDELETE  → HTTP/1.1 204 No Content（无响应体）\nPOST 非法体 → HTTP/1.1 400 Bad Request\nGET 大 limit → HTTP/1.1 200 OK（limit 被夹到上限）" note="状态码本身就是契约，CDN、网关、监控无需读 body 即可判断成败" />
+
+逐字段解释：`201 Created` 配 `Location: /v1/users/1` 兑现 RFC 9110 的创建语义，客户端据此知道新资源地址；`204 No Content` 之后必须没有响应体，若 Handler 多写了字节，严格客户端会解析错乱；`400 Bad Request` 对应「请求体不是合法 JSON」的语法错误，与字段不合规的 422 分属两层；最后一条 `200 OK` 说明 `limit=999999` 被服务端夹到上限（如 20）而不是照单全收——`limit` 必须设上限，否则一个请求就能把库拖垮。把 429 写成 503 的对照可用 `curl -i` 看 `Retry-After` 头是否缺失，直接验证「限流被误判」那一行。
+
+**实验二：go test -race 证明幂等键在并发下必须原子。** 下面这段完整可编译的测试文件让 20 个相同 `Idempotency-Key` 的请求并发打到同一个 Handler，断言业务只创建一次：
+
+```go
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+type idempotentStore struct {
+	mu      sync.Mutex
+	seen    map[string]int
+	creates int32
+}
+
+func (s *idempotentStore) handle(w http.ResponseWriter, r *http.Request) {
+	key := r.Header.Get("Idempotency-Key")
+	s.mu.Lock()
+	if code, ok := s.seen[key]; ok {
+		s.mu.Unlock()
+		w.WriteHeader(code)
+		return
+	}
+	s.seen[key] = http.StatusCreated
+	s.mu.Unlock()
+	atomic.AddInt32(&s.creates, 1)
+	w.WriteHeader(http.StatusCreated)
+}
+
+func TestIdempotencyKeyUnderConcurrency(t *testing.T) {
+	s := &idempotentStore{seen: make(map[string]int)}
+	srv := httptest.NewServer(http.HandlerFunc(s.handle))
+	defer srv.Close()
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+			req.Header.Set("Idempotency-Key", "order-1001")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			_ = resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&s.creates); got != 1 {
+		t.Fatalf("相同幂等键创建了 %d 次，应为 1", got)
+	}
+}
+```
+
+```bash
+go test -race -run TestIdempotencyKeyUnderConcurrency -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestIdempotencyKeyUnderConcurrency\n--- PASS: TestIdempotencyKeyUnderConcurrency (0.00s)\nPASS\nok   example.com/server   1.412s" note="20 个并发相同键，creates 计数仍为 1，且无数据竞争" />
+
+逐字段解释：`=== RUN` 是用例开始；`--- PASS` 说明 `creates` 最终为 1，即 19 个重复请求都在 `seen` 命中被回放、没有再写业务；`-race` 未报竞争，说明「查重加登记」被 `sync.Mutex` 包成原子操作。做对照实验：把 `s.mu.Lock()` / `Unlock()` 两行删掉再跑，要么 `creates` 大于 1，要么 race detector 直接报 `WARNING: DATA RACE` 甚至 `concurrent map writes` 崩溃——这就把「查重加写入必须原子」从结论变成可证伪的断言。生产里 `seen` 换成带唯一索引的去重表，同一事务同时写业务数据与去重记录，原理完全一致。
+
+<Predict q="把 429 限流错写成 503，客户端重试逻辑会怎样？" :options='["立刻停止重试","当成临时故障继续带退避重试，流量被放大","自动降级到 GET","返回 404"]' answer="1" output="客户端把 503 视为服务端暂时不可用并继续重试，后端 QPS 反而上升" explain="429 才是「请求方太快来慢点」的信号，配 Retry-After 才能让客户端退避；503 表示服务端故障，重试逻辑只会加剧压力，这是状态码混用引发重试放大的典型路径。" />
+
+### 两条真实工程误解
+
+**误解一：幂等键用 Redis SETNX 就够了，业务写库不用管事务。** 错。SETNX 只保证「只有一个请求拿到处理权」，但业务写入与去重标记若分属两个系统，中间进程崩溃就会出现「标记写了、业务没写」或反过来「业务写了、标记没写」的窗口；后者在重放时会被当成首次处理，重复执行业务。正确做法是去重表唯一索引加本地事务，或用本地消息表把两者绑进同一个原子单元（见 /server/mq）。
+
+**误解二：把版本号放进请求体最灵活，网关不用改。** 错。请求体版本让路由、CDN 缓存键、访问日志、灰度分流全都依赖先解析 body 才能判断版本，CDN 无法按 URL 缓存，灰度必须在应用层做。URL 前缀把版本暴露在路径上，网关按前缀路由与灰度零成本，监控按路径聚合即可看到各版本流量；代价只是 URL 变长，以及破坏性变更需要新增一组路由。两相比较，后者在绝大多数工程里更划算。
+
+### 与后续阶段的呼应
+
+- 本讲的 `Idempotency-Key` 与「查重加写入同事务」会在 /server/redis 变成缓存双写一致、在 /server/mq 变成幂等消费、在 /distributed/distributed-lock 变成去重表与状态机；状态码到错误码的映射则在 /microservice/grpc-advanced 里被翻译成 gRPC `status`。
+- L7 的 /microservice/gateway 按 URL 前缀做版本灰度与统一错误响应，/microservice/resilience 用 429 加 Retry-After 与重试预算把「重试放大」关进笼子。
+- L10 的 /projects/micro-ecommerce 里订单创建必须服务端幂等，/projects/micro-seckill 的预扣减更是把幂等键当作正确性底线；/projects/ai-gateway 的令牌计费接口同样靠幂等键避免重试重复扣费。
 
 接口设计里最贵的错误往往发生在版本演进：把版本号塞进请求体、给同一个字段悄悄换含义、删除字段不通知，都会让老客户端在某次发布后突然崩掉。稳定的做法是「只加不删、新增字段可选、废弃字段先标记再下线」，并用契约测试在 CI 里比对新旧版本差异。
 
@@ -438,6 +565,12 @@ func writeList(w http.ResponseWriter, v any) {
 <FlowTimeline title="一次写请求的处理链" :steps='[{"title":"版本与路由","desc":"按 URL 前缀分到对应版本的 Handler","tone":"blue"},{"title":"解码","desc":"语法错误返回 400","tone":"purple"},{"title":"字段校验","desc":"语义错误返回 422 并带明细","tone":"orange"},{"title":"幂等检查","desc":"查 Idempotency-Key，命中直接回放结果","tone":"green"},{"title":"业务与持久化","desc":"成功返回 201 与 Location","tone":"blue"},{"title":"统一序列化","desc":"错误体与成功体由同一层写出","tone":"gray"}]' direction="horizontal" />
 
 另一个高频反模式是**把幂等性寄托于前端**：靠按钮置灰、靠「用户不会点两次」。网络超时发生在客户端与网关之间时，用户往往什么都没看到，重试是 SDK 与浏览器自动做的。只有服务端用唯一键兜底，才是可靠的。同理，分页的 `limit` 必须设上限（如 100），否则一个 `limit=1000000` 就能把数据库拖垮。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-063-rest-api`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-063-rest-api)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 
@@ -449,7 +582,7 @@ func writeList(w http.ResponseWriter, v any) {
 
 <Predict no="63-2" q="客户端对 POST /v1/orders 请求超时后自动重发一次，服务端没有做幂等处理，最可能发生什么？" :options='["只创建一单，HTTP 层自动去重","创建了两个内容相同的订单","第二次返回 404","第二次返回 409"]' answer="1" output="服务端收到两次合法的创建请求，创建了两个内容相同的订单" explain="超时只说明客户端没收到响应，不代表服务端没执行。POST 不幂等，重试会放大副作用，这正是幂等键存在的原因。" />
 
-<FillBlank no="63-3" tpl="PUT 与 DELETE 是 ___ 的，POST 通常 ___；为了让超时重试安全，客户端应携带 ___ 请求头。" :answers='["幂等~idempotent","非幂等","Idempotency-Key~幂等键"]' hint="想想重复执行对服务端状态的影响" explain="幂等性描述的是「重复执行的影响」，不是「返回内容是否相同」；DELETE 第二次可能返回 404，但资源状态仍然一致，因此依旧幂等。" />
+<FillBlank no="63-3" tpl="PUT 与 DELETE 是 ___ 的，POST 通常 ___；为了让超时重试安全，客户端应携带 ___ 请求头。" :answers='["幂等~idempotent","非幂等","Idempotency-Key~幂等键"]' hint="想想重复执行对服务端状态的影响" explain="幂等性描述的是「重复执行的影响」，不是「返回内容是否相同」；DELETE 第二次可能返回 404，但资源状态仍然一致，因此依旧幂等。" :explains='["PUT 整体替换、DELETE 删除同一资源，重复多次对状态的净效果与一次相同，因此幂等，与返回码是否一致无关。","POST 多用于新建资源，每重放一次就多产生一条记录，状态不断累加，所以超时后盲目重试可能造成重复下单。","客户端为每次业务操作配一个唯一键，服务端据此识别重放并返回首次结果，从而让非幂等的请求也能安全重试。"]' />
 
 ## 一页纸速记
 

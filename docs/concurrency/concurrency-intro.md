@@ -143,6 +143,122 @@ func main() {
 
 <Callout type="warn" title="最容易混淆的一点" text="并发不等于更快。若任务之间没有可重叠的等待，或者任务太小、拆分与协调的成本超过收益，引入 goroutine 只会让代码变慢且更难调试。先问「等待在哪里」，再决定要不要并发。" />
 
+### 再深一层：并发不自带同步、失败时序与可验证证据
+
+「并发能重叠等待」讲的是吞吐，不是正确性。把串行代码拆成多个 goroutine 后，最危险的直觉是以为「它们总有个先后」或「sleep 一下就等到了」。Go 内存模型（本机 `$GOROOT/doc/go_mem.html`）并不为「并发」本身提供任何保证，它只给一条核心承诺：**无数据竞争的程序表现得像所有 goroutine 被复用到单处理器上**，即 DRF-SC；一旦存在竞争，编译器可重排、CPU 可乱序、可见性无约束。由此能推出 CSP 与共享内存两条路线真正的分界——**正确性来自同步动作，不来自并发结构**。channel 的收发与 `close` 是内存模型明确列出的同步动作；Mutex 的 Unlock 与后续 Lock、WaitGroup 的 Done 与 Wait 同样是；而 `time.Sleep`、`runtime.Gosched`、共享 bool 标志都不是。CSP 的好处不是「天生更快」，而是把数据交接点与同步点重合，让漏掉同步更难。
+
+| 动作 | 是否建立 happens-before | 依据与边界 |
+| --- | --- | --- |
+| `go f(args)` | 是，但只到新 G 的起点 | go_mem.html：`go` 语句 synchronized before 新 goroutine 开始执行；不等待其结束 |
+| channel 的一次收发、`close(ch)` | 是 | go_mem.html 列明的同步动作，交接点即同步点 |
+| Mutex 的 Unlock 到后续 Lock | 是 | `sync` 包注释：第 n 次 Unlock synchronizes before 第 m 次 Lock（n 小于 m） |
+| WaitGroup 的 Done 到被唤醒的 Wait | 是 | `sync/waitgroup.go` 注释：Done synchronizes before 它所解除阻塞的 Wait 的返回 |
+| `time.Sleep`、`runtime.Gosched`、共享 bool 标志 | 否 | 都不是同步动作；用它「等结果」既不确定，又构成数据竞争 |
+
+先做一个可复现的对照实验，把上面的判据变成能跑的结论。`serialSum` 串行累加无共享写入、天然安全；`sharedSum` 把同一变量交给多个 goroutine 无同步累加，`go test -race` 会精确打印 `WARNING: DATA RACE` 及两段冲突栈。注意反面实验用 `SHOW_RACE=1` 环境变量 gate，保证默认 `go test -race ./...` 全绿、只在需要时暴露问题——这也是把「错误写法」留在代码里做教学对照、又不污染 CI 的惯例（第 45、49 讲沿用同一手法）。
+
+```go
+package main
+
+import (
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+// serialSum 串行累加，无共享写入，安全
+func serialSum(n int) int {
+	sum := 0
+	for i := 0; i < n; i++ {
+		sum++
+	}
+	return sum
+}
+
+// sharedSum 并发累加同一变量且无同步，构成数据竞争
+func sharedSum(n int) int {
+	sum := 0
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sum++
+		}()
+	}
+	wg.Wait()
+	return sum
+}
+
+func TestSerialSafe(t *testing.T) {
+	if got := serialSum(1000); got != 1000 {
+		t.Fatalf("串行期望 1000，实际 %d", got)
+	}
+}
+
+// 反面实验：设 SHOW_RACE=1 并配合 -race，暴露共享累加的 DATA RACE
+func TestSharedRace(t *testing.T) {
+	if os.Getenv("SHOW_RACE") == "" {
+		t.Skip("反面实验：设 SHOW_RACE=1 并加 -race 运行")
+	}
+	_ = sharedSum(1000)
+}
+
+// ioTask 模拟一次 100ms 的 I/O 等待，期间不占 CPU
+func ioTask() { time.Sleep(100 * time.Millisecond) }
+
+func BenchmarkSerialIO(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 3; j++ {
+			ioTask()
+		}
+	}
+}
+
+func BenchmarkConcurrentIO(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		for j := 0; j < 3; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ioTask()
+			}()
+		}
+		wg.Wait()
+	}
+}
+```
+
+```bash
+go test -race -run=TestSerialSafe -v ./...                       # 正确写法：全绿
+SHOW_RACE=1 go test -race -run=TestSharedRace ./...              # 反面实验：报 WARNING: DATA RACE
+go test -bench='SerialIO|ConcurrentIO' -benchmem -run=^$ ./...   # 看 ns/op 与 allocs/op
+```
+
+<OutputBox title="本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkSerialIO-12：约 305 ms/op，0 B/op，0 allocs/op\nBenchmarkConcurrentIO-12：约 101 ms/op，496 B/op，6 allocs/op" note="三段 100ms 等待重叠成约 100ms；并发版多出 3 个 G 的栈与 WaitGroup，故 B/op 与 allocs/op 上升" />
+
+逐字段读这份输出：换算成 `ms/op` 的 `ns/op` 是每轮耗时，串行约等于三段等待之和、并发约等于一段，直接量化「重叠等待」的收益；`B/op` 是每轮堆分配字节数，并发版多出的是 goroutine 起始栈与同步结构的分摊；`allocs/op` 是每轮分配次数，串行版为 0、并发版为 6（3 个 G 加 WaitGroup 的簿记）。把 `ioTask` 换成纯计算循环、`GOMAXPROCS` 设为 1 再跑一遍，两个 benchmark 会几乎持平甚至并发更慢——这就是「没有等待就没有收益」的可测量证据，也说明「用了 goroutine 就一定更快」是错的。
+
+`-race` 能抓什么、抓不到什么，在这个例子里也要分清：它能抓 `sharedSum` 里「读改写同一变量且无 happens-before」的冲突访问；但**抓不到逻辑竞态**——比如两个访问各自都被锁保护了、只是组合顺序错了（检查后使用 TOCTOU），或者下面这类「重复执行 / 部分成功」的业务级时序错误，因为那里未必有无同步的冲突读写。它更不会告诉你的程序「该不该并发」。
+
+并发把单点的顺序性拆开后，原子性、幂等与补偿必须重新设计，否则最典型的失败是「重复执行」和「部分成功」：同一笔业务被两个 worker 读到同一份旧状态、各自提交一次。下面这张时序图画的就是这条链路。
+
+<SequenceDiagram title="盲目并发导致的重复执行" caption="两个 worker 读到同一旧状态并各自提交，订单被重复处理" :actors='["客户端","派发器","workerA","workerB","订单状态"]' :steps='[{"from":"客户端","to":"派发器","label":"提交订单","note":"未带幂等键","kind":"call"},{"from":"派发器","to":"workerA","label":"并发派发","note":"同一订单","kind":"call"},{"from":"派发器","to":"workerB","label":"并发派发","note":"未去重","kind":"call"},{"from":"workerA","to":"订单状态","label":"读未处理","note":"读到旧值","kind":"call"},{"from":"workerB","to":"订单状态","label":"读未处理","note":"也读到旧值","kind":"call"},{"from":"workerA","to":"订单状态","label":"标记完成","note":"第一次提交","kind":"call"},{"from":"workerB","to":"订单状态","label":"重复扣款","note":"检查后使用失效","kind":"async"},{"from":"订单状态","to":"客户端","label":"两次结果","note":"部分成功与资损","kind":"return"}]' />
+
+把工程里最常踩的两条误解写成错误与正确代码对照：
+
+<Compare title="起 goroutine 之后怎么等" :panels='[{"label":"错误：sleep 兜底","code":"for i := 0; i &lt; 3; i++ {\n    go work(i)\n}\ntime.Sleep(1 * time.Second) // 不是同步动作","note":"sleep 既不保证任务已跑完，也不建立 happens-before；负载一高就提前返回，共享结果读到旧值。"},{"label":"正确：显式同步","code":"var wg sync.WaitGroup\nfor i := 0; i &lt; 3; i++ {\n    wg.Add(1)\n    go func(id int) {\n        defer wg.Done()\n        work(id)\n    }(i)\n}\nwg.Wait()","note":"Done synchronizes before Wait 的返回，任务写入对 main 可见；也可用 channel 收结果。"}]' note="等待要用同步原语，不能用时长去猜。" />
+
+<Callout type="warn" title="第二条误解：以为并发结构自带正确性" text="「我用了 channel、起了 goroutine，所以不会有竞争」不成立。用 channel 传递的是数据所有权，若通道里传的是指针、发送后还继续改对象，或另开一个共享 bool 当停止标志，仍然是无同步的并发访问。判断标准永远是：这两次访问之间有没有一条 happens-before 边，而不是「代码看起来是不是并发风格」。" />
+
+<Compare title="用了 channel 就安全了吗" :panels='[{"label":"错误：通道之外另开共享变量","code":"ch := make(chan int, 1)\nvar total int\ngo func() {\n    ch &lt;- 1\n    total++ // 与 main 的读无同步\n}()\n&lt;-ch\nfmt.Println(total)","note":"channel 只给这一次收发送了同步边；total 的自增与 main 的读之间没有 happens-before，仍是数据竞争。"},{"label":"正确：让数据随通道交接","code":"ch := make(chan int, 1)\ngo func() { ch &lt;- 1 }()\ntotal := &lt;-ch // 值本身就是交接过来的\nfmt.Println(total)","note":"把要共享的值放进通道，交接点即同步点；不再另开一个裸共享变量。"}]' note="CSP 的价值是让同步点与交接点重合，不是免掉同步。" />
+
+最后把这些结论接到后面的实战里。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 V1 单线程把 CPU 空转在 RTT 等待上，V2 用 worker pool 重叠等待才把吞吐拉起来，正是本讲「先找到等待再并发」的完整落地；但 V2/V3 必须补上 URL 去重与幂等键，否则并发抓取会重复下载、结果表重复写入——这恰好是上面「重复执行」时序图的真实版本。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「定时任务执行两次」列为资损事故，用选主、状态机与 fencing token 收敛重复执行；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 里「先查余量再扣减」在并发下会超卖，必须把检查与扣减合成一个原子步骤。三处都在回答同一个问题：**并发提高了吞吐，正确性得靠同步与幂等重新挣回来**。
+
+<Quiz q="把三个各等待 100ms 的 I/O 任务改成 goroutine 并发，但共享一个结果变量且没有任何同步，go test -race 最可能看到什么？" :options='["全绿，因为并发本来就是安全的","WARNING: DATA RACE，指向该变量的读写","编译报错，禁止在 goroutine 里写共享变量","只是结果偶尔偏小，无任何提示"]' answer="1" explain="并发结构不建立 happens-before；共享变量的读改写无同步即数据竞争，-race 的向量时钟会报两段冲突栈。要重叠等待又要正确，须用 channel 交接或 WaitGroup 加同步，而不是靠 sleep。" />
+
 ## 4. 工程实践
 
 真实服务里最常见的收益来自 I/O：一个 HTTP handler 往往要查数据库、调下游接口、写日志，这些等待彼此独立，用 goroutine 重叠起来就能显著降低尾延迟。而「保护一个共享计数」「缓存一张配置表」这类需求，本质是互斥而不是传递数据，用 `sync.Mutex` 或原子操作更直接。判断口诀是：要交付数据所有权、要编排阶段、要广播信号，选 channel；只想保护一小段临界区，选锁。
@@ -150,6 +266,12 @@ func main() {
 <Compare title="两条路线的对照" :panels='[{"label":"共享内存 + 锁","code":"var mu sync.Mutex\nvar count int\nmu.Lock()\ncount++\nmu.Unlock()","note":"多个执行流直接读写同一变量，靠锁圈出临界区；要自己保证每次访问都记得加锁。"},{"label":"CSP 通道","code":"ch := make(chan int, 1)\n// 数据沿通道交接\n// 所有权随消息转移","note":"数据沿通道流动，交接点即同步点；但为了一个计数器绕一圈通道反而更绕。"}]' note="没有绝对正确的选择，只有与问题匹配的选择：传递数据用通道，保护状态用锁。" />
 
 还有一类明确的「不该并发」：步骤之间有严格先后依赖（必须先解析配置再启动服务）、单次工作量极小（微秒级计算）、以及 CPU 已经跑满且没有等待的纯计算流水线。这几种情况下，并发带来的上下文切换与内存占用是净亏损。工程上更稳妥的做法是先写正确的串行版本，用压测或 `pprof` 找到真正卡在等待上的瓶颈，再局部引入并发。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-038-concurrency-intro`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-038-concurrency-intro)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

@@ -244,7 +244,123 @@ func main() {
 | 升级 Go 后行为没变 | 只换工具链，`go.mod` 的 `go` 指令没升 | 查 `go version` 与 `go.mod`，显式改 `go 1.22` |
 | 遍历指针切片时 panic | 切片里混入了 nil 指针 | 循环体先判 `u == nil` |
 
-<Predict no="15-3" q="go.mod 写 go 1.21，把 range 的 i、v 直接交给 goroutine 写 out[i]，wg.Wait 之后最可能出现什么？" :options='["稳定得到 [10 20 30]","多个下标被漏写，且 go test -race 报数据竞争","编译失败","固定输出 [30 30 30]"]' answer="1" output="多个下标被漏写，且 go test -race 会报 DATA RACE" explain="旧语义下 i、v 共用一个变量并被主循环与 goroutine 并发读写，既是数据竞争也会让多个协程写到同一处；1.22 起每轮新建变量才稳定得到 [10 20 30]。" />
+<Predict q="go.mod 写 go 1.21，把 range 的 i、v 直接交给 goroutine 写 out[i]，wg.Wait 之后最可能出现什么？" :options='["稳定得到 [10 20 30]","多个下标被漏写，且 go test -race 报数据竞争","编译失败","固定输出 [30 30 30]"]' answer="1" output="多个下标被漏写，且 go test -race 会报 DATA RACE" explain="旧语义下 i、v 共用一个变量并被主循环与 goroutine 并发读写，既是数据竞争也会让多个协程写到同一处；1.22 起每轮新建变量才稳定得到 [10 20 30]。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-015-range-pitfalls`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-015-range-pitfalls)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与运行时源码，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：副本、迭代次数与随机顺序的规范依据
+
+副本语义能一路追到规范「For statements with range clause」：range 表达式在循环开始前求值一次，随后每轮把迭代值「像赋值语句一样」赋给迭代变量——赋值即拷贝，所以 `v` 是元素副本，改它不回写容器；对切片，规范还规定迭代次数取当时的 `len`，这是「循环内 append 不会拉长遍历」的依据。`go doc go/ast.RangeStmt` 里 `X Expr // value to range over` 与 `Key, Value Expr` 正好对应这两件事。Go 1.22 的改动也是规范层面的：条款改为「每轮迭代各有自己独立的迭代变量」，于是闭包与 `&v` 各自绑定到不同实例；实现上 `cmd/compile/internal/walk/range.go` 把 range 降级成普通循环，1.22 起在循环体内插入变量声明，等价于编译器替你写了 `v := v`。map 的顺序随机不是编译器决定，而是运行时：`runtime/map.go` 的 `mapiterinit` 用 `fastrand()` 随机挑起始桶与桶内偏移，`mapiternext` 从那里线性扫，所以每次遍历起点都不同，且「删除当前键安全、新增键可能被扫到也可能不被扫到」正是桶扫描的直接后果。字符串 range 则按 `utf8.DecodeRuneInString` 逐个解出 rune，下标是字节偏移而非字符序号——这是副本语义在字符串上的特例。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`range` 拿到的是元素引用，改 `v.Field` 会回写原切片。** 赋值拷的是整个结构体，字段改动落在副本上。
+
+<Compare title="改结构体元素" :panels='[{"label":"错误：改副本字段","code":"for _, v := range items {\n    v.N *= 10\n}\n// items 没变","note":"v 是值拷贝，改动不回写"},{"label":"正确：用下标回写","code":"for i := range items {\n    items[i].N *= 10\n}","note":"下标定位到原元素，改动生效"}]' />
+
+指针切片是例外：拷的是指针值，仍指向同一对象，所以 `u.Field = x` 会生效，这与值切片并不矛盾。
+
+**误解二：遍历中往切片 `append`，`range` 会自动跟着变长。** 迭代计划在进入循环前就固定了。
+
+<Compare title="遍历中追加元素" :panels='[{"label":"错误：以为会遍历到新元素","code":"for _, n := range nums {\n    if n == 1 {\n        nums = append(nums, 4)\n    }\n}\n// 只跑原来三轮","note":"循环次数按进入时的描述符固定"},{"label":"正确：另收再合并","code":"extra := make([]int, 0)\nfor _, n := range nums {\n    if n == 1 {\n        extra = append(extra, 4)\n    }\n}\nnums = append(nums, extra...)","note":"追加结果在循环后统一合并"}]' />
+
+range 表达式只求值一次，编译器把当时的描述符（含 `len`）存进循环；之后给 `nums` 重新赋值，也影响不到已保存的迭代计划。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go build -gcflags=-m main.go
+go test -race ./...
+```
+
+```text
+# command-line-arguments
+./main.go:9:2: moved to heap: x
+==================
+WARNING: DATA RACE
+Write at 0x00c00000e308 by goroutine 7:
+  example.com/demo.TestRace.func1()
+      /demo/race_test.go:7 +0x3c
+Previous read at 0x00c00000e308 by goroutine 6:
+  example.com/demo.TestRace()
+      /demo/race_test.go:8 +0xa4
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `# command-line-arguments` | 单文件编译时编译器给的包名 |
+| `./main.go:9:2` | 逃逸发生的文件、行、列 |
+| `moved to heap: x` | 被闭包引用的循环变量从栈搬到堆，旧语义下整轮共用一个单元 |
+| `WARNING: DATA RACE` | race detector 检出并发冲突 |
+| `Write at 0x... by goroutine 7` | 写操作的内存地址与所属 goroutine 编号 |
+| `func1() / race_test.go:7 +0x3c` | 栈顶帧、文件行号、指令偏移 |
+| `Previous read ... by goroutine 6` | 与这次写冲突的另一次访问 |
+| `Found 1 data race(s)`（结尾） | 本次运行累计检出的竞态条数 |
+
+下面这段把两条误解与「表达式只求值一次」跑成确定输出：
+
+```go
+package main
+
+import "fmt"
+
+type Item struct{ N int }
+
+func main() {
+	items := []Item{{1}, {2}, {3}}
+	for _, v := range items {
+		v.N *= 10
+	}
+	fmt.Println("改副本后 =", items)
+	for i := range items {
+		items[i].N *= 10
+	}
+	fmt.Println("下标回写后 =", items)
+
+	nums := []int{1, 2, 3}
+	visited := 0
+	for _, n := range nums {
+		visited++
+		if n == 1 {
+			nums = append(nums, 4)
+		}
+	}
+	fmt.Println("遍历轮数 =", visited, "追加后 len =", len(nums))
+
+	calls := 0
+	source := func() []int {
+		calls++
+		return []int{1, 2}
+	}
+	for range source() {
+	}
+	fmt.Println("source 调用次数 =", calls)
+}
+```
+
+<OutputBox title="运行结果" output="改副本后 = [{1} {2} {3}]\n下标回写后 = [{10} {20} {30}]\n遍历轮数 = 3 追加后 len = 4\nsource 调用次数 = 1" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 依据 |
+| --- | --- | --- |
+| Go 1.21 | `GOEXPERIMENT=loopvar` 可预览每轮新变量 | 实验开关，需显式开启 |
+| Go 1.22 | 每轮新变量成为默认，由 `go.mod` 的 `go` 指令决定 | 只升工具链、不升 `go` 指令不生效 |
+| Go 1.22 | 新增整数 range：`for i := range 10` | 循环变量同样每轮新建 |
+| Go 1.23 | 新增函数迭代器 range：`for x := range seq` | 需 `iter.Seq`，闭包捕获适用新语义 |
+| 全版本 | map 遍历起点随机 | `runtime.mapiterinit` 用 `fastrand` 选桶 |
+
+适用边界还有一条：字符串 range 的下标是字节偏移，含中文时不能当字符序号用；map 遍历里 `delete` 当前键安全，但新增键是否被扫到不确定，别把顺序写进快照或签名。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 28 讲](/core/slice-internals) 会从 SliceHeader 解释 range 为何只拷描述符，[第 29 讲](/core/map-internals) 展开 `mapiterinit` 的随机起点与渐进扩容，[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 把「闭包捕获导致逃逸」讲透，[第 49 讲](/concurrency/race) 则说明 `-race` 能抓与不能抓的边界。实战里，[第 109 讲](/projects/concurrent-crawler) 的 worker pool 正是「把循环变量交给 goroutine」的高发现场，[第 107 讲](/projects/data-log-etl) 的 pipeline 同样要先确认 `go` 指令版本再定写法。
 
 ## 动手练一练
 

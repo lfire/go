@@ -263,7 +263,136 @@ func main() {
 
 <Callout type="idea" title="迁移技巧" text="如果老项目是纯 net/http，优先选 Chi：把现有 Handler 原样挂进去，中间件逐个替换，不需要一次性重写。若项目从零开始且需要大量参数校验与分组，Gin 的开发效率通常更高。" />
 
+### 路由匹配的协议与结构推导
+
+框架的「路由树」不是凭空优化，它要兑现的是 URL 匹配的一套明确语义。先看标准库：Go 1.22 的 `ServeMux` 在注册时把每个模式串编译进一棵按「方法加路径段」组织的匹配树，并在注册期做**冲突检测**——若两个模式能匹配同一请求（如 `GET /users/{id}` 与 `GET /users/new` 之外的重叠），直接 panic，而不是等到运行时随机命中。匹配时遵循「更具体者优先」：静态段胜于通配段 `{name}`，结尾 `{$}` 锚定路径末尾。请求到达前还会做路径清洁（消除 `.`、`..`、重复斜杠）并可能触发尾部斜杠的 301 规范重定向；`%2F` 被保留为段内字符而不解码成斜杠，否则 `/a%2Fb` 会被误判成两层路径。这些行为源自 RFC 3986 的路径语义加上 Go 自己的规则，框架的 radix tree 只是把同一套规则做得更快。
+
+radix tree 的复杂度可以推导：它按公共前缀压缩节点，`/v1/users`、`/v1/orders` 共享 `/v1/` 这段只比较一次，匹配代价与**路径段数**相关，而与注册的路由总数基本无关（近似 O(段数)）。线性扫描的旧 `ServeMux` 是 O(路由数)，哈希精确匹配是 O(1) 却表达不了参数段与通配。所以「框架比标准库快」在 Go 1.22 之后已不是结构性差距，而是常数与生态差距——这也把选型问题从「谁快」拉回「谁替你做了什么」。
+
+### 设计取舍：三条路线的代价
+
+| 维度 | 方案 A：纯 net/http 1.22 | 方案 B：Chi | 方案 C：Gin / Echo |
+| --- | --- | --- | --- |
+| 核心抽象 | 标准 `http.Handler` | 标准 `http.Handler` | 自有 `Context` |
+| 与标准库生态 | 原生 | 原生，中间件签名就是 `func(Handler) Handler` | 需适配层 |
+| 绑定与校验 | 自己写 | 自己组合 | 内置 validator，开发最快 |
+| 路由实现 | 内置匹配树 | radix tree | radix tree |
+| 迁移成本 | 无 | 老 Handler 原样挂入即可 | Handler 签名被框架绑定，退出成本高 |
+| 主要代价 | 校验、分组、日志样板代码多 | 生态相对少 | 与 `httptest`、反代等标准工具隔离 |
+
+三个方案对应三种「最怕什么」：怕依赖、要长期可维护选 A；怕重写存量 net/http 代码选 B；怕交付慢、需要大量参数校验与分组选 C。为什么本讲不直接宣布赢家？因为按 Amdahl 定律，端到端耗时 `T = T_db + T_net + T_framework`，若 `T_framework` 占比不到百分之几，把它优化一半对 `T` 的影响几乎测不出来；而迁移成本、团队熟悉度、中间件生态是实打实的一次性支出。下面的实验二会把这个比例量出来。
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 通配遮蔽 | 静态段与参数段优先级配错 | `/users/new` 被当成 id= new | 打开路由注册日志 | 注册期冲突检测，静态段优先 |
+| 绑定重复写 | 混用 `BindJSON` 与自定义错误响应 | 响应体写两次、状态码错乱 | 响应体出现两段 JSON | 全项目统一一种绑定契约 |
+| 漏中断 | 中间件判断失败后没 `return` / `Abort` | 已返回 401 又叠加业务数据 | 响应头与 body 不一致 | 每个提前返回分支都终止 |
+| 恢复层错位 | 恢复中间件被放到内层 | 业务 panic 穿透，连接被重置 | 5xx 突增、日志无堆栈 | 恢复放最外层 |
+| 分组过深 | 五六层嵌套 Group | 请求实际经过哪些层无人说得清 | 逐层打印中间件名 | 按版本与鉴权边界划分 |
+| 路径判断绕过 | 用原始 `r.URL.Path` 做鉴权 | `/a/../admin` 规范化后绕过前缀判断 | 网关与 Handler 日志路径不一致 | 基于规范化路径或 `PathValue` |
+| 301 被当 404 | 客户端未跟随尾部斜杠重定向 | 带斜杠路径莫名失败 | curl -i 看状态行 | 统一规范路径并让客户端跟随 |
+
+<SequenceDiagram title="分组路由、绑定与 405 的时序" :actors='["Client","ServeMux","GroupMW","Handler","Store"]' :steps='[{"from":"Client","to":"ServeMux","label":"请求 GET","note":"路径先清洁规范化","kind":"call"},{"from":"ServeMux","to":"ServeMux","label":"树形匹配","note":"方法加路径段按特异性","kind":"self"},{"from":"ServeMux","to":"GroupMW","label":"进组","note":"分组中间件前置","kind":"call"},{"from":"GroupMW","to":"Handler","label":"交棒","note":"绑定与字段校验","kind":"call"},{"from":"Handler","to":"Store","label":"查询","note":"透传 r.Context","kind":"call"},{"from":"Store","to":"Handler","label":"返回行","note":"结果回传","kind":"return"},{"from":"Handler","to":"GroupMW","label":"写 200","note":"统一序列化","kind":"return"},{"from":"GroupMW","to":"ServeMux","label":"后置","note":"耗时日志","kind":"return"},{"from":"ServeMux","to":"Client","label":"响应","note":"keep-alive 复用","kind":"return"},{"from":"Client","to":"ServeMux","label":"请求 POST","note":"方法不匹配","kind":"call"},{"from":"ServeMux","to":"Client","label":"405","note":"带 Allow 头","kind":"return"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把 405、绑定和路由开销跑出来看
+
+**实验一：curl 观察方法与路径契约。** 启动第 2 节的 Chi 服务（或任一 Go 1.22 `ServeMux` 服务），分别发合法与非法方法的请求：
+
+```bash
+curl -i http://127.0.0.1:8080/v1/users/42
+curl -i -X POST http://127.0.0.1:8080/v1/users/42
+```
+
+<OutputBox title="两次请求的状态行与关键头" output="GET  /v1/users/42  → HTTP/1.1 200 OK\nPOST /v1/users/42  → HTTP/1.1 405 Method Not Allowed\nAllow: GET, HEAD" note="405 由路由层直接产生，业务 Handler 根本没被调用" />
+
+逐字段解释：`200 OK` 说明路径参数被正确提取（返回体里的 id 来自 `PathValue` 或 `chi.URLParam`）；`405 Method Not Allowed` 是 RFC 9110 要求的状态码，表示资源存在但方法不被允许——它与 `404`（资源不存在）不能混用，否则客户端无法判断该换方法还是换地址；`Allow: GET, HEAD` 是 405 必须携带的响应头，告诉客户端与缓存哪些方法可用，也是「路由契约写到协议层」的直接证据。把 `GET /v1/users/{id}` 改成 `GET /v1/users/{id}/` 再请求，还能看到 301 规范重定向，验证路径清洁规则确实生效。
+
+**实验二：httptest 加 go test -race 断言路由，再用 benchmark 量出框架开销占比。** 下面这段完整可编译的测试文件把「方法不匹配返回 405 且带 Allow」与「框架开销远小于一次数据库往返」同时变成可执行断言：
+
+```go
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func newMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.PathValue("id")))
+	})
+	return mux
+}
+
+func TestMethodAndPathValue(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/users/42", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "42" {
+		t.Fatalf("GET: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec2 := httptest.NewRecorder()
+	newMux().ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/users/42", nil))
+	if rec2.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: code=%d, want 405", rec2.Code)
+	}
+	if allow := rec2.Header().Get("Allow"); allow == "" {
+		t.Fatal("405 未带 Allow 头")
+	}
+}
+
+func BenchmarkRouteOnly(b *testing.B) {
+	mux := newMux()
+	req := httptest.NewRequest(http.MethodGet, "/users/42", nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
+func BenchmarkRouteWithDB(b *testing.B) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Millisecond) // 模拟一次数据库往返
+	})
+	req := httptest.NewRequest(http.MethodGet, "/users/42", nil)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+```
+
+```bash
+go test -race -run TestMethodAndPathValue -v ./...
+go test -run '^$' -bench . -benchmem ./...
+```
+
+<OutputBox title="正确性用例" output="=== RUN   TestMethodAndPathValue\n--- PASS: TestMethodAndPathValue (0.00s)\nPASS" note="405 与 Allow 头都是可断言的协议行为，不靠肉眼" />
+
+<OutputBox title="benchmark（示意量级，机器不同数值不同）" output="BenchmarkRouteOnly-8      1400000    852 ns/op\nBenchmarkRouteWithDB-8       1100  1050000 ns/op" note="两者相差约三个数量级，路由匹配耗时占比不到千分之一" />
+
+逐字段解释：`=== RUN` / `--- PASS` 说明方法路由与 `PathValue` 在 Go 1.22 语义下成立；`-race` 未报 `WARNING: DATA RACE`，说明 `httptest.NewRecorder` 各用例独立。`1400000` 是 `b.N`（迭代次数），`852 ns/op` 是单次「纯路由匹配」耗时，`1100` 与 `1050000 ns/op` 是「路由加 1 毫秒模拟数据库」的迭代与耗时。关键不是绝对值而是**比值**：约 1000 倍意味着把路由再优化一半，端到端只省不到千分之一——这正是「性能不是唯一指标」的量化依据，也是为什么该优先看兼容性、生态与迁移成本。
+
+<Predict q="一个纯 net/http 服务升级到 Go 1.22 后仍手写 switch r.Method，最可能漏掉什么协议行为？" :options='["404 与 405 的区分","自动 gzip 压缩","自动生成 OpenAPI","连接池复用"]' answer="0" output="方法不匹配被当成普通 404 处理，且响应缺少 Allow 头" explain="Go 1.22 的 ServeMux 会自行返回 405 并带 Allow；手写 switch 若统一回 404，客户端就无法区分资源不存在与方法不允许，缓存与 SDK 也会误判。" />
+
+### 两条真实工程误解
+
+**误解一：框架路由的 benchmark 高，换成它就等价于接口变快。** 错。榜单测的是「纯路由匹配加返回短字符串」，而真实接口耗时由数据库、缓存、序列化主导；上面 benchmark 显示路由开销占比不到千分之一。为一个每秒几十次请求的内部系统挑「最快」框架，却牺牲团队熟悉度与标准库生态，是典型的优化错焦点。正确顺序是先用真实链路压测定位瓶颈，再决定要不要动框架。
+
+**误解二：用了框架就和 `net/http` 生态绝缘，所有中间件都得重写。** 错。这只在 Gin / Echo 这类自有 `Context` 的框架里成立；Chi 的路由器本身实现 `http.Handler`，中间件签名就是标准 `func(http.Handler) http.Handler`，第 61 讲手写的 `logging`、`recoverPanic` 可以原样挂进去，`httptest.NewServer` 也直接可用。误以为「框架等于隔离」，会让人在可以渐进改造的项目里做了一次性重写。
+
+### 与后续阶段的呼应
+
+- 本讲的「分组前缀加组内中间件」在 /microservice/gateway 会被放大成网关按 URL 前缀做路由、灰度与统一鉴权；在 /microservice/framework 则变成用 Options 装配拦截器链，本质仍是 `func(Handler) Handler` 这条契约。
+- /microservice/grpc-advanced 用拦截器把绑定失败、错误码、Deadline 收成统一横切能力，正是本讲中间件模型的 RPC 版本。
+- L10 的 /projects/net-shortlink 用极简路由扛高并发跳转，正好说明「小项目用标准库或 Chi 足够」；/projects/micro-ecommerce 走 gRPC 加 HTTP 网关，才会遇到「同一套绑定契约要同时服务 HTTP 与 RPC」的选型问题。
 
 选型之外，日常写框架代码有几个高频坑。第一，`ShouldBindJSON` 与 `BindJSON` 的错误处理契约不同：前者只返回错误，后者会替你写 400 并 `Abort`。混用时最容易出现的 bug 是「调用了 BindJSON 又自己写一次响应」，导致重复写、状态码错乱。第二，中间件里判断失败后必须 `return` 或 `c.Abort()`，否则后续 handler 仍会执行，出现「已经返回 401 却又写了业务数据」的叠加响应。第三，别把业务逻辑堆进中间件，中间件只做横切关注点。
 
@@ -272,6 +401,12 @@ func main() {
 <FlowTimeline title="一次框架选型决策" :steps='[{"title":"存量代码","desc":"纯 net/http 且要渐进改造，倾向 Chi","tone":"blue"},{"title":"团队熟悉度","desc":"已有一套 Gin 中间件与规范，别为新鲜感换栈","tone":"purple"},{"title":"生态需求","desc":"需要现成的校验、限流、OpenAPI 插件","tone":"orange"},{"title":"绑定取舍","desc":"是否接受自有 Context 与标准库生态隔离","tone":"green"},{"title":"压测验证","desc":"用真实链路压测，而不是路由 benchmark","tone":"gray"}]' direction="horizontal" />
 
 还有一种反模式是**盲目套分组**：把路由分成五六层嵌套 Group，每层都挂中间件，最后没人说得清某个请求到底会经过哪些层。分组应当按「资源版本 + 是否需要鉴权」这类真实边界划分，并在代码里用注释写清每层的职责。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-062-web-framework`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-062-web-framework)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

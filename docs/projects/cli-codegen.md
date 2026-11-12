@@ -1301,6 +1301,12 @@ fmt.Fprintln(os.Stderr, "processing", name)
 
 <Callout type="tip" title="坑的共同形状" text="八条里六条都是「失败没被大声说出来」：日志串错通道、跳过不计数、重复键不校验、权限错误被吞、版本差异不显式。生成器的可靠性不来自多聪明，而来自把每一处静默降级都改成可观测事件。" />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-104-cli-codegen`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-104-cli-codegen)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给生成链路补上跳过告警与手写内容扫描" task="当前 6.7 的主流程把 skip 计数只打到 stderr，CI 不会因此失败；6.6 的手写保护也只认文件头标记。请改两处：一是让 skip 超过 GEN_SKIP_BUDGET 时生成直接返回带阶段名的错误，二是在落盘前扫描目标文件除首行标记外是否含非空手写内容并返回 ErrProtected。写出关键结构与判断逻辑，并说明为什么这两处必须放在写盘之前。" :hints='["提示一：把预算从环境变量读成整数，解析失败按 0 处理，最保守","提示二：跳过判断紧贴在 parse 返回之后、进入 render 之前，越早失败越省事","提示三：手写扫描只读旧内容，按行去掉首行标记后检查剩余行是否含非注释非空白内容","提示四：两处都用 fmt.Errorf 带上阶段前缀，保证 CI 日志可定位","提示五：补一个表驱动测试覆盖零跳过、超预算、纯生成文件、含手写函数四种输入"]' solution='要点一：新增 loadBudget 从环境变量 GEN_SKIP_BUDGET 读整数，空值或解析失败返回 0，保证默认最严格。\n要点二：在 Generate 里 parse 返回后立刻判断 skipped 是否大于 budget，命中则返回 fmt.Errorf 包上输入阶段前缀，绝不进 render。\n要点三：新增 hasHandWritten(old []byte) bool，按行切分，跳过首行生成标记与空行，剩余行若不以注释符或 package 开头即视为手写内容返回 true。\n要点四：WriteIfChanged 在 isGenerated 通过后再调 hasHandWritten，命中则返回 ErrProtected，且必须发生在 bytes.Equal 与 os.WriteFile 之前。\n要点五：表驱动测试分别喂入零跳过、超预算、标准生成文件、含手写函数的文件，断言错误类型与是否写盘，用临时目录避免污染仓库。' explain="两处改动的共同原则是把检查前移到写盘之前：跳过告警防的是静默缺项，手写扫描防的是人肉补丁被覆盖；一旦写盘完成再发现，产物已经进 git，排障成本陡增。带阶段前缀的错误让 CI 日志直接指向责任模块。" />
@@ -1313,7 +1319,7 @@ fmt.Fprintln(os.Stderr, "processing", name)
 
 <Predict no="104-3" q="6.6 段里，目标文件首次不存在、随后连续两次用完全相同内容调用 WriteIfChanged，三次返回的 changed 依次是什么？" :options='["true, true, true","true, false, false","false, false, false"]' answer="1" output="首次生成 changed: true\n重复生成 changed: false" explain="首次走 NotExist 分支直接写盘返回 true；第二次读到文件内容与待写字节一致，bytes.Equal 命中零写入返回 false；第三次同理。这正是第 1 节 F2 确定性变换与零 diff 的落点。" />
 
-<FillBlank no="104-4" tpl="模板拼出非法 Go 时，___ 会当场返回错误兼做语法体检；产物头部的 ___ 标记既是 IDE 约定也是手写保护的判据；protoc 插件声明能力用的是 Response 的 ___ 字段。" :answers='["go/format|format.Source","DO NOT EDIT|Code generated","supported_features|SupportedFeatures"]' hint="想想渲染之后的那一道验收闸与文件头约定" explain="format.Source 解析失败即报错，拦在写盘之前；DO NOT EDIT 标记被 vet 与 IDE 识别，也被 isGenerated 用来判定手写文件；supported_features 需置 FEATURE_PROTO3_OPTIONAL 才不会被 protoc 拒绝。" />
+<FillBlank no="104-4" tpl="模板拼出非法 Go 时，___ 会当场返回错误兼做语法体检；产物头部的 ___ 标记既是 IDE 约定也是手写保护的判据；protoc 插件声明能力用的是 Response 的 ___ 字段。" :answers='["go/format~format.Source","DO NOT EDIT~Code generated","supported_features~SupportedFeatures"]' hint="想想渲染之后的那一道验收闸与文件头约定" explain="format.Source 解析失败即报错，拦在写盘之前；DO NOT EDIT 标记被 vet 与 IDE 识别，也被 isGenerated 用来判定手写文件；supported_features 需置 FEATURE_PROTO3_OPTIONAL 才不会被 protoc 拒绝。" :explains='["渲染产物在写盘前先交给格式化器做一次解析，拼出非法语法会当场报错，等于用编译器的语法规则给模板输出做了免费体检。","文件头注释是工具链与 IDE 的约定，编辑器据此折叠跳过；isGenerated 靠它区分生成物，避免覆盖手写文件。","插件用响应的位图声明所支持的特性；生成 proto3 可选字段时没置对应位，protoc 便判定能力不足并拒绝输出。"]' />
 
 ## 一页纸速记
 

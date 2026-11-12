@@ -150,6 +150,163 @@ GOARCH=386 go run main.go
 
 <SequenceDiagram title="append 触发扩容时的调用链" caption="从容量判断到新数组返回，每一步都对应一个可查证的运行时函数" :actors='["用户代码","append","growslice","roundupsize","mallocgc"]' :steps='[{"from":"用户代码","to":"append","label":"append(s, x)","kind":"call"},{"from":"append","to":"growslice","label":"cap 不足触发扩容","kind":"call"},{"from":"growslice","to":"growslice","label":"按 256 阈值算","kind":"self"},{"from":"growslice","to":"roundupsize","label":"对齐字节数","kind":"call"},{"from":"roundupsize","to":"mallocgc","label":"申请新 span","kind":"call"},{"from":"mallocgc","to":"growslice","label":"返回新数组","kind":"return"},{"from":"growslice","to":"append","label":"拷贝并返回新头","kind":"return"},{"from":"append","to":"用户代码","label":"交还新三元组","kind":"return"}]' />
 
+### 设计动机与替代方案的代价
+
+为什么是「描述符加共享底层数组」，而不是让切片值直接装下整个数组？若值自带数组，`s2 := s1` 与函数传参都要 O(n) 拷贝，`append` 也无法在不通知所有持有方的前提下换一块更大的内存；共享把传参压到常数级的三个字，代价就是别名写，于是 `cap` 与 `full slice expression` 被设计成「是否共享」的显式开关。为什么不做写时复制（COW）或自动缩容？那需要每次写都检查引用计数或加锁，恰好破坏 Go 最看重的无锁热路径；Go 选择把成本交给程序员用 `copy`、三索引表达式显式承担，编译器只保证 `growslice` 一次搬到位。为什么不省掉 `Cap`？没有它就无从判断 `append` 能否原地写入，也无法用第三个索引把容量锁死。这三种取舍合起来，才推出「头只有三个字、共享恒定存在、扩容才分家」的全部行为。
+
+<OutputBox title="头部字段与平台字长（hdr.go 输出）" output="GOARCH=amd64  IntSize=64\n头大小=24  Data/Len/Cap 偏移=0 8 16\nnil:   Data=nil        len=0 cap=0\nempty: Data=0xc0000120a0 len=0 cap=0\nGOARCH=386 : 头大小=12  偏移=0 4 8" note="三个字各占一个指针宽度；nil 与空切片的 Data 不同但 len、cap 都是 0。" />
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+	"strconv"
+	"unsafe"
+)
+
+type hdr struct {
+	Data unsafe.Pointer
+	Len  int
+	Cap  int
+}
+
+func main() {
+	var h hdr
+	fmt.Println("GOARCH:", runtime.GOARCH, " IntSize:", strconv.IntSize)
+	fmt.Println("头大小:", unsafe.Sizeof(h))
+	fmt.Println("Data/Len/Cap 偏移:",
+		unsafe.Offsetof(h.Data), unsafe.Offsetof(h.Len), unsafe.Offsetof(h.Cap))
+	var nilS []int
+	emptyS := make([]int, 0)
+	fmt.Printf("nil Data=%v len=%d cap=%d\n",
+		(*hdr)(unsafe.Pointer(&nilS)).Data, len(nilS), cap(nilS))
+	fmt.Printf("empty Data=%v len=%d cap=%d\n",
+		(*hdr)(unsafe.Pointer(&emptyS)).Data, len(emptyS), cap(emptyS))
+}
+```
+
+命令：`go run hdr.go` 看本机结果，`GOARCH=386 go build hdr.go` 交叉编译确认 32 位布局；`go build -gcflags=-S -o /dev/null slice.go 2>&1 | grep growslice` 再把 `append` 与 `runtime.growslice` 的调用对上（若因构建缓存无输出，加 `-a` 强制重编）。逐字段解释：`IntSize` 决定三个字段各占 4 还是 8 字节，故 amd64 是 24、386 是 12；`unsafe.Offsetof` 给出 0、8、16（386 下 0、4、8），证明头是紧凑排列的三个字；`nil` 切片的 `Data` 为 nil，`make([]int, 0)` 的空切片 `Data` 指向运行时的 `zerobase` 而非 nil，但两者 `len`、`cap` 都是 0，也都能直接 `append`。`unsafe.Sizeof` 与手写镜像都**只测头部、不测底层数组**，这是它们作为观测手段的硬边界；`reflect.SliceHeader.Data` 是 `uintptr`、不参与 GC 存活判定（Go 1.21 起已标记弃用），别拿它长期保存地址。
+
+### growslice 的 required 分支与容量的二次取整
+
+上一节把 512 之后跳到 848 归因于「平滑公式加 roundupsize」，但那条推导只覆盖**一次追加一个元素**。一旦 `append` 一次塞进很多元素，`runtime/slice.go` 的 `growslice` 会走另一条分支：`nextslicecap(oldcap, required)` 先以 `oldcap*2` 起步，Go 1.18 起当 `oldcap >= 256` 时改成 `newcap += (newcap + 3*256)/4` 平滑迭代；关键的一步是 **`newcap` 若仍小于本次所需容量 `required`，就直接取 `required`**，而不是继续按倍数涨。随后 `roundupsize(uintptr(newcap) * et.Size)` 把字节数对齐到 size class，再除以 `et.Size` 得到最终 `cap`，接着 `mallocgc` 分配、`memmove` 搬旧元素。可观察输出就是一次 `append(s, extra...)` 之后的 `cap`。
+
+把不同初始容量、一次追加 1000 个 `int` 的结果摆在一起，分支条件一目了然：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	for _, base := range []int{0, 4, 8, 100, 600} {
+		s := make([]int, base, base)
+		extra := make([]int, 1000)
+		r := append(s, extra...)
+		fmt.Printf("oldcap=%4d 一次 append 1000 个 → newcap=%4d\n", base, cap(r))
+	}
+}
+```
+
+```bash
+go version
+go run grow.go
+# 换成 []int8 或 32 位架构，roundupsize 的档位不同，最终 cap 会变
+GOARCH=386 go run grow.go
+```
+
+<OutputBox title="一次 append 1000 个 int 的实测（Go 1.23 / arm64）" output="oldcap=   0 一次 append 1000 个 → newcap=1024\noldcap=   4 一次 append 1000 个 → newcap=1024\noldcap=   8 一次 append 1000 个 → newcap=1024\noldcap= 100 一次 append 1000 个 → newcap=1184\noldcap= 600 一次 append 1000 个 → newcap=1696" note="前三行 required 超过两倍旧容量，公式分支被短路，容量直接跳到所需值再取整。" />
+
+逐字段解释：算式是 `cap_final = roundupsize(max(newcap, required) × et.Size) / et.Size`。前三行 `oldcap` 为 0/4/8 时 `required` 是 1000/1004/1008，都远大于 `2×oldcap`，于是 `newcap = required`，换算成 8000/8032/8064 字节后统一 `roundupsize` 到 8192 字节档，除回 8 得 1024。`oldcap=100` 时 `required=1100 > 200`，同样短路到 1100 个元素、8800 字节，对齐到 9472 字节档得 1184；`oldcap=600` 时 `required=1600 > 1200`，12800 字节对齐到 13568 字节档得 1696。可见「翻倍 / 平滑公式」只在所需容量不超过两倍时起作用，超过就由 `required` 接管，最后再叠一次 size class 取整——这是「打印出的 cap 总对不上公式」的第二个原因，第一个是上一节讲的 256 阈值与平滑增长。
+
+**反直觉结论的证伪**：「append 的容量只由扩容策略决定，与一次追加多少无关」是错的。对照 `oldcap=8` 一次追加 1 个元素会得到 16（翻倍），一次追加 1000 个却直接得到 1024；同一起点、不同追加量，容量差了 64 倍。另一个易错点是「公式算出的 cap 就是最终 cap」——`roundupsize` 的二次取整在三行里分别把 1000/1004/1008 压成同一个 1024、把 1100 抬到 1184，忽略它就会误判预分配该给多少容量。工程上因此 `make([]T, 0, n)` 的 `n` 应尽量贴合真实规模：给小了触发 `growslice`，给大了白占一个更大的档位。
+
+边界：`nextslicecap` 是 Go 1.21 起抽出的函数，Go 1.18 前后阈值从 1024 改为 256，跨版本先 `go version`；`et.Size` 随元素类型变化，`[]int8`、`[]string` 的字节数与档位都不同；32 位平台 `int` 为 4 字节、`roundupsize` 档位表不同，最终 cap 会变；`append` 到三索引切片或已满 cap 的子切片行为不同；这些是运行时实现细节，结论以本机实测为准，不能写进业务逻辑。
+
+### 含指针元素扩容：写屏障辅助搬移到底走哪条分支
+
+第 3 节提过「元素含指针时还要走写屏障辅助路径」，但只给了结论，没展开 `growslice` 里那个分支改了哪些字段、为什么叫「辅助」。先把一个版本事实说清：候选里常写的「`typedmemmove` / `memmove` 分流」是更早资料里的笼统说法，**本机 Go 1.23.8 的 `runtime/slice.go` 里 `growslice` 并没有调用 `typedmemmove`**，两条分支最后都调同一个 `memmove`，差别在搬移**之前**多做的那一步。`typedmemmove` 在 1.23 里服务于「单个带类型值的拷贝」——`runtime/iface.go` 的 `convT`、`runtime/map.go` 的 `mapassign`、`runtime/chan.go` 的收发各有一处；整个数组块的批量搬移则由 `bulkBarrierPreWriteSrcOnly` 承担。别把这两个符号混为一谈。
+
+**状态迁移链**（以 Go 1.23.8 `runtime/slice.go` 的 `growslice` 为准）：输入是旧数组指针 `oldPtr`、旧字节数 `lenmem`、元素类型 `et` 与轮过 `roundupsize` 的 `capmem`。
+
+```text
+步骤 1  capmem = roundupsize(capmem, noscan)；newcap = capmem / et.Size_
+步骤 2  分支 A：et.Pointers() 为假
+          p = mallocgc(capmem, nil, false)          // noscan，不清零整块
+          memclrNoHeapPointers(p+newlenmem, capmem-newlenmem)
+        分支 B：et.Pointers() 为真
+          p = mallocgc(capmem, et, true)            // scan，且必须清零
+          若 lenmem > 0 且 writeBarrier.enabled：
+              bulkBarrierPreWriteSrcOnly(p, oldPtr, lenmem-et.Size_+et.PtrBytes, et)
+步骤 3  memmove(p, oldPtr, lenmem)                  // 两分支共用，按字节整块搬
+步骤 4  返回 slice{p, newLen, newcap}
+```
+
+两个分支条件都值得单独推。其一，`et.Pointers()` 由元素类型的指针位图决定，直接决定 `mallocgc` 的 `typ` 参数与 span 是否 `noscan`；含指针时第二参数传 `et`、第三参数 `needzero` 传 `true`，源码注释写明「不能用避免清零的 rawmem，否则 GC 会扫到未初始化内存」——新数组先整体清零，才允许后面被扫描。其二，`writeBarrier.enabled` 只在并发标记期为真，所以「含指针」并不等于「每次扩容都跑屏障」，还叠一个 GC 阶段条件。
+
+**为什么是 `SrcOnly`**：混合写屏障要求「被覆盖的旧值」被染灰。这里目标数组 `p` 刚由 `mallocgc` 清零、里面全是 nil 指针，没有旧值需要保护；真正被「覆盖/丢弃」的是**旧数组 `oldPtr` 里的指针**。`runtime/mbitmap.go` 的 `bulkBarrierPreWriteSrcOnly` 因此只遍历源区间：`s.typePointersOfType(typ, dst)` 按 `et` 的指针位图依次给出每个指针槽地址，对每个 `addr` 取 `srcx = addr - dst + src`，`p := buf.get1(); p[0] = *srcx` 把源指针推进当前 P 的 `wbBuf`。工作量正比于**被搬移区间里的指针字数**，而不是元素总数——第三个参数 `lenmem - et.Size_ + et.PtrBytes` 把扫描范围截到「最后一个指针字」为止：`[]*int` 的 `et.Size_ = et.PtrBytes = 8`，代入后就是 `lenmem`；而 `{int64; *int; int64}` 这类元素，`PtrBytes` 只覆盖到中间那个指针，尾部标量不计入屏障遍历。
+
+新观察角度：用编译器的 `-d=wb=1` 直接打印**哪些源码行被插入了写屏障**，再反汇编链接后的 `runtime.growslice` 看分支落点。存成 `wb.go`（两个 `make` 都只留在局部，避免把切片写进全局变量引入额外屏障，干扰对照）：
+
+```go
+package main
+
+//go:noinline
+func makePtr(n int) []*int {
+	s := make([]*int, 0, n)
+	for i := 0; i < n; i++ {
+		s = append(s, new(int))
+	}
+	return s
+}
+
+//go:noinline
+func makeVal(n int) []int {
+	s := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		s = append(s, i)
+	}
+	return s
+}
+
+func main() {
+	a, b := makePtr(64), makeVal(64)
+	println(len(a), len(b))
+}
+```
+
+```bash
+go build -gcflags='-d=wb=1' -o /dev/null wb.go
+go build -gcflags='-d=append=1' -o /dev/null wb.go
+go build -o wbbin wb.go
+go tool objdump -s '^runtime\.growslice' ./wbbin | grep -E 'bulkBarrier|memclrNoHeapPointers|memmove|mallocgc'
+# 对照源码行号
+sed -n '262,284p' "$(go env GOROOT)/src/runtime/slice.go"
+grep -n 'func bulkBarrierPreWriteSrcOnly' "$(go env GOROOT)/src/runtime/mbitmap.go"
+```
+
+<OutputBox title="-d=wb 与 growslice 反汇编（Go 1.23.8 / darwin arm64）" output="# command-line-arguments\n./wb.go:9:38: write barrier\n--- -d=append=1 ---\n./wb.go:9:5: append: len-only update (in local slice)\n--- go tool objdump -s '^runtime.growslice' ---\n  slice.go:272  CALL runtime.mallocgc(SB)\n  slice.go:280  CALL runtime.bulkBarrierPreWriteSrcOnly(SB)\n  slice.go:264  CALL runtime.mallocgc(SB)\n  slice.go:269  CALL runtime.memclrNoHeapPointers(SB)\n  slice.go:283  CALL runtime.memmove(SB)" note="只有含指针的 append 行被插入屏障；运行时里 scan 分支多一次 bulkBarrier 调用，两分支共用 memmove。" />
+
+逐字段解释：`-d=wb=1` 只有一行 `./wb.go:9:38: write barrier`，定位到 `makePtr` 里 `append(s, new(int))` 的指针写；`makeVal` 所在行没有输出，证明「是否插屏障」由元素类型而非 `append` 这个动作决定。`-d=append=1` 的 `append: len-only update` 说明容量足够时只更新头的 `Len`，与第 2 节「不扩容就原地写」对上。反汇编里 `slice.go:280` 的 `CALL runtime.bulkBarrierPreWriteSrcOnly` 是分支 B 独有的辅助步骤，`slice.go:269` 的 `memclrNoHeapPointers` 属于分支 A，`slice.go:283` 的 `memmove` 两条分支共用——把「源码分支 → 运行时符号 → 机器码」三段接成一条链。`sed -n '262,284p'` 给出的正是上面状态迁移链里 `et.Pointers()` 判断与 `lenmem > 0 && writeBarrier.enabled` 复合条件的原文。
+
+**反直觉的一点**：「含指针的切片扩容一定更慢、因为每个元素都要过屏障」不准确。额外成本是一次按指针位图遍历的 `bulkBarrierPreWriteSrcOnly`，只在 `writeBarrier.enabled` 为真时发生；`memmove` 的字节拷贝量与 `[]int` 完全相同。真正拉开差距的是 `mallocgc(capmem, et, true)` 的清零与后续 GC 对该 span 的扫描（回看第 32 讲 `noscan` 位），而不是「每个指针单独一次屏障调用」——`wbBuf.get1()` 是批量缓冲写入。这也解释了为什么第 33 讲强调「降指针密度」：`[]*T` 扩容时同时付出 scan span、清零与屏障遍历三重代价。
+
+边界：符号名与分支实现以 Go 1.23.8 为准，`typedmemmove` 在本机属于单个值拷贝路径、不是 growslice 的分流；`bulkBarrierPreWriteSrcOnly` 的 `size` 算式依赖 `et.PtrBytes`，复合结构体与 `[]*int` 的遍历长度不同；`writeBarrier.enabled` 只在并发标记期为真，非 GC 期含指针扩容也不跑这一步；`go tool objdump -s` 的地址随构建变化、只比符号与源码行号；`//go:noinline` 是本实验对照成立的前提。这条链在第 32 讲（noscan span）、第 33 讲（混合写屏障与降指针密度）会再次合流。
+
+### 边界、常见误解与前后联系
+
+| 常见误解 | 正解 | 可验证依据 |
+| --- | --- | --- |
+| `len(s)` 等于 `cap(s)` 时 `append` 一定让所有别名立刻分家 | 只有持有新头的变量指向新数组，其它别名仍指向旧数组且旧数据不变；旧数组要等引用归零才被 GC 回收 | 第 2 节 `base` 与 `c` 的地址对比 |
+| `full slice expression` 的第三个索引可以任意大 | `max` 必须落在 `high` 到 `cap` 之间，越界 panic；它只能缩小 `cap`，不能放大 | 把 `max` 写成大于 `cap(s)` 的值会触发运行时 panic |
+| `nil` 切片不能 `append`，必须先 `make` | `append(nil, x)` 合法，会分配底层数组；`nil` 与空切片在读写上几乎等价 | 上面的 `hdr.go` 输出与 `append(nil, 1)` |
+
+边界要点：32 位平台下头只有 12 字节，所有偏移、`roundupsize` 档位与容量公式都要重算；并发对同一底层数组 `append` 是数据竞争（`-race` 能抓，第 49 讲）；`cap` 经 `runtime/msize.go` 的 `roundupsize` 对齐，随元素类型、对齐要求与 GOARCH 变化，**不能当公式值**；`full slice expression` 的 `max` 受 `cap` 约束；`unsafe.Sizeof`、手写镜像与 `-m` 都是静态观察，看不到运行时扩容次数，必须叠加 `go test -benchmem` 与 `GODEBUG=gctrace=1`。还要注意子切片长期持有会拖住整块大数组不释放，这是共享的代价而非 bug。
+
+前后联系：第 26 讲「描述符」在这里落到具体三个字，第 27 讲解释了 `make` 为何逃逸到堆，第 29 讲的 map 是另一种「小头指向别处」；第 98 讲（编译器源码：SSA、逃逸与内联）会看 `append` 在 `cmd/compile/internal/walk` 阶段如何被降级成 `runtime.growslice` 调用、以及内联与边界检查消除怎样影响扩容判断，第 100 讲（极致性能优化）把 `make([]T, 0, n)` 与 Go 1.21 的 `slices.Grow` 列为标准优化项，第 97 讲（channel/mutex 源码与锁竞争）解释并发切片为何必须靠外部同步。
+
 ## 4. 工程实践
 
 `full slice expression`（三索引切片）把 `cap` 锁死，从而强制 `append` 另分配，是规避别名写的标准手法；`copy` 则能把数据搬到独立数组，彻底切断共享。顺带一提，Go 1.21 起标准库 `slices.Clip` 能把容量收缩到长度，效果等价于三索引切片，适合在处理完数据后主动切断共享。
@@ -227,7 +384,13 @@ go test -bench='NoCap|WithCap' -benchmem -run=^$ ./...
 
 三列要会读：`ns/op` 是每次迭代耗时，`B/op` 是每次迭代分配的字节，`allocs/op` 是分配次数。`WithCap` 的 `B/op` 恰好是 1024×8=8192，说明一次到位；`NoCap` 多出来的分配次数正是 `growslice` 被调用的次数，也是 pprof 里该函数的命中次数。容量接近真实规模即可把扩容压到个位数。
 
-<Predict no="28-4" q="把 WithCap 里的 make([]int, 0, 1024) 改成 make([]int, 0, 512)，循环仍 append 1024 次，allocs/op 最接近多少？" :options='["仍是 1 次","约 2 次","仍是 12 次","降到 0 次"]' answer="1" output="约 2 次：容量写满 512 时再扩容一次即可容纳 1024 个元素" explain="预留 512 后写满时触发一次 growslice，分配次数从 12 降到 2；容量接近真实规模即可大幅减少拷贝。" />
+<Predict q="把 WithCap 里的 make([]int, 0, 1024) 改成 make([]int, 0, 512)，循环仍 append 1024 次，allocs/op 最接近多少？" :options='["仍是 1 次","约 2 次","仍是 12 次","降到 0 次"]' answer="1" output="约 2 次：容量写满 512 时再扩容一次即可容纳 1024 个元素" explain="预留 512 后写满时触发一次 growslice，分配次数从 12 降到 2；容量接近真实规模即可大幅减少拷贝。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l3-core/lesson-028-slice-internals`](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-028-slice-internals)。clone 仓库后进入 `examples/l3-core`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 
@@ -239,7 +402,7 @@ go test -bench='NoCap|WithCap' -benchmem -run=^$ ./...
 
 <Predict no="28-2" q="s := make([]int, 2, 2); t := s; s = append(s, 3); t[0] = 99，最终 s[0] 是多少？" :options='["99","0","不确定","编译错误"]' answer="1" output="0" explain="append 时 cap 不够触发扩容，s 指向新数组；t 仍指向旧数组，改 t[0] 不影响 s。用 StepLab 一步步看这次分家。" />
 
-<FillBlank no="28-3" tpl="full slice expression 的第三个索引把 ___ 锁住，形如 s[low:high:max]；彻底切断与底层数组的共享可以用内置函数 ___。" :answers='["cap","copy"]' hint="填一个字段名与一个内置函数" explain="第三个索引限定 cap；copy 把元素搬进新数组，不再拖住原底层数组。" />
+<FillBlank no="28-3" tpl="full slice expression 的第三个索引把 ___ 锁住，形如 s[low:high:max]；彻底切断与底层数组的共享可以用内置函数 ___。" :answers='["cap","copy"]' hint="填一个字段名与一个内置函数" explain="第三个索引限定 cap；copy 把元素搬进新数组，不再拖住原底层数组。" :explains='["三索引切片的第三个数限定新切片的容量上界，使其无法再 append 到覆盖 max 之后的底层元素，从而把可见范围锁住。","这个内置函数把元素逐个搬进另一个底层数组，源与目标此后互不影响；由于不再引用原数组，旧的大数组也能被 GC 回收。"]' />
 
 ## 一页纸速记
 

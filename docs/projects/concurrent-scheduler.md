@@ -1169,6 +1169,12 @@ kubectl delete pod schedd-leader && date +%s%3N
 
 **坑 9：优雅退位不 Resign 让跟随者干等。** 现象是发布重启时总有一段固定时长的漏跑。原因是退出时只关进程、不主动释放租约，跟随者必须等满 TTL 才当选。正确写法是在退出流程里显式 `election.Resign(ctx)`（见 6.7），把换主窗口从「最多一个 TTL」压到「几乎立即」。提前发现靠混沌演练量换主时间，未 Resign 时应接近 TTL。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-110-concurrent-scheduler`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-110-concurrent-scheduler)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给派发加 fencing 与超时兜底" task="在 6.6 的 Dispatch 基础上做两处改动：一是让每个任务执行前先经 Executions.TryRun 校验 epoch，旧 epoch 直接跳过；二是给执行加独立超时，超时任务由状态机记 TimedOut 并允许在重试预算内重投。要求旧 leader 带旧 epoch 复活时零执行，且 go test -race 无报告。" :hints='["提示一：TryRun 必须放在真正执行之前，且判定与记录要在一个临界区","提示二：超时用 context.WithTimeout，把 fn 放进独立 goroutine，结果走容量为 1 的 channel","提示三：把 epoch 比较抽成纯函数 freshEpoch，便于表驱动测试"]' solution="func freshEpoch(prev, cur int64) bool {\nif prev == cur {\nreturn false\n}\nreturn max(prev, cur) == cur\n}\nfunc guardedRun(ex *Executions, job string, epoch int64) bool {\nif !ex.TryRun(job, epoch) {\nreturn false\n}\nreturn true\n}" explain="freshEpoch 把单调比较抽成纯函数便于测试；guardedRun 把 fencing 检查前置于执行，是写入端拦截的落点。超时则必须靠独立 context 加 recover 兜住，二者结合才让故障转移不重不漏。" />
@@ -1179,7 +1185,7 @@ kubectl delete pod schedd-leader && date +%s%3N
 
 <Predict no="110-2" q="旧 leader 因网络分区被隔离，Follower 当选把 epoch 从 3 升到 4；随后旧主恢复，带 epoch 3 重派同一 job，写入端会发生什么？" :options='["旧 epoch 写入被接受，任务再跑一次","旧 epoch 写入被 TryRun 拒绝，并计入 fencing 拒绝数","任务被永久丢弃","etcd 自动合并两次写入"]' answer="1" output="  leader-1-old 拒绝重复 report (epoch=3)" explain="写入端只接受比已记录值更大的 epoch，旧 epoch 直接拒绝。这正是 fencing token 的意义：检查一次解决不了脑裂，必须在写入侧用单调 token 隔离旧主。" />
 
-<FillBlank no="110-3" tpl="选主用 ___ 保证任意时刻唯一派发者，用 ___ 在写入端隔离旧 leader 复活，用幂等表消化至少一次语义。" :answers='["etcd 租约选主","fencing token"]' hint="一个负责唯一，一个负责隔离旧主" explain="Lease 加 KeepAlive 让进程死了锁自己放，Watch 唤醒跟随者换主；fencing token（单调递增 epoch）必须在写入端校验，二者齐备才谈得上高可用调度。" />
+<FillBlank no="110-3" tpl="选主用 ___ 保证任意时刻唯一派发者，用 ___ 在写入端隔离旧 leader 复活，用幂等表消化至少一次语义。" :answers='["etcd 租约选主","fencing token"]' hint="一个负责唯一，一个负责隔离旧主" explain="Lease 加 KeepAlive 让进程死了锁自己放，Watch 唤醒跟随者换主；fencing token（单调递增 epoch）必须在写入端校验，二者齐备才谈得上高可用调度。" :explains='["抢到带 TTL 的租约锁才算主，进程崩溃或断连后租约自动过期、跟随者经 Watch 补选，保证任一时刻只有一个派发者。","旧主可能因停顿或分区恢复后带着旧锁继续写，互斥本身挡不住；给每任主发单调递增的 epoch，写入端拒收较小值即可隔离它。"]' />
 
 ## 一页纸速记
 

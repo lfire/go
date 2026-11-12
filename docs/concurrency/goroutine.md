@@ -144,6 +144,105 @@ func main() {
 
 `GOMAXPROCS` 常被误解成「最多能开多少 goroutine」，其实它限制的是**并行度**：同一时刻最多有多少个 P 在执行 Go 代码。默认值通常等于机器的逻辑 CPU 数，Go 1.25 起在容器里还会参考 cgroup 的 CPU 限额来定默认值。你可以创建十万个 G，但同一瞬间最多只有 `GOMAXPROCS` 个在跑；I/O 密集任务因为大量时间在等待，往往比 CPU 密集任务更能从多出来的 P 中获益。
 
+### 再深一层：go 语句的 happens-before、泄漏时序与可验证证据
+
+「main 不会等 goroutine」只是现象，背后的规则写在 Go 内存模型里。`go_mem.html` 对 `go` 语句的唯一承诺是：**`go` 语句 synchronized before 新 goroutine 开始执行**。由此能推出一条完整的可见性边界：`go` 之前 main 的所有写入，对新 G 的起点可见；反过来，新 G 里的写入对 main 之后的读**不自动可见**——两者此后没有任何排序，除非再引入 channel、`sync.Mutex`、`WaitGroup` 或原子操作。所以「起了 goroutine 看不到输出」与「共享变量读到旧值」是同一件事的两面：都缺一条同步边。`sync/waitgroup.go` 的注释补上另一半：`Done` synchronizes before 它所解除阻塞的 `Wait` 的返回，因此 `wg.Wait()` 之后读任务写入是安全的，前提仍是 `Add` 在 `go` 之前（否则计数可能还没登记，见第 45 讲）。
+
+| 写法 | 保证 | 不保证 / 边界 |
+| --- | --- | --- |
+| `go f(args)` | 参数在 `go` 处求值；`go` 前写入对 f 起点可见 | 不等待 f 完成、不保证 f 何时开始、不覆盖 f 结束后的可见性 |
+| 闭包直接捕获外层变量 | 语法允许 | 与 main 后续访问无排序，属数据竞争 |
+| main 里 `time.Sleep` 等待 | 什么都不保证 | 不是同步动作，时长不确定，高负载下失效 |
+| `wg.Wait()` | Done 前写入对 Wait 返回后可见 | `Add` 落在 goroutine 内时 Wait 可能提前返回 |
+
+泄漏是这套规则最典型的失败形态：一条阻塞路径永远等不到唤醒，G 就一直挂在等待队列里，占着栈与调度簿记。关键在于它是**缓慢失血**——单次 `runtime.NumGoroutine()` 看不出问题，随请求数线性累积后内存与 GC 才逐步恶化。下面这张时序图把「每个请求漏一个 G」画成一条链路。
+
+<SequenceDiagram title="goroutine 泄漏的累积链路" caption="后台 G 挂在无人唤醒的 channel 上，随请求数单调增长" :actors='["请求","Handler","后台G","结果通道","监控"]' :steps='[{"from":"请求","to":"Handler","label":"到达","note":"每请求一次","kind":"call"},{"from":"Handler","to":"后台G","label":"go 启动","note":"HB 只到起点","kind":"call"},{"from":"Handler","to":"请求","label":"立即返回","note":"main 不等 G","kind":"return"},{"from":"后台G","to":"结果通道","label":"等待结果","note":"无人发送","kind":"call"},{"from":"结果通道","to":"后台G","label":"永久阻塞","note":"gopark 无唤醒","kind":"async"},{"from":"请求","to":"Handler","label":"更多请求","note":"每次再漏一个","kind":"call"},{"from":"后台G","to":"监控","label":"计数上涨","note":"NumGoroutine 单调增","kind":"async"},{"from":"监控","to":"Handler","label":"触发告警","note":"数天后 OOM","kind":"return"}]' />
+
+`-race` 在这里帮不上忙：泄漏的 G 只是 `gopark` 在 `chanrecv` 上，不涉及任何冲突读写，`go test -race` 会全程全绿。这是「-race 全绿不等于没有并发 bug」最直接的证据。定位泄漏要用另外三类手段：`runtime.NumGoroutine()` 的**前后趋势**、`go.uber.org/goleak` 在测试收尾的 `VerifyTestMain`，以及 `go tool pprof` 的 goroutine profile 里那些卡在 `chanrecv` 与 `semacquire` 的 G。
+
+```go
+package main
+
+import (
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+)
+
+// leaking 启动一个永远等不到数据的 goroutine，制造泄漏
+func leaking() <-chan struct{} {
+	blocked := make(chan struct{})
+	go func() {
+		<-blocked // 无人 close，永久 gopark
+	}()
+	return blocked
+}
+
+// correct 用 close 广播给阻塞的 G 一个明确的退出路径
+func correct() {
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-done
+	}()
+	close(done) // 关闭即广播，与接收建立 happens-before
+	wg.Wait()
+}
+
+func TestExitPath(t *testing.T) {
+	before := runtime.NumGoroutine()
+	correct()
+	time.Sleep(10 * time.Millisecond)
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("存在未回收的 G：前 %d 后 %d", before, after)
+	}
+}
+
+func BenchmarkSpawnG(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() { defer wg.Done() }()
+		wg.Wait()
+	}
+}
+```
+
+```bash
+go test -race -run=TestExitPath -v ./...                     # 正确退出路径：前后 G 数持平，全绿
+GODEBUG=schedtrace=1000,scheddetail=1 go run main.go         # 看 gomaxprocs/threads/runqueue 与各 P 的 g
+go test -bench=BenchmarkSpawnG -benchmem -run=^$ ./...       # 看一次 go 加 Wait 的 ns/op 与 allocs/op
+# go.uber.org/goleak 的 TestMain 里调用 goleak.VerifyTestMain(m)，收尾会报 found unexpected goroutines
+```
+
+<OutputBox title="GODEBUG=schedtrace=1000,scheddetail=1 的一段采样" output="SCHED 1000ms: gomaxprocs=12 idleprocs=10 threads=15 spinningthreads=0 idlethreads=6 runqueue=0\n[P 0] g=1 m=0 schedtick=312 syscalltick=18 runqsize=1" note="每 1000ms 打印一行；scheddetail=1 时再补每个 P 一行" />
+
+逐字段解释这行输出：`gomaxprocs` 是 P 数，`idleprocs` 是空闲 P 数，`threads` 是运行时持有的 M（OS 线程）总数，`spinningthreads` 是正在「自旋找活」的 M 数，`idlethreads` 是空闲 M 数，`runqueue` 是全局队列长度。`scheddetail=1` 追加的 `[P 0]` 行里，`g` 是该 P 本地队列里等待的 G 数、`schedtick` 是调度次数、`syscalltick` 是系统调用次数、`runqsize` 是本地队列长度。若持续看到 `threads` 上涨、`idleprocs` 不少而请求延迟仍高，瓶颈多半在阻塞式调用或锁，而不是 G 不够——这时该查的是等待队列，不是起更多 goroutine。
+
+<OutputBox title="go.uber.org/goleak 的典型报告" output="goleak: found unexpected goroutines:\n[Goroutine 19 in state chan receive, with main.leaking.func1 on top of the stack:\n goroutine 19 [chan receive]:\n main.leaking.func1()\n     /path/leak_test.go:12 +0x28]" note="引入 goleak 后，TestMain 收尾会打印这段；-race 对同一份泄漏代码则全绿" />
+
+逐字段读 goleak 报告：编号 19 是残留 G 的 ID，`state chan receive` 说明它挂在 channel 接收上，`main.leaking.func1` 是栈顶函数，文件行号 `leak_test.go:12` 精确指向那条没有发送者的接收语句，`+0x28` 是程序计数器偏移。它把「哪个函数、哪一行、以什么状态」一次给全，比单点 `NumGoroutine()` 有用得多。
+
+<OutputBox title="BenchmarkSpawnG 本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkSpawnG-12：约 2000 ns/op，0 B/op，0 allocs/op" note="一次 go 加 Wait 约 2 微秒；稳定后每轮几乎不计新的堆分配" />
+
+`ns/op` 约 2 微秒是一次「创建 G、调度、回收、Wait 返回」的端到端成本，这就是「轻」的量化证据；`B/op` 与 `allocs/op` 稳定为 0 并非「G 没有栈」，而是运行时从栈缓存按批分配约 2 KB 的起始栈并在 G 终止后复用，摊到每轮几乎不再产生新的堆分配。换成同等数量的 OS 线程，光创建与固定栈的内存就是两个数量级的差别。
+
+两条工程误解值得单独对照。
+
+<Compare title="怎么确认后台任务真的收尾了" :panels='[{"label":"错误：用时长或单点值兜底","code":"go background()\ntime.Sleep(1 * time.Second)\n_ = runtime.NumGoroutine() // 单点采样","note":"sleep 不是同步动作，单点 NumGoroutine 看不出趋势；负载一变就失效，泄漏照样累积。"},{"label":"正确：退出路径加收尾校验","code":"done := make(chan struct{})\ngo func() { defer wg.Done(); &lt;-done }()\nclose(done) // 广播唤醒\nwg.Wait()\n// 测试收尾 goleak.VerifyNone(t)","note":"每条阻塞路径都有 close 或 ctx.Done() 出口，Wait 建立可见性，goleak 在收尾兜底。"}]' note="防泄漏的纪律是「谁造成阻塞，谁负责给唤醒」，不是靠等。" />
+
+<Callout type="warn" title="第二条误解：NumGoroutine 稳定就等于没泄漏" text="泄漏是缓慢失血，几天的趋势才看得出来；而且运行时辅助 G、测试框架自身都会让单点值上下浮动。要看的是随请求数是否单调增长，配合 goleak 与 goroutine profile 定位阻塞行，而不是拿一个数字当判据。同理，「泄漏会立刻崩溃」也错——它先吞内存与调度时间，最后才 OOM。" />
+
+<Compare title="怎么观测才看得出泄漏" :panels='[{"label":"错误：拿单点值下结论","code":"if runtime.NumGoroutine() &lt; 100 {\n    fmt.Println(\"没有泄漏\") // 看不出趋势\n}","note":"运行时辅助 G、测试框架都会让单点值浮动；100 这个阈值也没有依据，泄漏照样累积。"},{"label":"正确：看增量并收尾校验","code":"before := runtime.NumGoroutine()\nhandleRequests()\nafter := runtime.NumGoroutine()\nfmt.Println(\"增量:\", after-before)\n// 测试收尾 goleak.VerifyNone(t)","note":"随请求数是否单调增长才是信号；goleak 与 goroutine profile 能定位到具体阻塞行。"}]' note="判断泄漏看趋势与阻塞栈，不看一个孤立数字。" />
+
+这些纪律在后面的实战里会反复出现。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 V2 worker pool 里，每个 Fetcher worker 必须能从 `jobs` 关闭或 `ctx.Done()` 退出，否则优雅停机停不下来、在途 G 越积越多；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「发布重启时在途任务被硬杀、既没记录也没补偿」列为痛点，正需要可取消的退出路径加状态落盘；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 里每个请求一个 G，若下游没有超时或停止出口，洪峰里会瞬间堆积大量挂起的 G。呼应本讲一句话：**起得便宜，更要保证每条阻塞路径都等得到唤醒**。
+
+<Predict q="一个后台 goroutine 永久阻塞在无人发送的 channel 上，用 go test -race 跑会怎样？" :options='["报 WARNING: DATA RACE","测试通过无报告，但 goroutine 数与内存随请求数缓慢上涨","直接 panic","编译报错"]' answer="1" output="-race 全程无报告；runtime.NumGoroutine() 每次请求后 +1，goleak 在收尾报 found unexpected goroutines" explain="泄漏是 G 挂在等待队列里无人唤醒，不涉及冲突读写，-race 查不到；它是缓慢失血，要靠 NumGoroutine 趋势、goleak 与 goroutine profile 定位。给每条阻塞路径留 close 或 ctx.Done() 退出路径才是修复。" />
+
 ## 4. 工程实践
 
 标准库 `net/http` 的做法就是本讲最典型的落地：每个连接由独立 goroutine 服务，请求结束 G 即退出，不需要线程池。这种模式成立的前提正是「创建便宜、阻塞便宜、回收自动」。工程上要注意三点：给所有后台 goroutine 留可取消的退出路径；用监控持续观察 `runtime.NumGoroutine()` 的趋势而不是单点值；出现堆积时用 `go tool pprof` 的 goroutine profile 看阻塞在哪一行。
@@ -151,6 +250,12 @@ func main() {
 <Compare title="同一个 worker，有没有退出路径" :panels='[{"label":"泄漏写法","code":"go func() {\n    for range ch {\n    }\n}()\n// 若 ch 永不关闭，range 永不结束","note":"阻塞路径没有终止条件，G 会一直挂在等待队列里，随请求数线性增长。"},{"label":"有退出路径","code":"go func() {\n    defer wg.Done()\n    for v := range ch {\n        handle(v)\n    }\n}()\nclose(ch)","note":"唯一的发送方结束时关闭 channel，range 自然收尾，defer 保证计数归还。"}]' note="约定「谁发送、谁关闭」，让每条阻塞路径都能被唤醒，是防泄漏最有效的一条纪律。" />
 
 不要自己造「goroutine 池」来复用 G：语言已经把创建成本压到极低，池化只会引入排队、超时与归还逻辑，反而更容易泄漏。真正需要限制的是并发**数量**（例如同时最多 20 个外部请求），那应该用带缓冲的 channel 或信号量显式限流，而不是池化执行单元本身。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-039-goroutine`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-039-goroutine)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

@@ -1657,6 +1657,12 @@ go tool pprof -http=:8080 cpu.prof
 
 **坑 8：Leader 切换后客户端无脑重试。** 现象：一次用户操作被写成两条，重试流量把刚恢复的 Leader 再次打挂。原因：没有幂等键、没有重试预算、退避不随机。修正：业务幂等键加 3 次预算加指数退避加抖动，只对可重试错误码生效，`ErrSplitBrain` 与 `ErrCrossShardTxn` 直接失败。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-114-kv-4-distributed`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-114-kv-4-distributed)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给 Joint 阶段实现区间双写路由" task="当前 Membership 在 Joint 阶段仍只按新环路由，迁移区间的写可能只落到目标节点而源节点没收到。请实现 RouteForWrite：迁移区间内的 key 同时返回源与目标两个 Group，由调用方双写，FinishMigration 之后才恢复单写。" :hints='["Migration 已经带 From、To、Start、End，判断 key 是否落在区间内用 hashKey","Joint 之外一律返回单个目标 Group，不要影响正常路径","双写要保证两边都成功才算成功，任一失败整体返回错误","注意 hashKey 在 hashring.go 中已定义，同包可直接调用"]' solution='在 Membership 增加 RouteForWrite 方法：先取 ring.Get(key) 得到目标组，若 State 不是 MigrationJoint 就只返回它。Joint 时遍历 Pending，对每条 Migration 用 hashKey(key) 判断是否落在 Start 到 End 之间，命中则把 From 与 To 对应的 Group 一起加入返回切片并去重；注意环形回绕，Start 大于 End 时要拆成两段判断。调用方对返回的每个 Group 依次 Apply，任一失败立即返回错误。测试：AddNode 触发 Joint 后，构造落在迁移区间的 key，断言返回切片长度为 2；FinishMigration 加 Reset 之后断言长度回到 1。' explain="这道题把『联合共识』从概念变成可验证的断言：Joint 阶段的核心不是改路由表，而是让新旧配置对同一段数据都生效，这样无论哪一侧最终成为新配置，数据都不会丢。" />
@@ -1667,7 +1673,7 @@ go tool pprof -http=:8080 cpu.prof
 
 <Predict no="114-2" q="3 副本组把 ackBudget 设为 1（Leader 自己 1 票加 1 个 Follower），写一条 SET 后立刻 GET，结果是什么？" :options='["返回 ErrNoQuorum，读不到","SET 成功且 GET 命中最新值","SET 成功但 GET 返回旧值","直接 panic"]' answer="1" output="SET 成功且 GET 命中最新值" explain="Leader 自投 1 票加 1 个 Follower 确认共 2 票，达到 WriteQuorum(3)=2，ack 推进提交索引并应用命令；线性一致读走 Leader，直接命中已提交状态。只有 ackBudget 为 0 时才会因不足多数派返回 ErrNoQuorum，且状态机里不会出现该 key。" />
 
-<FillBlank no="114-3" tpl="3 副本的写多数派是 ___ 票，最多容忍 ___ 个节点故障；扩容采用 ___ 阶段做区间双写；跨分片操作返回 ___。" :answers='["2","1","Joint~联合共识","ErrCrossShardTxn~跨分片事务错误"]' hint="前两空来自 N/2+1 与容错边界，第三空来自成员变更状态机，第四空来自设计边界" explain="多数派为 2 票，挂 1 个还剩 2 票可用；成员变更必须经 Joint 阶段双写校验；跨 key 落到不同 Raft 组时明确拒绝，交业务层 Saga 补偿。" />
+<FillBlank no="114-3" tpl="3 副本的写多数派是 ___ 票，最多容忍 ___ 个节点故障；扩容采用 ___ 阶段做区间双写；跨分片操作返回 ___。" :answers='["2","1","Joint~联合共识","ErrCrossShardTxn~跨分片事务错误"]' hint="前两空来自 N/2+1 与容错边界，第三空来自成员变更状态机，第四空来自设计边界" explain="多数派为 2 票，挂 1 个还剩 2 票可用；成员变更必须经 Joint 阶段双写校验；跨 key 落到不同 Raft 组时明确拒绝，交业务层 Saga 补偿。" :explains='["多数派取 N/2+1，3 副本即 2 票；只有过半确认才提交，任意两个多数派必有交集，已提交日志才不会在换主后丢失。","3 副本凑够 2 票即可写入，所以挂掉 1 个节点仍剩 2 票可用；若同时挂 2 个就不足多数派，必须拒写以避免脑裂。","成员变更若一步切换，新旧配置可能各选出自己的多数派；先经 Joint 阶段对新旧区间双写校验，再提交新配置才安全。","多个 key 落到不同 Raft 组时无法用单组日志保证原子，因此明确拒写并返回该错误，交业务层用 Saga 补偿。"]' />
 
 ## 一页纸速记
 

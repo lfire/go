@@ -181,6 +181,91 @@ SCHED 1000ms: gomaxprocs=8 idleprocs=2 threads=10 spinningthreads=1 idlethreads=
 
 <Callout type="tip" title="源码阅读建议" text="读 proc.go 先定位 schedule 的 top 标签与 findRunnable 的返回签名，再顺着 runqget、globrunqget、runqsteal 三个函数看队列；sysmon 单独最后读，重点看 retake 里 schedtick 与 syscalltick 怎么比对，别和取 G 主循环混在一起。" />
 
+### 常见误读与反例
+
+调度器的误读几乎都集中在「谁在取 G」和「时间片到底多长」上。下面三条用第 2 节的程序、`schedtrace` 与 `asyncpreemptoff` 对照实验都能推翻。
+
+| 误读 | 为什么站不住（源码推导） | 正确写法或反例 |
+| --- | --- | --- |
+| 「sysmon 是一条用户 goroutine，负责挑下一个该运行的 G」 | sysmon 是 `runtime.main` 里 `newm(sysmon, nil, -1)` 起的独立 M，不绑 P、不进 `schedule` 的取 G 循环；它只做 `retake`、`handoffp`、`preemptone` 与 GC 触发。取 G 完全在 `findRunnable`：`runqget`、`globrunqget`、`netpoll`、`runqsteal` | `schedtrace` 的 `threads` 含 sysmon 但 `gomaxprocs` 不含，`NumGoroutine` 也不把它算进普通 G；第 2 节紧循环程序里让 main 重新被调度的是 `asyncPreempt`，不是 sysmon 亲自换 G |
+| 「本地队列 256 满了 G 就被丢弃，或者 GOMAXPROCS 越大吞吐越高」 | `runqput` 放不下时把一半本地 G 连同新 G 批量搬进加锁的 `schedt.runq`，是转移不是丢弃；`GOMAXPROCS` 只决定 P 的个数，远超物理核只会增加切换与 `runqsteal` 的跨 P 开销 | 第 3 段程序 600 个 G 同时就绪时 `runqueue` 明显大于 0，但 `wg.Wait()` 仍能全部完成；把值调到远大于核数反而让 `spinningthreads` 与切换成本上升 |
+| 「10ms 时间片意味着每个 G 恰好跑 10ms 被换下，纯计算循环一直都能被抢占」 | `forcePreemptNS = 10ms` 只是 sysmon `retake` 检查 `schedtick` 是否停滞的上限，真正的换下时刻取决于 `asyncPreempt` 的安全点密度；异步抢占是 Go 1.14 才引入的，此前无函数调用的紧循环确实能卡住 main | 用 `GODEBUG=asyncpreemptoff=1` 在 `GOMAXPROCS(1)` 下跑第 2 段程序作对照：关掉后 main 可能长期拿不到 CPU，反过来证明是 sysmon 驱动的异步抢占在起作用 |
+
+<Quiz q="600 个 G 同时就绪、schedtrace 里 runqueue 明显大于 0，说明什么？" :options='["有 G 被调度器丢弃","本地队列装不下后溢出到全局队列","P 不够需要调大 GOMAXPROCS","发生了死锁"]' answer="1" explain="runqput 在本地 runq 满时把一半 G 批量搬进加锁的 schedt.runq，schedtrace 的 runqueue 就是全局队列积压数；G 没被丢弃，wg.Wait 仍能全部完成。" />
+
+### 观测手段的能证与不能证
+
+第 3 节按开销从粗到细排了五种手段，这里补上各自的证据边界：
+
+| 手段 | 能证明什么 | 不能证明什么 |
+| --- | --- | --- |
+| `GODEBUG=schedtrace=1000` | 每秒采样时刻的 P 数、全局 `runqueue` 积压、`idleprocs` 与 `spinningthreads` 趋势 | 短于采样间隔的抖动会被抹平；它证明不了某个具体请求的调度延迟 |
+| `scheddetail=1` | 每个 P 的 `runqsize`、`schedtick`、`syscalltick` 快照 | 输出量大不宜长期常开；单帧快照不能当时间序列结论 |
+| `go tool trace` | 微秒级 G 让出、P 占用与因锁或系统调用阻塞的时间线 | 采集窗口之外的行为；也不能量化「换个算法能快多少」 |
+| `GODEBUG=asyncpreemptoff=1` | 关掉异步抢占后紧循环能否卡住 main，用作机制对照 | 不能代表线上真实配置，也不会触发生产问题，仅本地实验用 |
+
+一句话记边界：`schedtrace` 证明「队列有没有积压」，`trace` 证明「某个 G 为什么等了这么久」，两者都不证明「服务该调 GOMAXPROCS 了」——那个结论要靠压测的 QPS 与 p99。
+
+### 用 go tool trace 看微秒级调度延迟
+
+`schedtrace` 是秒级快照，遇到「CPU 没跑满但 p99 偶发尖刺」就要换 `runtime/trace`。先用基准测试触发一段并发负载，再开浏览器看时间轴：
+
+```bash
+go test -run='^$' -bench=BenchmarkBusy -trace=trace.out -benchtime=200x
+go tool trace -http=127.0.0.1:0 trace.out
+```
+
+也可以直接在程序里埋点，区间更精确。下面是完整可编译的写法：
+
+```go
+package main
+
+import (
+	"os"
+	"runtime"
+	"runtime/trace"
+	"sync"
+)
+
+func main() {
+	f, err := os.Create("trace.out")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if err := trace.Start(f); err != nil {
+		panic(err)
+	}
+	defer trace.Stop()
+
+	var wg sync.WaitGroup
+	for i := 0; i < runtime.GOMAXPROCS(0)*4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sum := 0
+			for j := 0; j < 1_000_000; j++ {
+				sum += j % 7
+			}
+			runtime.KeepAlive(sum)
+		}()
+	}
+	wg.Wait()
+}
+```
+
+```text
+View trace / Goroutine analysis / Network blocking profile / Synchronization blocking profile / Syscall blocking profile / Scheduler latency profile
+```
+
+`go tool trace -http` 启动后浏览器给出的六个视图各有分工：`View trace` 按时间轴展示每个 P 上跑了哪个 G、G 何时就绪又何时才被选中，中间的空白就是调度延迟；`Goroutine analysis` 按 G 聚合其阻塞与执行片段；`Scheduler latency profile` 把「就绪到运行」的等待按调用栈排行，是判断 `findRunnable` 有没有拖后腿最直接的一张图；其余三个 blocking profile 分别定位网络、同步原语与系统调用的阻塞来源。只有 `trace.Start` 到 `trace.Stop` 之间会被记录，超出这个区间的行为一概看不到——这正是它区别于常开的 `schedtrace` 的地方。trace 采集本身有中量开销，线上只在预发或低峰短窗口抓几十秒。
+
+### 与 L10 源码级实战的呼应
+
+- [实战 07 · 并发爬虫](/projects/concurrent-crawler)：worker pool 并发版的 worker 数要贴着 `GOMAXPROCS` 与 I/O 比例调，不是越多越好；去重与限速用的 channel 会把大量 G 挂到等待队列，`runqueue` 与 `spinningthreads` 正好判断是「抓取本身慢」还是「调度不过来」。
+- [实战 05 · 日志分析 ETL 管道](/projects/data-log-etl)：扇出扇入聚合时，某阶段若写了无函数调用的解析紧循环就会独占一个 P，本讲 `asyncPreempt` 保证它仍能被换下，而 `go tool trace` 的 Proc 视图能看出各阶段 P 是否被占满。
+- [实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway)：SSE 流式转发是大量短阻塞 G，靠 `netpoll` 就绪唤醒而非 sysmon；`findRunnable` 把 netpoll 排在 `runqsteal` 之前，正是这类 I/O 密集服务延迟低的源码依据。
+
 ## 4. 工程实践
 线上出现「CPU 没跑满但延迟高」时，先看是不是 P 闲置或 G 排队。`GODEBUG=schedtrace=1000,scheddetail=1` 每秒打印一次各 P 的 `runq` 长度、全局 `runqueue` 与 `nmspinning`；若要精确到微秒级的调度延迟，再用 `runtime/trace` 采集后交给 `go tool trace` 看 Proc 视图。这两者都是只读观测，采样窗口控制在几十秒内即可。
 
@@ -189,6 +274,12 @@ GODEBUG=schedtrace=1000,scheddetail=1 ./myserver 2> sched.log
 ```
 
 <Compare title="CPU 密集循环怎么写才不拖累调度" :panels='[{"label":"写法 A：手工让出","code":"for _, it := range items {\n    work(it)\n    runtime.Gosched()\n}","note":"每次迭代都主动让出，语义直白但让出过于频繁，吞吐下降，且是旧版本遗留写法"},{"label":"写法 B：依赖异步抢占","code":"for _, it := range items {\n    work(it)\n    if ctx.Err() != nil {\n        return\n    }\n}","note":"循环里有函数调用或阻塞点即可被安全抢占，配合 context 还能及时取消，用 schedtrace 验证无长尾"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l9-advanced/lesson-095-runtime-scheduler`](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-095-runtime-scheduler)。clone 仓库后进入 `examples/l9-advanced`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 schedtrace 观察队列溢出" task="把第三段程序的 n 改成 600 配合 schedtrace 运行，观察全局 runqueue 峰值；再改成 100 对比。" :hints='["用 GODEBUG=schedtrace=100 缩短采样间隔", "关注 runqueue 字段"]' solution="n := 600\nstart := make(chan struct{})\nwg.Add(n)\nfor range items {\n    go func() {\n        defer wg.Done()\n        waitOn(start)\n    }()\n}\nclose(start)\nwg.Wait()" explain="n 为 600 时大量 G 同时就绪，超过本地队列容量 256，溢出到全局队列；n 为 100 时几乎无溢出。完整代码见第三段。" />

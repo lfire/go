@@ -158,6 +158,253 @@ GOEXPERIMENT=noswissmap go run main.go
 
 <Callout type="warn" title="unsafe 镜像的风险边界" text="用镜像结构读 count / B 只为教学：它依赖 runtime 私有布局，换一个 Go 版本就可能错位甚至崩溃。生产代码永远不要这么干，这正是第 37 讲 unsafe 主题要展开的边界。此外，并发读写 map 会直接 fatal error，delete 不会缩容，元素地址也不可取。" />
 
+### 推导链：从 runtime/map.go 推到每一个可观察行为
+
+以下符号以 Go 1.23 及之前的经典实现为准，源文件是 `runtime/map.go`：`hmap` 的 `count`、`flags`、`B`、`noverflow`、`hash0`、`buckets`、`oldbuckets`、`nevacuate`、`extra` 记目录；`bmap` 以 `tophash [bucketCnt]uint8` 开头（`bucketCnt = 8`），后面跟 8 个键、8 个值与一个 `overflow *bmap`；常量 `loadFactorNum/loadFactorDen` 给出约 6.5 的负载阈值。把「结构」推到「现象」的四条链是：
+
+- **遍历无序**：`mapiterinit` 用 `fastrand` 随机选起始桶 `r` 与起始槽 `off`，`mapiternext` 从那里绕一圈；若 `oldbuckets` 非空（渐进搬迁中），还要兼顾新旧两个桶数组。随机起点加迁移状态，共同决定了「多轮 range 顺序不同」。
+- **并发写 fatal**：`mapassign` 与 `mapdelete` 开头检查 `h.flags&hashWriting`，置位则直接 `fatal("concurrent map writes")`。这是运行时主动检测，与 `-race` 的数据竞争报告是两回事。
+- **元素不可取址**：`mapassign` 返回的槽位指针只在本次调用内有效，`growWork`/`evacuate` 会在后续写里把元素搬到新桶，地址随时会变，语言因此直接禁止 `&m[k]`。
+- **delete 不缩容、扩容不卡顿**：`mapdelete` 只把 `tophash` 置为 `emptyOne` 并 `count--`，不归还 `buckets`；`hashGrow` 只分配新桶、把 `oldbuckets` 指向旧的并置 `nevacuate = 0`，真正搬迁由后续每次 `mapassign`/`mapdelete` 里的 `growWork` 顺带做一两个桶。
+
+把下面四个操作存成 `map.go`，用汇编输出验证「源码语法确实被降级成这些运行时函数」：
+
+```go
+package main
+
+import "fmt"
+
+//go:noinline
+func ops(m map[int]int, k, v int) int {
+	m[k] = v
+	x := m[k]
+	delete(m, k)
+	n := 0
+	for range m {
+		n++
+	}
+	return x + n
+}
+
+func main() {
+	m := make(map[int]int)
+	fmt.Println(ops(m, 1, 2))
+}
+```
+
+```bash
+go build -gcflags=-S -o /dev/null map.go 2>&1 | grep -E 'makemap|mapassign|mapaccess|mapdelete|mapiter'
+# 若因构建缓存没有输出，先 go clean -cache 或追加 -a
+```
+
+<OutputBox title="go build -gcflags=-S 片段（arm64 / Go 1.23 实测）" output="0x0040 00064 CALL runtime.mapassign_fast64(SB)\n0x005c 00092 CALL runtime.mapaccess1_fast64(SB)\n0x0078 00120 CALL runtime.mapdelete_fast64(SB)\n0x00a4 00164 CALL runtime.mapiterinit(SB)\n0x00b8 00184 CALL runtime.mapiternext(SB)" note="四列依次是地址、偏移、指令、符号；_fast64 是按键类型选出的特化版本，amd64 下地址与寄存器名不同。" />
+
+逐字段解释：`m[k] = v`、`x := m[k]`、`delete(m, k)` 分别降级为 `mapassign_fast64`、`mapaccess1_fast64`、`mapdelete_fast64`，`mapiterinit` 与 `mapiternext` 则成对出现在 `for range m` 里——说明 `range` 是运行时迭代器而非简单数组扫描，也是「随机起点」能生效的前提；`_fast64` 后缀由键类型与平台字长决定（32 位或 `map[string]int` 会换成别的后缀，正是版本与平台差异的一处证据）。注意 `make(map[int]int)` 在较新版本已被内联、未必出现独立的 `makemap_small` 调用，别把「某个符号没出现」直接当成「没发生分配」。另一个可直接复现的边界实验是 `nil` map：`len(nilm)`、读、`delete`、`range` 都安全，唯独 `nilm[1] = 1` 触发 `panic: assignment to entry in nil map`。
+
+**为什么这样设计**：一次性 rehash 在大 map 上会产生肉眼可见的停顿，与低延迟目标冲突；渐进搬迁把成本摊到后续每次写，代价是扩容期间一次查找可能要查新旧两个桶、遍历要兼顾两边。桶内固定 8 槽加 1 字节 `tophash`，让查找先在一个缓存行内比完 8 个哈希前缀、命中才比完整键，CPU 缓存友好；负载因子取 6.5 是「溢出桶概率」与「内存利用率」的折中——取 1.0 会浪费大量空槽，取接近 8 会让冲突链过长。替代方案是开放寻址（线性探测），Go 1.24 的 Swiss Table 证明它吞吐更优，但要重写整个 runtime 且维持对外语义与渐进扩容不变，过渡成本极高，所以到 1.24 才默认启用。这也说明「桶加溢出桶」不是唯一解，而是特定约束下的工程取舍。
+
+### make 的 hint 如何被换算成 B：一条可代入的公式
+
+上一节用 `unsafe` 镜像读出了插入 14 个键后的 `B`，但没说 `make(map[K]V, hint)` 里的 hint 究竟怎么变成 B。`runtime/map.go` 的 `makemap` 把 hint 交给 `overLoadFactor(hint, B)` 反复试探：`B` 从 0 起，只要 `hint > bucketCnt`（8）且 `hint > loadFactorNum*(1<<B)/loadFactorDen`（常量 `13/2`，即约 `6.5×2^B`）就 `B++`，直到条件不成立；随后按 `bucketShift(B)` 分配 `1<<B` 个桶，写进 `h.B`，`h.count` 置 0，`h.buckets` 指向新桶数组。分支条件是 `hint <= 8` 时 B 直接保持 0。可观察输出就是 `h.B` 与桶数。
+
+用镜像结构把 hint 到 B 的整条换算扫一遍：
+
+```go
+package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+// hmap 是 runtime/map.go 经典结构的镜像，仅用于教学观察
+// Go 1.24 起默认换成 Swiss Table，本镜像不适用
+type hmap struct {
+	count      int
+	flags      uint8
+	B          uint8
+	noverflow  uint16
+	hash0      uint32
+	buckets    unsafe.Pointer
+	oldbuckets unsafe.Pointer
+	nevacuate  uintptr
+	extra      unsafe.Pointer
+}
+
+func fieldB(m map[int]int) uint8 {
+	return (*hmap)(*(*unsafe.Pointer)(unsafe.Pointer(&m))).B
+}
+
+func main() {
+	for _, hint := range []int{0, 8, 9, 13, 14, 52, 53, 10000} {
+		b := fieldB(make(map[int]int, hint))
+		fmt.Printf("hint %5d → B=%2d 桶数=%d\n", hint, b, 1<<b)
+	}
+}
+```
+
+```bash
+go version
+go run hint.go
+# Go 1.24 及以上若默认 Swiss Table，用下面的开关复现经典布局
+GOEXPERIMENT=noswissmap go run hint.go
+```
+
+<OutputBox title="hint → B 实测（Go 1.23 / arm64，经典实现）" output="hint     0 → B= 0 桶数=1\nhint     8 → B= 0 桶数=1\nhint     9 → B= 1 桶数=2\nhint    13 → B= 1 桶数=2\nhint    14 → B= 2 桶数=4\nhint    52 → B= 3 桶数=8\nhint    53 → B= 4 桶数=16\nhint 10000 → B=11 桶数=2048" note="每个档位的临界值就是 6.5 乘 2 的 B 次方，跨过即进一档。" />
+
+逐字段解释：把公式写成 `B = max(0, ceil(log2(hint/6.5)))`（hint 大于 8 时），对照实测逐项代入。`9` 与 `13` 都落在 B=1：`6.5×2 = 13`，13 恰好不超过阈值；`14 > 13` 立刻进 B=2。`52 = 6.5×8` 不超阈值故 B=3，`53 > 52` 进 B=4。`hint=10000` 时 `6.5×1024 = 6656 < 10000`、`6.5×2048 = 13312 ≥ 10000`，故 B=11、2048 个桶。`hint` 为 0 或 8 时 B=0，只给 1 个桶——`hint` 是「期望元素数」而非「桶数」，除以 6.5 是因为每桶平均允许装约 6.5 个元素，这正是上一节「负载因子超过 6.5 触发翻倍扩容」的反向计算。
+
+**反直觉结论的证伪**：「`make(map[K]V, n)` 就是预分配好能装 n 个元素的桶」是错的。n=13 只给 2 个桶、n=8 只给 1 个桶，桶数由 `hint/6.5` 反推，而不是 1 比 1；给 hint 的意义是让 `makemap` 一次把 B 定到位、省掉插入过程中的多次翻倍扩容与渐进搬迁（第 4 节 `AllocsPerRun` 量化过），不是「预留 n 个槽」。另一个易错点是「hint 越大越好」：B 每加一，桶数翻倍，`make(map[int]int, 10000)` 一上来就占 2048 个桶的内存，与实际只存少量键相比是浪费。
+
+边界：`loadFactorNum/loadFactorDen = 13/2`、`bucketCnt = 8` 是 Go 1.23 经典实现的常量，Go 1.24 起默认 Swiss Table 没有 B 字段、`GOEXPERIMENT=noswissmap` 仅用于复现且不是长期契约；`B` 还受最大 B 限制，极大 hint 不会无限增长；`unsafe` 镜像读私有字段跨版本即错位甚至崩溃；32 位平台桶的内存布局不同但公式不变；`makemap_small` 在 hint 很小时可能被内联，别把「没看到调用」当成「没分配」。
+
+### Go 1.24 Swiss Table：ctrl 分组、扩展哈希与一条可算的探测序列
+
+本讲前面已标注「Go 1.24 起默认换成 Swiss Table」，但只说了「内部结构完全不同」。这一节把它推到字段级。前提必须写清：**本机是 Go 1.23.8，以下符号来自 Go 1.24.0**，可用 `GOTOOLCHAIN=go1.24.0 go version` 拉到真实工具链后逐一核对；1.23 的 `hmap / B / oldbuckets / 负载因子 6.5` 在 1.24 里不再存在。源码落点从 `runtime/map.go` 迁到 `internal/runtime/maps/`（`map.go`、`group.go`、`table.go`），`runtime/map_swiss.go` 只留一层薄包装：`makemap` 调 `maps.NewMap`，`mapassign`/`mapaccess1` 用 `//go:linkname` 指到 `internal/runtime/maps`。
+
+**哈希被切成两半**（`internal/runtime/maps/map.go`）：
+
+```text
+h1(h) = h >> 7      // 高 57 位：选 table、选 group
+h2(h) = h & 0x7f    // 低 7 位：写进控制字节
+```
+
+**ctrl 分组**（`group.go`）：`abi.SwissMapGroupSlots = 8`（`SwissMapGroupSlotsBits = 3`），一个 group 是 8 个槽加一个 `ctrlGroup uint64` 控制字，每槽 1 字节控制位。编码只有三种：
+
+```text
+empty   = 0b10000000   (ctrlEmpty)
+deleted = 0b11111110   (ctrlDeleted)
+full    = 0 hhhhhhh    (最高位 0，低 7 位就是 h2)
+```
+
+最高位把「空/删」与「占用」分开，于是 `ctrlGroup.matchH2(h2)` 能用一条 64 位运算**并行比对 8 个槽**（`v := g ^ (bitsetLSB * h2)`；`return ((v - bitsetLSB) &^ v) & bitsetMSB`），命中集合用 `bitset.first() = TrailingZeros64(b) >> 3` 取第一个候选；amd64 上这段被 SIMD intrinsic 替换。因为只用了 7 位哈希，单槽假阳性约 `1/128 ≈ 0.7%`，所以每个命中后仍要比完整 key。经典 `bmap` 的 `tophash [8]uint8` 也是 8 个前缀，但它是逐字节比较；Swiss Table 把它压成一次机器字/一条 SIMD 指令，这是吞吐差异的第一来源。
+
+**探测序列**（`table.go`）：`probeSeq` 用三角形（二次）探测 `p(i) := (i² + i)/2 + h1 (mod mask+1)`，`makeProbeSeq(h1, mask)` 令 `offset = h1 & mask`、`index = 0`，`next()` 执行 `index++；offset = (offset + index) & mask`。当 group 数是 2 的幂时，`(i²+i)/2` 在 `Z/(2^m)` 上是双射，一个长度 `mask+1` 的周期恰好访问每个 group 一次；探测在「遇到含空槽的 group」时终止。删除因此不能随便把槽标 empty：若该 group 已满，必须标 `ctrlDeleted` 墓碑，否则后续探测会提前停；插入优先复用墓碑。经典 hmap 用溢出桶链表承接冲突，Swiss Table 用组内并行加组间二次探测，不再有溢出桶。
+
+**负载与增长不是一回事**（`table.go`）：`maxAvgGroupLoad = 7`（7/8 = 0.875，与 Abseil 一致，但 Abseil 一组 16 槽），`resetGrowthLeft` 的算式是：
+
+```text
+capacity 小于等于 8  → growthLeft = capacity - 1（单 group 必须留 1 个空槽终止探测）
+capacity 大于 8      → growthLeft = capacity * 7 / 8
+```
+
+代入 16/64/1024 得 14/56/896。`table` 记 `used`、`capacity`、`growthLeft`、`localDepth`、`index`，`maxTableCapacity = 1024` 是一张表分裂前的上限。
+
+**扩展哈希取代 `oldbuckets`**（`map.go` 顶层注释）：`Map` 的 `dirPtr` 指向一个长度 `1 << globalDepth` 的目录，目录项是 `*table`，多个目录项可指向同一张表；`h1` 的高位（配合 `globalShift = 64 - globalDepth`）选目录下标，低位在表内选 group。某张表满了不是整表翻倍，而是 `table.split` 把它按 `localDepthMask(localDepth)` 拆成两张、`Map.installTableSplit` 更新目录——**渐进扩容被保留，但载体从 `oldbuckets + nevacuate` 换成了目录分裂**，`nevacuate`、`overflow` 这类字段自然消失。≤8 个键的小 map 更干脆：`dirPtr` 直接指向单个 group，`dirLen = 0`，走 `putSlotSmall` / `getWithKeySmall`，连 `table` 都不建。`runtime/map_swiss.go` 里仍留 `loadFactorNum = 7`，但已找不到 `hmap`、`B`、`oldbuckets`。
+
+新观察角度一：**把算法搬到本地算一遍**，不依赖 1.24 运行时也能看到 ctrl 位图与探测序列。存成 `swiss.go`（公式与 1.24 源码逐行对应）：
+
+```go
+package main
+
+import (
+	"fmt"
+	"math/bits"
+)
+
+const (
+	ctrlEmpty   = uint8(0b10000000)
+	ctrlDeleted = uint8(0b11111110)
+	bitsetLSB   = uint64(0x0101010101010101)
+	bitsetMSB   = uint64(0x8080808080808080)
+	groupSlots  = 8
+	maxLoad     = 7
+)
+
+// 对应 Go 1.24 internal/runtime/maps/map.go 的 h1 / h2
+func h1(h uint64) uint64 { return h >> 7 }
+func h2(h uint64) uint64 { return h & 0x7f }
+
+// 对应 group.go 的 ctrlGroupMatchH2 可移植实现
+func matchH2(g uint64, h uint64) uint64 {
+	v := g ^ (bitsetLSB * h)
+	return ((v - bitsetLSB) &^ v) & bitsetMSB
+}
+
+// 对应 table.go 的 probeSeq：p(i) = (i^2+i)/2 + h1 (mod mask+1)
+func probe(h uint64, mask uint64, steps int) []uint64 {
+	off := h & mask
+	out := []uint64{off}
+	for i := 1; i <= steps; i++ {
+		off = (off + uint64(i)) & mask
+		out = append(out, off)
+	}
+	return out
+}
+
+// 对应 table.go 的 resetGrowthLeft
+func growthLeft(capacity int) int {
+	if capacity <= groupSlots {
+		return capacity - 1
+	}
+	return capacity * maxLoad / groupSlots
+}
+
+func main() {
+	var g uint64
+	ctrls := []uint8{0x2a, ctrlEmpty, 0x2a, 0x2a, 0x05, ctrlDeleted, 0x2a, ctrlEmpty}
+	for i, c := range ctrls {
+		g |= uint64(c) << (8 * uint(i))
+	}
+	m := matchH2(g, 0x2a)
+	fmt.Printf("ctrlGroup=%016x  h2=0x2a  matchH2=%016x\n", g, m)
+	fmt.Print("命中槽位:")
+	for i := 0; i < groupSlots; i++ {
+		if m&(uint64(0x80)<<(8*uint(i))) != 0 {
+			fmt.Printf(" %d", i)
+		}
+	}
+	fmt.Printf("  首个=%d\n", bits.TrailingZeros64(m)>>3)
+
+	for _, cap := range []int{8, 16, 64, 1024} {
+		fmt.Printf("capacity=%4d growthLeft=%4d 负载上限=%.3f\n",
+			cap, growthLeft(cap), float64(growthLeft(cap))/float64(cap))
+	}
+
+	h := uint64(0x9e3779b97f4a7c15)
+	fmt.Printf("hash=0x%016x h1=0x%013x h2=0x%02x\n", h, h1(h), h2(h))
+	for _, mask := range []uint64{3, 7} {
+		fmt.Printf("groups=%d 探测序列(整周期)=%v\n", mask+1, probe(h1(h), mask, int(mask)))
+	}
+}
+```
+
+<OutputBox title="swiss.go 输出（公式代入值，1.23/1.24 都能跑）" output="ctrlGroup=802afe052a2a802a  h2=0x2a  matchH2=0080000080800080\n命中槽位: 0 2 3 6  首个=0\ncapacity=   8 growthLeft=   7 负载上限=0.875\ncapacity=  16 growthLeft=  14 负载上限=0.875\ncapacity=  64 growthLeft=  56 负载上限=0.875\ncapacity=1024 growthLeft= 896 负载上限=0.875\nhash=0x9e3779b97f4a7c15 h1=0x13c6ef372fe94f8 h2=0x15\ngroups=4 探测序列(整周期)=[0 1 3 2]\ngroups=8 探测序列(整周期)=[0 1 3 6 2 7 5 4]" note="命中槽位恰是放入 h2=0x2a 的 0/2/3/6；两个探测序列都是 0 到 mask 的一个排列。" />
+
+逐字段解释：`ctrlGroup=802afe052a2a802a` 是小端排布的 8 个控制字节（槽 1 与 7 是 `0x80` empty、槽 5 是 `0xfe` deleted、其余为 full）；`matchH2=0080000080800080` 里每个 `0x80` 标记一个命中字节，落在 0、2、3、6 四个槽，正是 `h2=0x2a` 的那几个 full 槽——`0x05` 与 `0xfe` 都不误报，验证了「最高位区分空/删/占用」。`首个=0` 是 `TrailingZeros64 >> 3` 的结果。`growthLeft` 四行代入 `capacity*7/8`，8 槽特例是 `8-1=7`；`0.875` 与经典实现 `13/2 ÷ 8 = 0.8125` 的差距，就是「每 8 槽允许 7 满」对「每桶平均 6.5 满」的取舍。最后两行把 `probeSeq` 的公式坐实：4 组的 `[0 1 3 2]` 与 8 组的 `[0 1 3 6 2 7 5 4]` 都是 `0..mask` 的排列，一个周期内每组合好访问一次，这正是三角形探测在 2 的幂 group 数上为双射的可观察证据。
+
+新观察角度二：**用真实 1.24 工具链核对符号**，而不是只信文字。下面这组命令不需要改本机默认 Go：
+
+```bash
+GOTOOLCHAIN=go1.24.0 go version
+GOTOOLCHAIN=go1.24.0 go build -o m24bin m24.go
+go tool nm ./m24bin | grep 'internal/runtime/maps' | head -12
+R24=$(GOTOOLCHAIN=go1.24.0 go env GOROOT)
+grep -n 'loadFactorNum\|SwissMapGroupSlots' "$R24/src/runtime/map_swiss.go" "$R24/src/internal/abi/map_swiss.go"
+grep -c 'type hmap\|oldbuckets\|nevacuate' "$R24/src/runtime/map_swiss.go"
+go build -o m23bin m24.go && go tool nm ./m23bin | grep -E 'runtime\.makemap|runtime\.mapassign' | head -4
+```
+
+`m24.go` 就是第 2 节那个建 map、插 8 个键再 `len`/读的程序（用 `make(map[int]int, 8)` 即可）。
+
+<OutputBox title="1.24 符号与 1.23 对照（darwin arm64）" output="100002a90 T internal/runtime/maps.NewMap\n100002fb0 T internal/runtime/maps.(*Map).getWithKey\n100003200 T internal/runtime/maps.(*Map).putSlotSmall\n100002d10 T internal/runtime/maps.(*Map).installTableSplit\n100004260 T internal/runtime/maps.(*table).getWithKey\n1000051d0 T internal/runtime/maps.(*table).grow\n100004ff0 T internal/runtime/maps.(*table).split\n100004060 T internal/runtime/maps.newTable\n--- 1.24 源码 ---\nruntime/map_swiss.go:18: loadFactorNum = 7\ninternal/abi/map_swiss.go:18: SwissMapGroupSlots = 8\n--- 1.23 对照 ---\n100061f40 T runtime.makemap\n100062310 T runtime.mapassign" note="T 是代码段；1.24 的目录分裂与 table.grow 都成了独立符号，1.23 仍是 makemap/mapassign。" />
+
+逐字段解释：`internal/runtime/maps.NewMap` 是 1.24 `makemap` 的实际落点；`putSlotSmall` 对应 ≤8 键的单 group 快路径；`installTableSplit` 与 `(*table).split` 是「渐进扩容换成目录分裂」的符号证据；`newTable`/`(*table).grow`/`getWithKey` 说明查找与增长都下沉到 `table`。`loadFactorNum = 7` 与 `SwissMapGroupSlots = 8` 把 7/8 负载与 8 槽分组从注释变成可查常量；`grep -c` 对 `type hmap`/`oldbuckets`/`nevacuate` 计数为 0，证明那套字段确实被移除。1.23 对照里的 `runtime.makemap` / `runtime.mapassign` 仍是本讲前几节推导的落点——同一份 `m24.go`、两个工具链，符号表把版本差异直接摊开。
+
+边界：以上全部是 Go 1.24.0 的实现细节，`GOTOOLCHAIN` 切换只是拉工具链、不改变本机默认 1.23.8 的结论；`internal/runtime/maps` 是 internal 包，业务代码不可导入，本讲只作源码依据；`go tool nm` 的地址随构建变化、只比符号名；`matchH2` 的假阳性率 1/128 决定了「命中后必须比完整 key」，别把 bitset 当精确匹配；`probeSeq` 的双射性依赖 group 数为 2 的幂，模拟里周期只取 `mask+1` 步；`GOEXPERIMENT=noswissmap` 在 1.24 只用于回退复现、不是长期契约；对外语义（无序、并发不安全、不能取元素地址、删除不缩容）与经典实现一致，本讲前面的结论仍然成立。下一版可继续展开的点是目录分裂时 `globalDepth` 与 `globalShift` 的联动、以及 `Iter` 如何在分裂期间保证不丢不重。
+
+### 边界、常见误解与前后联系
+
+| 常见误解 | 正解 | 可验证依据 |
+| --- | --- | --- |
+| `delete` 大量键后 map 会缩容、内存归还 | `mapdelete` 只清槽位并 `count--`，桶数组保留；要释放需新建小 map 搬剩余键 | 第 3 节的 `HeapAlloc` 实验 |
+| `range` 偶尔两轮顺序相同说明有序 | `mapiterinit` 每次随机起点，扩容期还兼顾新旧桶，顺序永不保证；要稳定输出必须显式 `sort` | 第 2 节连跑三轮的输出 |
+| 并发读写 map 用 `-race` 会报 data race，加锁再测就行 | `hashWriting` 位让运行时直接 fatal error，该检测与竞态检测器无关 | 多 goroutine 无锁写同一 map 立即崩 |
+
+边界要点：`nil` map 的读、`len`、`delete`、`range` 都安全，写入 panic；迭代期间删除或新增键是否被遍历到不保证；map 的 key 必须可比较（slice、map、func 不能作键）；Go 1.24 起默认 Swiss Table，`hmap`/`bmap` 这套字段全部失效，`GOEXPERIMENT=noswissmap` 仅用于复现经典布局、不是长期契约；`unsafe.Sizeof(m)` 只给指针宽度，看不到桶内存；用 `unsafe` 镜像读私有字段跨版本即错位甚至崩溃；`map` 不是并发安全容器，多 goroutine 共享必须外部同步或换 `sync.Map`（阶段四）。
+
+前后联系：第 16 讲（map 的使用）与第 26 讲（描述符）在这里合流；第 98 讲（编译器源码：SSA、逃逸与内联）会看 map 语法在 `cmd/compile/internal/walk` 阶段如何被降级为上述运行时调用、以及 `_fast64` 这类按类型特化是怎么选出来的，第 97 讲（channel/mutex 源码与锁竞争）给出并发 map 与 `sync.Map` 的实现依据，第 100 讲（极致性能优化）把 `make(map[K]V, n)` 预分配列为常规优化。另外第 96 讲（GC 源码）会解释 `bmap.overflow` 这类指针字段为何让 map 所在 span 必须是 scan 而不是 noscan。
+
 ## 4. 工程实践
 
 知道扩容代价，最直接的收益就是「建 map 时给足 hint」。用 `testing.AllocsPerRun` 量化：
@@ -198,6 +445,12 @@ func main() {
 
 工程清单：能预估规模就 `make(map[K]V, n)`；任何依赖遍历顺序的逻辑都要改成显式排序；多 goroutine 共享时加锁或用并发安全的替代方案（阶段四展开）；删除大量键后若确实要释放内存，做法是新建一个小 map 把剩余键搬过去，而不是指望 `delete`；最后，别用 `unsafe` 去窥探内部字段，升级 Go 版本时这类代码是第一批坏掉的。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l3-core/lesson-029-map-internals`](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-029-map-internals)。clone 仓库后进入 `examples/l3-core`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="证明遍历无序" task="写一个程序：插入 8 个键，连续 range 五次并打印键顺序；再对键做一次 sort 后输出，说明为什么业务代码需要显式排序。" :hints='["把每轮的 key 收进切片再打印","sort.Strings 可以对字符串切片排序"]' solution="for r := 0; r != 5; r++ {\n    for k := range m { fmt.Print(k) }\n    fmt.Println()\n}" explain="range 的起点是随机的，多轮顺序不同；需要稳定输出时必须把 key 收集起来显式排序。" />
@@ -208,7 +461,7 @@ func main() {
 
 <Predict no="29-2" q="插入 20 万个键后再删掉 19.9 万个，len 与底层桶内存会怎样？" :options='["len 与桶内存都降到 1000 量级","len 降到 1000，但桶数组不会自动缩小","len 不变","map 自动缩容并触发 panic"]' answer="1" output="len 降到 1000，桶仍在，HeapAlloc 不会成比例下降" explain="delete 只清槽位，不归还桶数组；map 没有自动缩容机制。要真正释放，就重建一个新 map 把剩余键搬过去。" />
 
-<FillBlank no="29-3" tpl="经典 map 结构里记录桶个数对数的字段是 ___，一个 bmap 桶最多放 ___ 个键值对；负载因子超过约 6.5 会触发翻倍扩容。" :answers='["B","8"]' hint="填一个字段名与一个数字" explain="B 决定桶数为 2 的 B 次方；每桶 8 个槽，装不下时挂溢出桶。" />
+<FillBlank no="29-3" tpl="经典 map 结构里记录桶个数对数的字段是 ___，一个 bmap 桶最多放 ___ 个键值对；负载因子超过约 6.5 会触发翻倍扩容。" :answers='["B","8"]' hint="填一个字段名与一个数字" explain="B 决定桶数为 2 的 B 次方；每桶 8 个槽，装不下时挂溢出桶。" :explains='["hmap 存的是桶数对 2 取对数得到的 B，桶数为 2 的 B 次方；扩容只需把 B 加一，桶数便翻倍。","每个 bmap 固定 8 个槽位，配合 top hash 快速筛选；一桶装满后不立刻扩容，而是先挂溢出桶承接多出的键值。"]' />
 
 ## 一页纸速记
 

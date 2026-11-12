@@ -1373,19 +1373,25 @@ func main() {
 
 **坑六（附加）：上下文丢失让日志串不起来。** 现象是跨服务排查只能靠猜时间。原因是每个服务自己新建 logger，没从 gRPC metadata 提取 `x-trace-id`。修正是统一拦截器注入 `trace_id` 到日志 context（第 9 节）。提前发现：联调时抽查任意一笔订单，要求 4 个服务与 Kafka 消息能用一个 ID 全串起来。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-115-micro-ecommerce`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-115-micro-ecommerce)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="让补偿失败也能收敛" task="当前 6.3 的 compensate 在重试耗尽后只返回一个错误，若进程此刻崩溃，待补偿记录就丢了。请设计持久化机制，使补偿一定能做完，并写出关键结构与测试思路。" :hints='["补偿不能只调用一次就丢，需要一条带状态的持久记录","先把待补偿写入 durable 表再尝试执行，崩溃后靠扫描续跑","worker 要有退避重试，且 undo 本身必须幂等"]' solution="定义 Compensation{Step, IdemKey, Payload, Done, Tries} 记录；compensate 失败时先把每条待补偿 INSERT 到 compensation 表（与订单状态变更同事务）再尝试执行；后台 worker 扫描 Done=false 且 Tries 小于预算的记录，执行幂等 undo 成功后置 Done=true，失败则 Tries 加一并按退避重排。\n测试：让第一次 Release 返回错误、第二次成功，断言 worker 重试后库存最终回补且只回补一次；再模拟进程在「已写记录未执行」时崩溃，重启后断言记录被扫描并收敛。" explain="Saga 的可靠性不在正向流程，而在「补偿一定能做完」。把补偿持久化加幂等重试，是从能跑通的 demo 走向生产可用系统的分水岭。" />
 
 ## 随堂检测
 
-<FillBlank no="115-fb" tpl="Saga 补偿必须按___顺序执行，且补偿操作本身必须___；网关超时后补偿应换用___的 context 才不会被一起取消。" :answers='["逆序|倒序","幂等","独立|全新"]' hint="后发生的步骤依赖先发生的；超时那一刻请求 ctx 已被 cancel" explain="逆序是因为后一步依赖前一步的结果；幂等是重试的前提；独立 context 保证请求取消后补偿仍能跑完，这三点在 6.3 的代码里一一对应。" />
+<FillBlank no="115-1" tpl="Saga 补偿必须按___顺序执行，且补偿操作本身必须___；网关超时后补偿应换用___的 context 才不会被一起取消。" :answers='["逆序~倒序","幂等","独立~全新"]' hint="后发生的步骤依赖先发生的；超时那一刻请求 ctx 已被 cancel" explain="逆序是因为后一步依赖前一步的结果；幂等是重试的前提；独立 context 保证请求取消后补偿仍能跑完，这三点在 6.3 的代码里一一对应。" :explains='["正向流程里后一步依赖前一步的产出，回撤必须倒着来，先发生的反而最后撤，顺序颠倒就会删掉仍被依赖的中间记录。","补偿本身也会超时重投、被后台重复扫描，若释放库存跑两遍就会多回补一份；做成幂等，同一动作执行多少次结果都不变。","网关超时时请求的 ctx 已被取消，补偿若沿用会刚启动就被连带掐断；另起一个不受该取消影响的 context，才能保证补偿跑到底。"]' />
 
-<Quiz no="115-1" q="本讲把服务按业务边界拆分，最硬的判据是什么？" :options='["按 controller / service / dao 分层","按代码行数平均切分","按业务边界与数据所有权划分","按团队人数一人一个服务"]' answer="2" explain="数据所有权决定边界：每个服务独占自己的库，跨服务只能走 proto 契约。按技术层拆会共享同一个库，既没获得隔离性又平白多出网络调用，正是第 3 节 Callout 点出的第一个错误。" />
+<Quiz no="115-2" q="本讲把服务按业务边界拆分，最硬的判据是什么？" :options='["按 controller / service / dao 分层","按代码行数平均切分","按业务边界与数据所有权划分","按团队人数一人一个服务"]' answer="2" explain="数据所有权决定边界：每个服务独占自己的库，跨服务只能走 proto 契约。按技术层拆会共享同一个库，既没获得隔离性又平白多出网络调用，正是第 3 节 Callout 点出的第一个错误。" />
 
-<Predict no="115-2" q="6.3 里 charge 返回 payment declined 后，state 的最终值是什么？" :options='["stock=9 order=CREATED payment=none","stock=10 order=CANCELED payment=none","stock=9 order=CANCELED payment=REFUNDED","stock=10 order=PAID payment=REFUNDED"]' answer="1" output="stock=10 order=CANCELED payment=none" explain="charge 是第 3 步且自身失败，因此只补偿已成功的 reserve 与 create 两步：逆序先撤建单置 CANCELED、再释放预扣把 stock 加回 10；charge 从未成功，它的 undo 不执行，payment 保持 none。" />
+<Predict no="115-3" q="6.3 里 charge 返回 payment declined 后，state 的最终值是什么？" :options='["stock=9 order=CREATED payment=none","stock=10 order=CANCELED payment=none","stock=9 order=CANCELED payment=REFUNDED","stock=10 order=PAID payment=REFUNDED"]' answer="1" output="stock=10 order=CANCELED payment=none" explain="charge 是第 3 步且自身失败，因此只补偿已成功的 reserve 与 create 两步：逆序先撤建单置 CANCELED、再释放预扣把 stock 加回 10；charge 从未成功，它的 undo 不执行，payment 保持 none。" />
 
-<Quiz no="115-3" q="支付 Charge 超时但网关可能已扣款，正确做法是？" :options='["立即重试扣款直到成功","立即执行退款","标记为未知、暂停自动补偿、靠对账确认后再推进或退款","忽略它，用户会重新下单"]' answer="2" explain="超时意味着结果未知，重试可能重复扣款，盲目退款可能退一笔不存在的款。第 7 节失败矩阵把它列为 UNKNOWN，必须转对账并落到人工队列，这正是「敢写代价」的体现。" />
+<Quiz no="115-4" q="支付 Charge 超时但网关可能已扣款，正确做法是？" :options='["立即重试扣款直到成功","立即执行退款","标记为未知、暂停自动补偿、靠对账确认后再推进或退款","忽略它，用户会重新下单"]' answer="2" explain="超时意味着结果未知，重试可能重复扣款，盲目退款可能退一笔不存在的款。第 7 节失败矩阵把它列为 UNKNOWN，必须转对账并落到人工队列，这正是「敢写代价」的体现。" />
 
 ## 一页纸速记
 

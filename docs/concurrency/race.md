@@ -226,14 +226,24 @@ GORACE="halt_on_error=1" go test -race ./...                # 命中首个竞态
 
 <SequenceDiagram title="未同步发布的竞态交错" caption="main 的自旋读与 writer 的 ready 写之间无同步边，向量时钟无序，检测器报 DATA RACE" :actors='["main","writer G","ready","data","检测器"]' :steps='[{"from":"main","to":"writer G","label":"go 启动","note":"HB 只到 goroutine 起点","kind":"call"},{"from":"writer G","to":"data","label":"写 42","note":"普通写非原子发布","kind":"call"},{"from":"writer G","to":"ready","label":"写 true","note":"与读无同步","kind":"call"},{"from":"main","to":"ready","label":"自旋读","note":"无锁检查","kind":"call"},{"from":"ready","to":"main","label":"读到 true","note":"两访问无排序","kind":"return"},{"from":"main","to":"data","label":"读 data","note":"可能仍是旧值","kind":"call"},{"from":"data","to":"main","label":"返回 0","note":"发布失败","kind":"return"},{"from":"检测器","to":"main","label":"DATA RACE","note":"向量时钟无序","kind":"async"}]' />
 
-<Predict no="49-3" q="对 publishBad（普通 bool 发布）跑 go test -race，最可能看到什么？" :options='["正常输出 42，无任何提示","WARNING: DATA RACE，指出 ready 的读写无同步","编译报错","fatal error: all goroutines are asleep"]' answer="1" output="WARNING: DATA RACE 及两段冲突调用栈" explain="main 的自旋读与 writer 的 ready=true 之间没有 happens-before，向量时钟判定二者并发；go test -race 会打印 Write at 与 Previous read at 两段栈。改成 channel 发布后收发建立同步，报告消失。" />
+<Predict q="对 publishBad（普通 bool 发布）跑 go test -race，最可能看到什么？" :options='["正常输出 42，无任何提示","WARNING: DATA RACE，指出 ready 的读写无同步","编译报错","fatal error: all goroutines are asleep"]' answer="1" output="WARNING: DATA RACE 及两段冲突调用栈" explain="main 的自旋读与 writer 的 ready=true 之间没有 happens-before，向量时钟判定二者并发；go test -race 会打印 Write at 与 Previous read at 两段栈。改成 channel 发布后收发建立同步，报告消失。" />
 
-<Quiz no="49-4" q="关于 -race 的『误报』与『漏报』，下面说法正确的是？" :options='["它会静态分析出所有潜在竞态，没有漏报","运行正确的访问被报出属于误报，应加抑制","它只在运行时观测到无排序的冲突访问才报，没跑到的分支与被碰巧掩盖的竞争会漏报","开启后应长期挂在进程里做线上监控"]' answer="2" explain="-race 基于本次执行的动态检测，报告的都是真实数据竞争而非误报；漏报来自未执行路径、cgo 与汇编访问以及有限的历史槽，逻辑竞态（检查后使用、死锁、泄漏）它本来就不查。开销数倍，只适合测试与 CI。" />
+<Quiz q="关于 -race 的『误报』与『漏报』，下面说法正确的是？" :options='["它会静态分析出所有潜在竞态，没有漏报","运行正确的访问被报出属于误报，应加抑制","它只在运行时观测到无排序的冲突访问才报，没跑到的分支与被碰巧掩盖的竞争会漏报","开启后应长期挂在进程里做线上监控"]' answer="2" explain="-race 基于本次执行的动态检测，报告的都是真实数据竞争而非误报；漏报来自未执行路径、cgo 与汇编访问以及有限的历史槽，逻辑竞态（检查后使用、死锁、泄漏）它本来就不查。开销数倍，只适合测试与 CI。" />
 
 ## 4. 工程实践
 线上数据竞争常伪装成「偶发计数不准」。怀疑时先用 -race 复跑，而不是加日志猜；race 构建改变时序，有的 bug 反而不出现，需配合压力多次运行。修复别只求「让它不报」，要把锁粒度、channel 所有权理清，否则可能把竞争从变量 A 挪到 B。团队规范应写明共享变量由谁保护。
 
 <Compare :panels='[{"label":"写法 A：有竞争","code":"counter++ // 多个 goroutine 并发","note":"读改写可交错，更新丢失，-race 会报 DATA RACE"},{"label":"写法 B：加锁修复","code":"mu.Lock(); counter = counter + 1; mu.Unlock()","note":"临界区独占，Unlock 与后续 Lock 建立 happens-before，结果确定"}]' title="竞态与修复对照" />
+
+### 与 L10 实战的呼应
+
+`-race` 与 happens-before 最终要在真实故障里兑现。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 把「先查余量再扣减」的超卖根因归结为检查与扣减之间没有被同一个原子操作包住：两个并发读者基于同一旧值各自扣减，正是本讲 `counter++` 读改写被交错覆盖的业务版本，修法也是三选一——锁、原子，或把库存收进单 goroutine 用 channel 传所有权。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「定时任务执行两次」列为资损事故，进程内用 `go test -race ./...` 守住共享状态、跨进程用幂等键与 fencing token 兜住至少一次语义。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的去重集合被多 worker 并发访问，若漏了同步就是典型的 concurrent map 竞态；把 `-race` 接进 CI，配合 `go test -count=100` 放大交错，才能在压测前就抓出这类「偶发计数不准」。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-049-race`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-049-race)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="修复一段计数竞态" task="100 个 goroutine 各给 counter 加一，请用 Mutex 修复竞争并打印结果。" :hints='["声明 sync.Mutex 并前后 Lock、Unlock","Add 在 go 之前，Done 用 defer","wg.Wait() 后再读结果"]' solution="var mu sync.Mutex\nvar counter int\nvar wg sync.WaitGroup\nfor i := 0; i != 100; i++ {\n    wg.Add(1)\n    go func() {\n        defer wg.Done()\n        mu.Lock()\n        counter = counter + 1\n        mu.Unlock()\n    }()\n}\nwg.Wait()\nfmt.Println(counter)" explain="锁把读改写圈成不可分割的临界区，并在解锁与加锁间建立 happens-before，100 次更新一次不丢，输出 100。也可改用 atomic 或 channel。" />

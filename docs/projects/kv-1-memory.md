@@ -1174,6 +1174,12 @@ go tool pprof -top cpu.out
 
 <Callout type="warn" title="提前发现的共同手段" text="七条里有五条能被同一条命令兜住：go test -race ./...。把 -race 接进 CI、让契约测试覆盖每个实现，比事后写事故复盘便宜得多。剩下的 Op 数值与时钟回拨，靠「契约锁定」评审项与注入式测试补上。" />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-111-kv-1-memory`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-111-kv-1-memory)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给 KV 追加一个原子自增命令 OpIncr" task="在不改动 Storage 接口、不重排现有 Op 数值的前提下新增 OpIncr，让 Memory 与 ShardedMemory 都实现它，并让契约测试自动覆盖。要求：对不存在的键按 0 自增；value 非数字时返回 ErrBadOp；整条读改写必须在同一把锁内完成。" :hints='["OpIncr 只能追加新数值，比如 OpIncr Op = 4，绝不重排 1/2/3","读改写三步要放在同一次 Lock 内，先取旧值、strconv.Atoi、再写回","把新实现加进 storageFactories，契约测试会自动验证它满足同一套断言"]' solution="在 contract.go 追加 const OpIncr Op = 4，Command 字段一个都不改。Memory.Apply 增加 case OpIncr：取写锁后读旧值，用 strconv.Atoi 解析（解析失败返回 fmt.Errorf 包装的 ErrBadOp），加一后用 strconv.Itoa 写回并返回 Result{Value: 新值, Found: true}。ShardedMemory 在分片写锁内做同样三步，保证同一 key 读改写不被插队。在 storageFactories 里给两个实现各加一条 Incr 专项断言，并把 OpIncr 纳入契约测试的覆盖列表。最后用 go test -race 验证并发自增 1000 次结果精确等于 1000。" explain="这道题考的是三件贯穿线里反复出现的事：命令模式让新操作只加一个 Op 常量；读改写必须在同一临界区否则丢更新；契约测试让新实现自动继承全部断言。它同时预演了第 113 讲 WAL 重放对「一条命令不可分割」的要求。" />
@@ -1186,7 +1192,7 @@ go tool pprof -top cpu.out
 
 <Predict no="111-3" q="先执行 SET k （存一个空值），再执行 GET k，FormatResult 会输出什么？" :options='["ERR not_found","NIL","OK 后面带一个尾空格","OK nil"]' answer="2" output="OK " explain="空值是合法命中：Apply 返回 Result{Found: true, Value: nil}，FormatResult 拼出 OK 加一个空格。若误判成未命中就会回源打爆下游，这正是 Found 字段存在的意义。" />
 
-<FillBlank no="111-4" tpl="判定「键不存在」统一用 ___ 配合哨兵错误；区分空值与未命中靠 Result 的 ___ 字段；把第 25 讲旧实现接进新契约用 ___；不让调用方改写内部数据靠进出双向 ___。" :answers='["errors.Is","Found","WrapLegacy~适配器","值拷贝~append复制"]' hint="四个空分别来自 errors 包、Result 字段、适配函数、切片处理手法" explain="errors.Is 沿错误链匹配哨兵；Found 与 Value 正交；WrapLegacy 把旧接口包成单入口且旧实现不改；值拷贝杜绝锁外改写底层数组。" />
+<FillBlank no="111-4" tpl="判定「键不存在」统一用 ___ 配合哨兵错误；区分空值与未命中靠 Result 的 ___ 字段；把第 25 讲旧实现接进新契约用 ___；不让调用方改写内部数据靠进出双向 ___。" :answers='["errors.Is","Found","WrapLegacy~适配器","值拷贝~append复制"]' hint="四个空分别来自 errors 包、Result 字段、适配函数、切片处理手法" explain="errors.Is 沿错误链匹配哨兵；Found 与 Value 正交；WrapLegacy 把旧接口包成单入口且旧实现不改；值拷贝杜绝锁外改写底层数组。" :explains='["哨兵错误常被 fmt.Errorf 包裹，直接判等会漏；errors.Is 沿错误链解包比对，才能识别「键不存在」。","Value 为空时无法区分是存了空值还是没命中；Result 用独立的 Found 字段表达是否命中，二者正交。","旧实现签名与新契约不一致时，用适配函数把它包成统一入口，旧代码零改动即可接入，避免大范围重写引入回归。","若把内部切片的底层数组直接交出去，调用方在锁外改写会污染状态；进和出都做一次值拷贝，才能隔离内外数据。"]' />
 
 ## 一页纸速记
 

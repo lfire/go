@@ -25,7 +25,7 @@ export default defineConfig({
   vite: {
     build: {
       // 本地全文搜索索引懒加载；提高阈值避免构建时输出无害的体积提示。
-      chunkSizeWarningLimit: 3000,
+      chunkSizeWarningLimit: 5000,
     },
   },
   markdown: {

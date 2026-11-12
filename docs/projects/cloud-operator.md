@@ -1123,7 +1123,7 @@ groups:
 
 用这套可观测定位一次真实故障的完整路径：夜里 `KVAppErrorBudgetBurn` 告警触发 → 看 `reconcile_failures_total` 按 `reason` 分组，发现全部集中在 `status` 动作 → 用 `trace_id` 过滤 slog 日志，看到大量 `apiserver 409 conflict` → 再查审计表发现同一 `cr_name` 的 `generation` 在短时间内跳了十几次 → 结论是某个外部脚本在高频改 spec，控制器状态回写一直冲突。兜底动作是先停掉那个脚本，控制器靠退避重入自动收敛，无需重启。整个过程从告警到定位不依赖登录机器翻文本日志。
 
-<FillBlank no="117-F1" tpl="Reconcile 失败时应该把错误 ___ 给队列，由队列按 ___ 重新入队，而不是在函数内就地死循环重试。" :answers='["上抛~返回","指数退避~退避~backoff"]' hint="想想 level-triggered 下重试的对象是整轮对账还是单个动作" explain="错误上抛、队列指数退避重入，重入后从 Get 重新读最新快照。就地重试既会打爆 apiserver，又复用了可能已经过期的 Observed，是典型的错误写法。" />
+<FillBlank tpl="Reconcile 失败时应该把错误 ___ 给队列，由队列按 ___ 重新入队，而不是在函数内就地死循环重试。" :answers='["上抛~返回","指数退避~退避~backoff"]' hint="想想 level-triggered 下重试的对象是整轮对账还是单个动作" explain="错误上抛、队列指数退避重入，重入后从 Get 重新读最新快照。就地重试既会打爆 apiserver，又复用了可能已经过期的 Observed，是典型的错误写法。" :explains='["把错误返回队列，让整轮 Reconcile 作重试单位重新入队，下轮从 Get 读最新快照；就地重试只会复用过期状态。","队列按退避间隔逐步拉长重试，既给冲突与依赖留出恢复时间，又避免失败时高频重入打爆 apiserver 与 etcd。"]' />
 
 ## 10. 测试策略
 
@@ -1265,6 +1265,12 @@ func BenchmarkDecide(b *testing.B) {
 **坑七：用本地时钟判断条件与 lease，遭遇时钟回拨。** 现象是 NTP 回拨后条件时间倒挂、leader 租约被误判过期引发双主。原因是到处用 `time.Now()`。正确做法是用 apiserver 下发的 `metav1.Time` 做条件时间戳、用租约对象的 `renewTime` 配合单调时钟判断存活，控制器内部只用 `time.Duration` 做相对退避。提前发现：混沌演练里主动回拨节点时钟，断言不出现双主。
 
 <Compare title="结构化日志与文本日志" :panels='[{"label":"错误：文本拼接","code":"log.Printf 把消息拼成一整行文本","note":"无法按 CR、generation、action 聚合，夜里翻日志靠肉眼，故障时定位以小时计"},{"label":"正确：slog 结构化","code":"logger.Error 带 cr 与 generation 与 action 字段","note":"字段可检索、可与 trace_id 关联，一条告警能直接串到审计表"}]' />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-117-cloud-operator`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-117-cloud-operator)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

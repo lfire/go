@@ -172,6 +172,119 @@ func main() {
 
 <Compare title="两种组织 JSON 的方式" :panels='[{"label":"推荐：结构体加 tag","code":"type Resp struct {\n    Code int    `json:\"code\"`\n    Msg  string `json:\"msg\"`\n}\nb, err := json.Marshal(Resp{Code: 0, Msg: \"ok\"})","note":"键名由类型固定，字段改名编译期可见，omitempty 行为可控。"},{"label":"反例：map[string]any 一把梭","code":"m := map[string]any{\"code\": 0, \"msg\": \"ok\"}\nb, err := json.Marshal(m)","note":"键名靠手写易拼错，数字默认 float64，字段调整没有编译期提醒。"}]' />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-024-json`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-024-json)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到标准库定义与实现，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：反射、omitempty 与数字精度的实现依据
+
+`encoding/json` 完全建立在上一讲的反射之上：`go doc encoding/json.Marshal` 的签名是 `func Marshal(v any) ([]byte, error)`，它「traverses the value v recursively」，遇到实现了 `json.Marshaler` 的值就调其 `MarshalJSON`；`go doc encoding/json.Unmarshal` 则写「If v is nil or not a pointer, Unmarshal returns an InvalidUnmarshalError」——这就是「解码必须传指针」的规范级依据：不传指针，解码器拿不到可写的目标。字段是否参与编码由反射的导出性决定（`StructField.PkgPath`），键名由 `StructTag.Get("json")` 决定；`omitempty` 的判定在 `encoding/json/encode.go` 的 `isEmptyValue` 函数里，对 `0`、`false`、空串、nil 指针/接口、空 slice/map 一律返回 true，且对结构体类型从不生效——这是「结构体零值照样输出」的原因。数字精度问题来自默认解码路径：解进 `any` / `map[string]any` 时，所有数字统一落成 `float64`（IEEE 754 双精度只有 53 位有效位），超过 2^53 的整数必然失真；`go doc encoding/json.Decoder.UseNumber` 明写「unmarshal a number into an interface{} as a Number instead of as a float64」，这是从实现到 API 的直接证据。`time.Time` 默认按 RFC3339 编码，则是它实现了 `MarshalJSON` 的结果，不是 `encoding/json` 的全局特例。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`json.Unmarshal(data, v)` 里 v 传值也能填进去，只是改的是副本。** 非指针目标在入口就被拒。
+
+<Compare title="解码目标必须是指针" :panels='[{"label":"错误：传值","code":"var u User\njson.Unmarshal(b, u)","note":"返回 InvalidUnmarshalError，u 保持零值"},{"label":"正确：传地址","code":"var u User\njson.Unmarshal(b, &u)","note":"解码器拿到可写目标，字段被填充"}]' />
+
+`Marshal` 接收值是因为它只读，`Unmarshal` 要写入所以必须可寻址；这个错误可以用 `errors.As(err, &unmarshalTypeErr)` 精确定位。
+
+**误解二：字段带 `json:"meta,omitempty"` 时，`omitempty` 能省掉空的嵌套结构体。** 结构体零值不算 empty。
+
+<Compare title="结构体字段与 omitempty" :panels='[{"label":"错误：值类型字段","code":"type Req struct { Meta Meta }\nb, _ := json.Marshal(Req{})","note":"零值结构体照样输出一个键"},{"label":"正确：改成指针字段","code":"type Req struct { Meta *Meta }\nb, _ := json.Marshal(Req{})","note":"指针为 nil 时才不输出"}]' />
+
+`isEmptyValue` 只对 array / map / slice / string、数值、布尔、指针 / 接口判空，结构体不在其列；指针字段正是区分「没传」与「传了零值」的正规做法。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc encoding/json.Unmarshal
+go doc encoding/json.Decoder.UseNumber
+```
+
+```text
+func Unmarshal(data []byte, v any) error
+    If v is nil or not a pointer, Unmarshal returns an InvalidUnmarshalError.
+func (dec *Decoder) UseNumber()
+    UseNumber causes the Decoder to unmarshal a number into an interface{} as a
+    Number instead of as a float64.
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `func Unmarshal(data []byte, v any) error` | 输入是字节切片，目标是 any |
+| `not a pointer` | 非指针目标被拒 |
+| `InvalidUnmarshalError` | 具体错误类型，可用 `errors.As` 取回 |
+| `func (dec *Decoder) UseNumber()` | 只作用于 Decoder，须在 Decode 前调用 |
+| `as a Number instead of as a float64` | 精度问题的根源与解法都在这一句 |
+
+下面这段把 omitempty 对结构体、非指针目标报错与 UseNumber 保精度跑成确定输出：
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+type Meta struct{ Page int }
+
+type Req struct {
+	Meta    Meta  `json:"meta,omitempty"`
+	MetaPtr *Meta `json:"meta_ptr,omitempty"`
+	Retries int   `json:"retries,omitempty"`
+}
+
+func main() {
+	b, _ := json.Marshal(Req{})
+	fmt.Println("omitempty 对结构体仍输出 meta =", strings.Contains(string(b), "meta"))
+	fmt.Println("指针字段被省略 =", !strings.Contains(string(b), "meta_ptr"))
+
+	var u struct{ Name string }
+	err := json.Unmarshal([]byte(`{"Name":"go"}`), u)
+	fmt.Println("传值的错误 =", err != nil)
+
+	dec := json.NewDecoder(strings.NewReader(`{"id":9007199254740993}`))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		fmt.Println("解码失败 =", err)
+		return
+	}
+	n, _ := m["id"].(json.Number).Int64()
+	fmt.Println("UseNumber 后 =", n)
+}
+```
+
+<OutputBox title="运行结果" output="omitempty 对结构体仍输出 meta = true\n指针字段被省略 = true\n传值的错误 = true\nUseNumber 后 = 9007199254740993" />
+
+其中 `json.Marshal(Req{})` 的实际字节是下面这串，值类型字段没有被省掉，嵌套大括号正是 `omitempty` 对结构体不生效的直观证据；把这段放进代码块，也避免正文里出现成对的双花括号被当成模板插值：
+
+```text
+{"meta":{"Page":0}}
+```
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.10 | 加入 `Decoder.DisallowUnknownFields` | 严格校验入参 |
+| Go 1.13 | 错误链可用于取 `*json.SyntaxError` 的 `Offset` | 精确定位坏 JSON 的位置 |
+| Go 1.18 | `any` 成为别名，`map[string]any` 写法流行 | 与 `map[string]interface{}` 等价，精度坑不变 |
+| Go 1.21 | 该版本尚无 `omitzero`，区分零值靠指针或 `,string` | 本教程基于 1.21+ |
+| 全版本 | 数字解进 any 变 float64、字段须可导出、解码须传指针 | 结论与版本无关 |
+
+适用边界还有一条：`DisallowUnknownFields` 只作用于 `Decoder`，`json.Unmarshal` 没有对应开关；新增字段一般向前兼容，删除字段、改键名、把数值改成字符串都是破坏性变更，需与调用方约定灰度期。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 30 讲](/core/interface-internals) 解释 `Marshal(v any)` 接收接口时的两个字布局，[第 31 讲](/core/string-internals) 讲 `string` 与 `[]byte` 转换及 UTF-8 边界；[第 57 讲](/engineering/error-design) 把编解码错误收敛成统一响应。实战里，[第 63 讲](/server/rest-api) 把本讲的字段、精度与兼容规则写成 API 契约，[第 112 讲](/projects/kv-2-network) 的协议帧编解码、[第 115 讲](/projects/micro-ecommerce) 的 DTO 设计都建立在「结构体加 tag 就是数据契约」这一条上。
+
 ## 动手练一练
 
 <Exercise title="用 Decoder 保住大整数精度" task="补全 DecodePreserve：用 json.Decoder 从 io.Reader 解码到 dst，并要求数字保留为 json.Number 而不是 float64。想想哪个方法要在 Decode 之前调用。" solution="func DecodePreserve(r io.Reader, dst any) error {\n    dec := json.NewDecoder(r)\n    dec.UseNumber()\n    return dec.Decode(dst)\n}" :hints='["入口是 json.NewDecoder，不是 json.Unmarshal。","UseNumber 必须在 Decode 之前调用，顺序反了就没用。"]' explain="UseNumber 让解码器把数字按原文存成 json.Number（底层是字符串），之后可按需 Int64 或 Float64，避免先落进 float64 造成精度丢失。" />

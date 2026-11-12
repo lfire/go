@@ -1440,6 +1440,12 @@ func BenchmarkPoolSet(b *testing.B) {
 
 <Callout type="warn" title="坑的共同根因" text="八条里有六条指向同一件事：把 TCP 当成「有边界、可靠、善意」的消息通道。它其实只是有序字节流。凡是「一次 Read 就是一帧」「错误能当文本传」「连上就会好好说话」的假设，都要在协议层用长度、错误码、Deadline、连接注册表逐条推翻。" />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-112-kv-2-network`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-112-kv-2-network)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给帧加请求 ID 支持单连接流水线" task="当前 Client 一问一答串行，帧已带 ReqID 却没用起来。请改造 Client：用一个后台读循环按 ReqID 把响应分发给在途请求，使同一连接上可并行多个请求。要求：用 pending map 加互斥锁、响应到达先取 chan 再删除、超时路径必须注销在途项避免泄漏、Close 时唤醒所有等待者。" :hints='["Client 增加 pending map[uint32]chan Frame 与一个读循环 goroutine","Apply 分配自增 ReqID 并注册缓冲为 1 的 channel，写帧后 select 等待该 channel 或超时","读循环读到响应先加锁取 chan 再删除，取到才非阻塞发送；PONG 直接跳过","超时、出错、Close 三条路径都要 delete pending，否则 map 会缓慢泄漏"]' solution="给 Client 增加 pending map 与 readLoop goroutine（Dial 时启动）。Apply 不再整段持锁：先在锁内分配自增 ReqID 并注册 chan Frame（缓冲 1），释放锁后用独立的 writeMu 串行化 writeFrame，再 select 等待该 chan、time.After(ioTO) 或 quit。readLoop 循环 readFrame，按 ReqID 在锁内取出并删除对应 chan，取到才非阻塞发送响应，PONG 帧直接 continue。超时分支调用 drop(id) 删除 pending；Close 关闭 quit 与 conn、等待 readLoop 退出、并对所有 pending 发送一个错误帧唤醒等待者。测试起 N 个 goroutine 并发 Apply，断言每个返回值与自己的 key 一致，并用 go test -race 验证无竞态。" explain="这道题把「帧里有 ReqID」从摆设变成能力：没有它一问一答必须串行，有了它才能在同一连接上并行在途请求。难点全在失败路径——超时、断连、关闭三处都要注销 pending，否则 map 泄漏比吞吐问题更早拖垮服务。" />
@@ -1452,7 +1458,7 @@ func BenchmarkPoolSet(b *testing.B) {
 
 <Predict no="112-3" q="一个头里 body_len 填 0xFFFFFFFF 的毒包到达 readFrame，会发生什么？" :options='["分配 4 GiB 内存后 OOM","先校验魔数与版本，再因 n 超过 maxFrame 返回 ErrBadFrame，不分配 body","被当成合法大帧一直等后续字节","触发 panic"]' answer="1" output="先校验魔数与版本，再因 n 超过 maxFrame 返回 ErrBadFrame，不分配 body" explain="关键在于校验顺序：n 超过 maxFrame 的判断在 make([]byte, n) 之前，毒包连一字节 body 都分配不到。把分配写到校验前面，就是生产里最典型的 OOM 漏洞。" />
 
-<FillBlank no="112-4" tpl="处理粘包与半包靠定长头加 ___；跨网络保持错误可判定靠 ___；防止伪造长度打爆内存靠 ___；让 Close 不卡在长连接上靠连接注册表加 ___。" :answers='["io.ReadFull~ReadFull","结构化错误码~err_code~错误码","maxFrame~长度上限","SetDeadline~设立即过期Deadline"]' hint="四个空分别来自 io 包、错误码映射、帧常量、net.Conn 方法" explain="io.ReadFull 读满整帧重建边界；err_code 还原哨兵错误；maxFrame 在分配前拒绝毒包；SetDeadline(now) 唤醒阻塞读循环，让 WaitGroup 正常收尾。" />
+<FillBlank no="112-4" tpl="处理粘包与半包靠定长头加 ___；跨网络保持错误可判定靠 ___；防止伪造长度打爆内存靠 ___；让 Close 不卡在长连接上靠连接注册表加 ___。" :answers='["io.ReadFull~ReadFull","结构化错误码~err_code~错误码","maxFrame~长度上限","SetDeadline~设立即过期Deadline"]' hint="四个空分别来自 io 包、错误码映射、帧常量、net.Conn 方法" explain="io.ReadFull 读满整帧重建边界；err_code 还原哨兵错误；maxFrame 在分配前拒绝毒包；SetDeadline(now) 唤醒阻塞读循环，让 WaitGroup 正常收尾。" :explains='["TCP 一次 Read 可能只给半帧或粘着下一帧，ReadFull 反复读直到凑满定长头声明的字节数，据此切出完整一帧、重建边界。","错误文本过网后只剩字符串，errors.Is 依赖的类型链全丢；换成固定数值码，客户端按表还原成哨兵错误，判定与重试即可原样复用。","body_len 由对端填写可伪造，照单分配极大值会直接 OOM；在申请缓冲前先与上限比对、超限即拒，关键是校验排在分配之前。","读循环卡在长连接的阻塞 Read 上，光 Close 未必立刻唤醒；设一个已过期的 deadline 令 Read 报错退出，WaitGroup 才能正常收尾。"]' />
 
 ## 一页纸速记
 

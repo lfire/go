@@ -1487,6 +1487,12 @@ v3 的派生任务队列与失败重放正是第 110 讲分布式调度与第 10
 
 <Callout type="idea" title="坑要写进回归用例" text="每一条生产坑都应至少变成一个自动化测试或一条告警规则，否则复盘完还会再犯；本讲六条坑分别对应内存基准、安全用例、故障注入、方向用例、清理断言与契约测试。" />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-106-net-image-server`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-106-net-image-server)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给上传链补上像素上限与 EXIF 校正" task="在本讲流式上传的基础上，让畸形大图不再打爆内存、让手机竖拍图不再躺倒：用 DecodeConfig 判像素上限，解析 EXIF 方向并校正后再生成缩略图，且保证任何拒绝分支都清理临时文件。" :hints='["提示一：image.DecodeConfig 只读头部、不分配像素缓冲，必须在 image.Decode 之前调用","提示二：像素上限用 int64 计算宽乘高，避免 int 溢出导致判断失效","提示三：EXIF 方向藏在 JPEG 的 APP1 段，先判 Exif 前缀再按 TIFF 字节序读 IFD0 的 0x0112 标签","提示四：缩略图前先按方向校正，方向 6 到 8 会交换宽高","提示五：每个拒绝分支都要有 defer 清理临时文件，断言目录最终为空"]' solution='要点一：流式落临时文件后，先用 image.DecodeConfig 读头部拿到宽高，用 int64 计算乘积，超过四千万像素立即返回 415 并清理。\n要点二：准入通过后扫描 JPEG 的 APP1 段，确认 Exif 前缀，按 TIFF 字节序定位 IFD0 读取 Orientation 标签，取值限定在 1 到 8。\n要点三：完整解码后先调用 applyOrientation 校正方向，再调用 resizeNN 等比缩放，方向 6 到 8 会交换宽高。\n要点四：透明 PNG 转 JPEG 前用白底合成，编码后回读一次作为安全清洗。\n要点五：临时目录创建后立刻 defer os.RemoveAll，任何 return 分支都不残留文件，并用故障注入断言目录为空。' explain="五处改动分别对应准入、方向解析、校正派生、格式清洗与资源释放；顺序不能颠倒，Decode 必须在 DecodeConfig 之后，清理必须覆盖所有分支。" />
@@ -1501,7 +1507,7 @@ v3 的派生任务队列与失败重放正是第 110 讲分布式调度与第 10
 
 <Predict no="106-3" q="某客户端带正确的 If-None-Match 再次请求同一张图，服务端会返回什么？" :options='["200 并带完整正文","404 Not Found","304 Not Modified 且无正文","500 错误"]' answer="2" output="HTTP/1.1 304 Not Modified" explain="内容寻址下 ETag 就是对象键，条件头相等说明客户端已有最新副本，服务端只回 304 不写正文，这是重复下载几乎零成本的关键。" />
 
-<FillBlank no="106-4" tpl="防像素炸弹要用 ___ 只读头部判尺寸，ETag 必须用 ___ 包裹才合法，直传签名要用 ___ 做常量时间比较。" :answers='["DecodeConfig","双引号","hmac.Equal"]' hint="想想准入、缓存契约与签名校验" explain="image.DecodeConfig 不分配像素缓冲即可读宽高；HTTP 要求 entity-tag 带双引号；hmac.Equal 避免普通比较的时序侧信道。" />
+<FillBlank no="106-4" tpl="防像素炸弹要用 ___ 只读头部判尺寸，ETag 必须用 ___ 包裹才合法，直传签名要用 ___ 做常量时间比较。" :answers='["DecodeConfig","双引号","hmac.Equal"]' hint="想想准入、缓存契约与签名校验" explain="image.DecodeConfig 不分配像素缓冲即可读宽高；HTTP 要求 entity-tag 带双引号；hmac.Equal 避免普通比较的时序侧信道。" :explains='["它只读头部取宽高，不分配像素缓冲；声明超大尺寸的伪造图若直接解码会瞬间吃光内存，先判尺寸即可在准入阶段拒掉。","HTTP 规定 entity-tag 必须是带引号的不透明串，弱校验加 W/ 前缀；缺引号就不合规，浏览器与 CDN 的条件请求可能直接忽略。","普通比较遇到首个不同字节就返回，耗时随匹配前缀长度变化，可被按时序逐位猜出签名；Equal 恒定走完全程，不泄漏匹配进度。"]' />
 
 ## 一页纸速记
 

@@ -1351,6 +1351,12 @@ echo "POST http://127.0.0.1:8080/crawl" | vegeta attack -rate=200 -duration=60s 
 
 **坑 7：租约 TTL 与 GC 停顿的错配。** 现象是偶发大量任务被重投、重投率飙高，但 worker 其实都活着。原因是 TTL 设得比一次 GC 停顿或一次慢 GC 还短，进程短暂停顿就被误判为崩溃、租约过期。正确写法是 TTL 取 20 到 30 秒并靠 `KeepAlive` 续租，而不是把 TTL 调到毫秒级；同时给 `attempt` 与重投率设告警，区分「真崩溃」与「被误判」。提前发现靠重投率与 GC 停顿时间关联分析。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-109-concurrent-crawler`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-109-concurrent-crawler)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="给 V2 加优先级与取消感知" task="在 6.4 的 worker pool 基础上做两处改动：一是把 jobs 从普通 channel 换成按优先级出队的 Frontier，让详情页优先；二是让 Scheduler 收到停止信号后先停止投放、再等在途任务收尾，最后才关闭通道。要求同一 URL 仍只抓一次，且 go test -race 无报告。" :hints='["提示一：Frontier 可按 6.5 的 PriorityQueue 思路，把 Upsert 结果投给 jobs，注意入队前用 Visit 去重","提示二：停止信号用 context.Context，取消时先关投放开关再 wg.Wait，最后 close(jobs)","提示三：优先级入队建议抽成纯函数 priorityOf，便于表驱动测试"]' solution="func priorityOf(depth int) int {\nif depth == 0 {\nreturn -1\n}\nreturn depth\n}\nfunc enqueue(pq *PriorityQueue, u string, depth int) {\npq.Upsert(u, priorityOf(depth), depth)\n}" explain="把优先级计算抽成纯函数，既能表驱动测试，也让 Frontier 与抓取循环解耦；取消路径的关键是顺序：先停投放，再等 wg 归零，最后关通道，顺序反了就会漏任务或死锁。" />
@@ -1361,7 +1367,7 @@ echo "POST http://127.0.0.1:8080/crawl" | vegeta attack -rate=200 -duration=60s 
 
 <Predict no="109-2" q="V3 中 worker 领取任务后进程崩溃、始终没有 Ack，租约到期后会发生什么？" :options='["任务永久丢失，需要人工补抓","任务被 Broker 放回队列重投，另一 worker 领取并幂等重做","Broker 一直等待这个 worker 复活","任务自动标记为成功"]' answer="1" output="租约超时重投: /a 第 1 次" explain="这正是租约机制的意义：领取不确认、租约超时、重投、重新领取并确认。迟到 Ack 会被作废，重复执行靠 done 表与唯一键收敛，业务上不丢不重。" />
 
-<FillBlank no="109-3" tpl="V3 用 ___ 保证崩溃后任务不丢，用 ___ 保证重复投递在结果侧不产生重复行，两者合起来把至少一次语义收敛成业务上的恰好一次。" :answers='["租约重投","幂等键"]' hint="一个负责不丢，一个负责不重" explain="租约 + 超时重投解决『不丢』，done 表与页面表唯一键（幂等键）解决『不重』，缺任何一半都会在故障转移时出问题。" />
+<FillBlank no="109-3" tpl="V3 用 ___ 保证崩溃后任务不丢，用 ___ 保证重复投递在结果侧不产生重复行，两者合起来把至少一次语义收敛成业务上的恰好一次。" :answers='["租约重投","幂等键"]' hint="一个负责不丢，一个负责不重" explain="租约 + 超时重投解决『不丢』，done 表与页面表唯一键（幂等键）解决『不重』，缺任何一半都会在故障转移时出问题。" :explains='["领取任务附带租约与超时，进程崩溃来不及确认，租约到期后任务被重新投给其它 worker，保证始终有人接手、不丢任务。","重投必然带来重复投递，落库时以页面标识作唯一键并配合已完成表去重，第二次写入被约束拦下，结果侧便不会多出重复行。"]' />
 
 ## 一页纸速记
 

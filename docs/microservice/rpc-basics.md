@@ -221,6 +221,149 @@ func main() {
 
 <Callout type="warn" title="别把 RPC 当成没有延迟的本地调用" text="跨进程调用可能超时、可能重复到达、可能乱序，网络故障和本地 panic 完全是两回事。任何把远程调用写得和本地函数一样想当然的代码，都会在弱网和下游抖动时出问题。" />
 
+### 3.2 五段链路为什么一段都不能省
+
+把「本地调用」升级成「远程调用」，消失的其实是三样东西：共享的地址空间、共享的类型定义、共享的控制流。本地调用之所以几乎不会失败，是因为调用方和被调用方活在同一个进程里——参数按同一套 ABI 放在栈或寄存器上，函数返回就是一条跳转指令，栈帧天然保证「请求与结果一一对应」。一旦把被调用方搬到另一台机器，这三点全部失效，于是每一次调用都必须人为补回五段，而每一段都精确对应一类本地调用根本不存在的故障。
+
+- **编码**：对端不认识本端的内存布局。`int` 在两端可能是 32 位或 64 位，多字节整数的字节序可能不同，指针更是完全无意义。必须约定一种与语言、与机器无关的线上表示，这就是序列化。对应故障域是「类型系统不共享」。
+- **传输**：本地是控制流跳转，远程要经过网络，于是引入分布式系统最麻烦的**部分失败**：请求可能发出去了但响应永远没回来，调用方无法区分「对端根本没收到」「收到了但算到一半崩了」「算完了但回包丢了」这三种情况。对应故障域是「控制流断裂」。
+- **解码**：对端按约定把字节还原成参数，还要能识别并拒绝不认识的报文，否则双方发版不同步时会静默算错而不报错。对应故障域是「版本错配」。
+- **执行**：真实函数在远端跑，它自己会 panic、会超时、可能被重复触发。写操作尤其要面对「超时不等于未执行」——你以为没成功而重试，对端其实已经扣过一次库存。对应故障域是「副作用不确定」。
+- **回传**：结果或错误要能送回，并在高并发下与正确的请求对上号。这正是协议里 `ID` 字段存在的唯一理由：没有它，多个并发请求的响应会串包。对应故障域是「响应乱序与丢失」。
+
+把本地调用与远程调用逐项对照，能看清「桩」到底替业务扛下了什么。
+
+| 能力 | 本地函数调用 | 远程过程调用 | 缺失时补回的手段 |
+| --- | --- | --- | --- |
+| 传参 | 同一内存布局直接读 | 两端布局可能不同 | 序列化成约定字节流 |
+| 寻址 | 编译期确定函数地址 | 需知道对端在哪、调哪个方法 | 端点加 Method 字段 |
+| 失败模型 | 要么返回要么 panic，无中间态 | 存在请求发出但结果未知的中间态 | 超时加结构化错误加幂等键 |
+| 请求与结果配对 | 栈帧天然一一对应 | 多请求共用一条连接，响应可能乱序 | 协议里的请求 ID |
+| 耗时 | 纳秒到微秒，可忽略 | 毫秒到秒，且抖动大 | deadline 沿调用链传播 |
+
+<SequenceDiagram title="一次 RPC 的五段链路与失败点" caption="编码、传输、解码、执行、回传逐段对应一类本地调用不存在的故障" :actors='["Client","Stub","Network","Skeleton","Service"]' :steps='[{"from":"Client","to":"Stub","label":"Call Add(3,4)","note":"业务像调本地函数","kind":"call"},{"from":"Stub","to":"Stub","label":"编码并分配 ID","note":"序列化与配对","kind":"self"},{"from":"Stub","to":"Network","label":"发送报文","note":"进入不可靠网络","kind":"call"},{"from":"Network","to":"Skeleton","label":"投递到骨架","note":"可能丢包或延迟","kind":"call"},{"from":"Skeleton","to":"Skeleton","label":"解码并查表","note":"按 Method 分发","kind":"self"},{"from":"Skeleton","to":"Service","label":"调用真实 Add","note":"执行业务函数","kind":"call"},{"from":"Service","to":"Skeleton","label":"返回结果 7","note":"或抛业务错误","kind":"return"},{"from":"Skeleton","to":"Network","label":"回写响应","note":"带同一请求 ID","kind":"call"},{"from":"Network","to":"Stub","label":"送达客户端","note":"可能超时未达","kind":"call"},{"from":"Stub","to":"Client","label":"解码并还原","note":"结果或 error","kind":"return"}]' />
+
+### 3.3 序列化与传输协议：两种以上替代方案的取舍
+
+选序列化格式，本质是选「可读性、性能、跨语言、是否有 schema」这四者的组合，没有通吃项。自研最小 RPC 用 JSON 是因为标准库自带、肉眼可调试；换成 gob 能省带宽却把双方锁死在 Go；换成 Protobuf 才真正获得跨语言与字段级兼容，代价是引入 IDL 与代码生成。传输层同理：HTTP/1.1 文本协议调试方便但头部冗余、无法多路复用；自定义 TCP 二进制帧最省却要从零处理粘包与连接复用；HTTP/2 二进制帧居中，是 gRPC 的选择。
+
+| 方案 | 可读性 | 跨语言 | schema 约束 | 相对体积 | 主要代价 | 适用边界 |
+| --- | --- | --- | --- | --- | --- | --- |
+| JSON over HTTP/1.1 | 高，可直接 curl | 是 | 弱，靠口头约定 | 大 | 文本解析慢、无字段号兼容 | 内部小工具、调试期 |
+| gob over TCP | 低 | 否，仅 Go | 中，随结构体走 | 中 | 语言锁死、类型变更易不兼容 | 纯 Go 内部服务 |
+| Protobuf over HTTP/2 | 低，需解码 | 是 | 强，proto 契约 | 小 | 需 protoc 与 IDL 评审 | 跨语言、长期演进的服务 |
+
+「二进制一定更小」是常见误解，用一段不依赖第三方库的代码就能量出反例：
+
+```go
+package main
+
+import (
+	"bytes"
+	"encoding/gob"
+	"encoding/json"
+	"fmt"
+)
+
+// Order 是本章最小 RPC 里的一条业务消息。
+type Order struct {
+	ID   uint64 `json:"id"`
+	Name string `json:"name"`
+}
+
+func main() {
+	o := Order{ID: 150, Name: "go"}
+	j, _ := json.Marshal(o)
+
+	var buf bytes.Buffer
+	_ = gob.NewEncoder(&buf).Encode(o)
+
+	fmt.Printf("JSON: %d 字节 内容=%s\n", len(j), j)
+	fmt.Printf("gob : %d 字节（含类型描述，仅 Go 可读）\n", buf.Len())
+}
+```
+
+```text
+JSON: 22 字节 内容={"id":150,"name":"go"}
+gob : 46 字节（含类型描述，仅 Go 可读）
+```
+
+逐字段解释：`22 字节` 是 `{"id":150,"name":"go"}` 的实际长度，字段名以文本形式重复出现，这是可读性的代价；`gob 46 字节` 反而更大，因为 gob 是 Go 专属的自描述编码，首条报文要携带类型元信息。gob 的优势在批量、同构、且只在 Go 之间传递的数据，而不是这一条小报文。这也说明选型必须看真实报文特征，而不是背结论。
+
+### 3.4 可验证实验：用 -race 抓出桩里的自增竞态
+
+原文 4.1 的客户端桩里有一行 `c.seq++`，用来给每个请求分配递增 ID。单 goroutine 下没问题，但桩天生要被并发调用——多个 goroutine 同时做「读改写」是典型的数据竞争：可能两个请求拿到同一个 ID，回包就会串到错误的调用方。把这段逻辑抽出来做成测试，用竞态检测器复现：
+
+```go
+package main
+
+import (
+	"sync"
+	"testing"
+)
+
+type Client struct{ seq uint64 }
+
+func (c *Client) next() uint64 {
+	c.seq++ // 与 4.1 相同的写法：读改写不是原子的
+	return c.seq
+}
+
+func TestSeqUnderRace(t *testing.T) {
+	c := &Client{}
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = c.next()
+		}()
+	}
+	wg.Wait()
+}
+```
+
+```bash
+go test -race -run TestSeqUnderRace ./...
+```
+
+```text
+WARNING: DATA RACE
+Write at 0x00c0000120a0 by goroutine 8:
+  main.(*Client).next()
+      race_test.go:11 +0x44
+Previous write at 0x00c0000120a0 by goroutine 7:
+  main.(*Client).next()
+      race_test.go:11 +0x44
+==================
+FAIL
+```
+
+逐字段解释：`WARNING: DATA RACE` 说明检测器发现同一内存地址被两个 goroutine 无同步地写；`Write at 0x... by goroutine 8` 指出冲突写发生在第 11 行的 `c.seq++`；`Previous write ... by goroutine 7` 给出与它冲突的上一次访问；具体地址与 goroutine 编号每次运行都不同，属于正常现象；`FAIL` 表示竞态让测试以失败收场。注意 `-race` 只报告「确实跑到并被采样到」的冲突时序，所以循环起 100 个 goroutine 是为了提高复现概率——这也呼应第 49 讲的结论：抓不到竞态不等于代码正确。
+
+修复方向是把「读改写」换成一次原子操作，Go 1.19 起提供的 `atomic.Uint64` 最直白：
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync/atomic"
+)
+
+type SafeClient struct{ seq atomic.Uint64 }
+
+// Next 用原子自增分配 ID，多 goroutine 并发也保证唯一且递增。
+func (c *SafeClient) Next() uint64 { return c.seq.Add(1) }
+
+func main() {
+	c := &SafeClient{}
+	fmt.Println(c.Next(), c.Next(), c.Next())
+}
+```
+
+<OutputBox title="运行结果" output="1 2 3" note="atomic 的 Add 把读改写合并为一条指令，ID 不再重复，响应串包的根因被消除。" />
+
 ## 4. 工程实践
 
 ### 4.1 客户端桩与 deadline 传播
@@ -306,6 +449,43 @@ func main() {
 
 真实落地时还有几条硬经验。协议上，`ID` 保证多路复用不乱序，版本号字段给将来兼容留后路，错误要用稳定的错误码而不是给人看的字符串。可靠性上，超时必须由调用链顶层层层下传，绝不能靠每个 `Call` 自觉设置；写操作要考虑「超时不等于未执行」，因此必须配幂等键。连接层面，复用 `http.Client` 与连接池，别每次调用新建客户端。可观测上，桩是打点的黄金位置——在这里统一埋耗时、错误率与调用量，正好是后面 RED 指标与链路追踪的入口。
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l7-microservice/lesson-072-rpc-basics`](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-072-rpc-basics)。clone 仓库后进入 `examples/l7-microservice`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+### 4.2 一次 RPC 的失败矩阵
+
+把五段链路逐一问「这里会怎么坏」，就得到一张能直接用于评审的清单。每一行都是本地调用根本不会遇到、而远程调用必须显式设防的情况：
+
+| 故障现象 | 发生在哪一段 | 本地调用为何没有 | 最小防线 |
+| --- | --- | --- | --- |
+| 请求发出但结果未知 | 传输 | 控制流不断裂，没有中间态 | 超时加幂等键，承认部分失败 |
+| 超时被误判为未执行，重复扣减 | 执行与回传 | 不存在已执行却没返回的状态 | 幂等键加状态机 |
+| 并发响应串包 | 回传 | 栈帧天然把请求与结果配对 | 协议里的请求 ID |
+| 新旧版本字段含义错配 | 解码 | 双方共用同一份类型定义 | 协议版本号加结构校验 |
+| 下游抖动时每次调用新建连接 | 传输 | 没有连接这个概念 | 复用 http.Client 与连接池 |
+| 弱网下重试把下游打垮 | 传输与执行 | 无网络放大效应 | 重试预算加退避 |
+
+### 4.3 两条真实工程误解
+
+**误解一：RPC 让远程调用长得像本地函数，所以可以像本地一样不处理超时与重试。** 桩把编码、传输、解码都藏起来，很容易让人连「这是跨进程调用」也一起忘了。最常见的写法是在中间层顺手 `context.Background()` 起一个新 ctx，或者干脆不设 deadline——弱网或下游卡死时，这次调用会永久挂住 goroutine 与连接。
+
+<Compare :panels='[{"label":"错误：重置 ctx","code":"ctx := context.Background()\nout := call(ctx)","note":"剪断 deadline、取消信号与 metadata 三条链，慢调用无人叫停"},{"label":"正确：派生 ctx","code":"ctx, cancel := context.WithTimeout(parent, d)\ndefer cancel()\nout := call(ctx)","note":"沿用父预算，父子取更早者，提前返回也释放定时器"}]' title="中间层该怎么处理传入的 ctx" />
+
+**误解二：用 HTTP 200 把错误塞进 body 就够了，不需要区分传输错误与业务错误。** 这种写法把所有失败都返回 200 加一段错误字符串，调用方靠比对字符串判定。它有两个致命缺口：连接断开、超时这类传输失败根本没有 HTTP 响应，200 永远盖不住；而业务错误用给人看的字符串表达，既无法稳定判定，也无法跨语言映射成状态码或决定是否重试。
+
+<Callout type="warn" title="200 盖不住传输层失败" text="正确做法是把失败分三层：连接与超时等传输错误走 error 返回，框架与协议错误走稳定状态码，业务错误走结构化 Error 字段或错误码；调用方按层判定，绝不比对错误文本。" />
+
+### 4.4 与后续阶段的呼应
+
+本讲埋下的三颗种子会在后面反复发芽。「请求 ID」对应「响应与请求配对」，到 L8 会升级成幂等键与去重表，见 [/distributed/distributed-lock](/distributed/distributed-lock) 的 SETNX 租约与幂等键设计；「超时不等于未执行」正是 [/distributed/distributed-tx](/distributed/distributed-tx) 里消息最终一致要处理的老问题；而「部分失败」在理论上的名字就叫分区，[/distributed/cap-base](/distributed/cap-base) 会把它放进 CAP 框架里重新审视。到了 L10，[/projects/micro-seckill](/projects/micro-seckill) 的下单接口靠本讲的幂等键挡住重复请求，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把五段放大成跨服务调用，超时预算交给第 74 讲的 deadline 传播接手。
+
+<Quiz q="RPC 协议里之所以必须引入请求 ID 字段，最直接对应五段链路里哪一段的什么问题？" :options='["编码段的类型不共享","传输段的队头阻塞","回传段多请求共用连接时响应乱序","解码段的版本错配"]' answer="2" explain="多个并发请求共用一条连接时，响应回来先后不定；ID 把每个响应与发出它的请求一一对应，避免串包。这是回传段独有的需求，本地调用靠栈帧天然配对。" />
+
+<Predict q="把原文 4.1 客户端桩的 c.seq++ 原样放到 100 个并发 goroutine 里调用，并用 go test -race 运行，最可能的结果是什么？" :options='["输出 100 个连续且唯一的 ID，测试通过","竞态检测器报 DATA RACE，可能出现重复 ID，测试失败","直接编译报错","所有 ID 都是 0"]' answer="1" output="WARNING: DATA RACE ... FAIL" explain="c.seq++ 是读改写，多 goroutine 无同步并发时必然冲突；-race 会报告 DATA RACE 并让测试失败。改用 atomic.Uint64 的 Add 把读改写合成一条指令才能消除。" />
+
 ## 动手练一练
 <Exercise title="给最小 RPC 补上方法不存在与参数错误的处理" task="基于本讲的 Server，扩展 ServeHTTP：Method 未注册时返回明确错误，Params 无法解码时也返回错误而不是 panic。再用客户端桩分别触发这两种情况并打印错误。" :hints='["查方法表用 fn, ok := s.methods[req.Method]，!ok 时回写 method not found","json.Unmarshal 会返回 error，把它转成结构化错误回传","客户端 Call 已把非空 Error 还原成 error，直接判定即可"]' solution="要点一：解码 Request 失败时不要 panic，构造 Response 并写入 Error 回传。\n要点二：查表用 fn, ok := s.methods[req.Method]，!ok 时回写 method not found。\n要点三：客户端 Call 已把非空 Error 还原成 error，业务侧统一用 errors.Is 或错误码判定，而不是比对字符串。" explain="把所有失败都收敛成结构化 Error，调用方才能用统一方式判定与重试；panic 一旦越过网络边界，对端只会看到连接断开，问题反而更难查。" />
 
@@ -314,7 +494,7 @@ func main() {
 
 <Predict no="72-2" q="代码 4 中服务端固定 sleep 3 秒才返回，客户端用 context.WithTimeout 设了 200 毫秒。运行结果会是什么？" :options='["正常打印 结果: 7, 错误: nil","打印 结果: nil 并带一个 rpc 传输失败 的超时错误","客户端一直阻塞到 3 秒后才返回","服务端 panic 导致进程退出"]' answer="1" output="结果: nil, 错误: rpc 传输失败: context deadline exceeded（由 ctx 与 http.Client 共同触发）" explain="deadline 通过 context 一路传到 http.Client.Do，2 秒客户端超时与 200 毫秒 ctx 中更短的先触发，请求被提前取消。这正是 RPC 必须把超时当一等公民、而非靠调用方自觉的原因。" />
 
-<FillBlank no="72-3" tpl="客户端把远程调用伪装成本地函数的那层代码叫 ___ ；服务端负责解码并查表分发的那层叫 ___ 。" :answers='["桩~stub","骨架~skeleton"]' hint="一个在调用方，一个在服务方" explain="两者合起来才把编码、传输、解码、执行、回传五段包成一次函数调用的样子。" />
+<FillBlank no="72-3" tpl="客户端把远程调用伪装成本地函数的那层代码叫 ___ ；服务端负责解码并查表分发的那层叫 ___ 。" :answers='["桩~stub","骨架~skeleton"]' hint="一个在调用方，一个在服务方" explain="两者合起来才把编码、传输、解码、执行、回传五段包成一次函数调用的样子。" :explains='["调用方需要一段与本地函数同签名的替身，把入参编码、发请求、收解回复都包进去，屏蔽网络细节，这一层习惯称桩。","服务端要有对称的一层负责按协议解码、查表定位方法、调用后回写结果，它撑起整个处理框架，故与桩相对称为骨架。"]' />
 
 ## 一页纸速记
 <KnowledgeCard :points='["RPC 不是黑科技：把函数调用拆成编码、传输、解码、执行、回传五段，再用桩包回函数形态","从 HTTP 推导的四步：手工 REST 到定义协议报文与编解码，再到注册表加反射分发，最后客户端桩加超时","Method 字段让所有方法共用端点，ID 让并发请求与响应一一对应","context 的 deadline 必须随调用链传播，错误要结构化回传而不是 panic"]' :pitfalls='["把远程调用当本地调用，忽略超时、重试与重复到达","协议里不带请求 ID，多路复用时响应会串包","用 panic 传递业务错误，越过网络后只剩连接断开"]' summary="一句话记住：RPC = 协议 + 编解码 + 桩与骨架 + 超时与错误契约，其余都是工程增强。" />

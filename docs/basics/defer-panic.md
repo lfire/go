@@ -142,6 +142,113 @@ func main() {
 
 <Compare title="清理动作的两种写法" :panels='[{"label":"推荐：判定成功后立刻 defer","code":"f, err := os.Open(name)\nif err != nil {\n    return err\n}\ndefer f.Close()\n// 任意分支 return 都会关文件","note":"清理与获取成对出现，新增分支也不会漏。"},{"label":"反例：写在函数末尾","code":"f, err := os.Open(name)\n// ... 中途多个 return ...\nf.Close()","note":"任何一个提前返回都会跳过 Close，句柄泄漏。"}]' />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-021-defer-panic`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-021-defer-panic)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与运行时结构，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：LIFO、参数快照与 recover 的位置从哪来
+
+`defer` 的先进后出能追到运行时结构：`runtime/runtime2.go` 里每个 G 上挂着 `_defer` 链表，每次 `defer` 语句在链头插入一条记录；Go 1.14 起多数场景改用开放编码（open-coded defer），把 defer 直接编译成函数末尾的布尔标记加延迟调用块，不再堆分配，但顺序与快照语义不变。参数在注册时求值，是因为 defer 记录里保存的是「已求值的实参副本」而非变量引用——`defer f(x)` 与 `defer func(){ f(x) }()` 的差别正由此而来：后者闭包捕获变量，读到调用时的最新值。`panic` 的传播写在 `go doc builtin.panic`：「normal execution of F stops immediately. Any functions whose execution was deferred by F are run in the usual way, and then F returns to its caller. To the caller G, the invocation of F then behaves like a call to panic」——即逐层展开、每层先跑完自己的 defer。`recover` 的限制同样在 `go doc builtin.recover`：「Executing a call to recover inside a deferred function (but not any function called by it) stops the panicking sequence」，括号里那句说明把 recover 包一层普通函数再调就失效了。`os.Exit` 不跑 defer，是因为它直接陷入系统调用结束进程，不经过 Go 的栈展开路径。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`defer f(x)` 里的 x 在函数结束时才求值，所以能读到 x 的最新值。** defer 记录存的是注册那一刻的实参副本。
+
+<Compare title="参数快照与闭包捕获" :panels='[{"label":"错误：以为读最新值","code":"x := 1\ndefer fmt.Println(x)\nx = 9\n// 以为打印 9","note":"参数在注册那行就拷贝，打印 1"},{"label":"正确：用无参闭包","code":"x := 1\ndefer func() { fmt.Println(x) }()\nx = 9 // 打印 9","note":"闭包捕获变量，调用时读最新值"}]' />
+
+想读最新值就用无参闭包，让变量以捕获的方式进入；这也是 `defer func() { ... }()` 在框架里更常见的原因。
+
+**误解二：把 recover 包一层辅助函数也能接住 panic。** 运行时只认「直接位于 defer 函数体内」的那次调用。
+
+<Compare title="recover 必须直接调用" :panels='[{"label":"错误：包一层再调","code":"defer func() { handle() }()\nfunc handle() { recover() }","note":"recover 不在 defer 函数体内，接不住"},{"label":"正确：直接写在 defer 里","code":"defer func() {\n    if r := recover(); r != nil {\n        // 转成 error\n    }\n}()","note":"直接调用才有效"}]' />
+
+包一层之后，recover 执行时已不在展开的 defer 帧里，只能返回 `nil`；配合命名返回值改写 `err`，才能把意外转成普通错误。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc builtin.recover
+go build -gcflags=-m main.go
+```
+
+```text
+func recover() any
+    Executing a call to recover inside a deferred function (but not any function
+    called by it) stops the panicking sequence by restoring normal execution...
+# command-line-arguments
+./main.go:6:2: can inline demo.deferwrap1
+./main.go:9:6: can inline main
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `func recover() any` | recover 返回 panic 值，类型是 any |
+| `inside a deferred function` | 必须在 defer 注册的函数体内 |
+| `(but not any function called by it)` | 括号里的限制：包一层辅助函数就失效 |
+| `can inline demo.deferwrap1` | 开放编码 defer 生成的包装函数可内联，Go 1.14 起不再堆分配 |
+| `./main.go:9:6: can inline main` | 文件行:列 加 优化决策 |
+
+`can inline ... deferwrap1` 里的 `deferwrap1` 是编译器为这条 defer 生成的包装函数，能内联就说明它走了开放编码；循环里动态注册的 defer 仍会退回堆分配。
+
+下面这段把参数快照、闭包捕获与 recover 转 error 跑成确定输出：
+
+```go
+package main
+
+import "fmt"
+
+func snapshot() {
+	x := 1
+	defer fmt.Println("快照 =", x)
+	x = 9
+	fmt.Println("函数内 x =", x)
+}
+
+func closure() {
+	x := 1
+	defer func() { fmt.Println("闭包读到 =", x) }()
+	x = 9
+}
+
+func protect(job func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("已接住: %v", r)
+		}
+	}()
+	job()
+	return nil
+}
+
+func main() {
+	snapshot()
+	closure()
+	fmt.Println("protect 返回 =", protect(func() { panic("磁盘不可读") }))
+	fmt.Println("protect 正常 =", protect(func() {}) == nil)
+}
+```
+
+<OutputBox title="运行结果" output="函数内 x = 9\n快照 = 1\n闭包读到 = 9\nprotect 返回 = 已接住: 磁盘不可读\nprotect 正常 = true" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.14 | 开放编码 defer 成为默认 | 常见 defer 不再堆分配，循环里动态注册的仍走堆 |
+| Go 1.21 | `panic(nil)` 改为抛出 `*runtime.PanicNilError` | `GODEBUG=panicnil=1` 可回旧行为；别用 `recover() == nil` 判「没有 panic」 |
+| Go 1.22 | 循环变量每轮新建，循环里 defer 读到的值也随轮变化 | 与第 15 讲衔接 |
+| 全版本 | LIFO、参数快照、recover 只在 defer 内有效、os.Exit 不跑 defer | 结论与版本无关 |
+
+适用边界还有两条：长循环里堆 defer 会把清理动作一直拖到函数结束，应拆成小函数或显式关闭；`recover` 只在同一 goroutine 的 defer 里有效，子 goroutine 里的 panic 不会传播到父 goroutine。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 34 讲](/core/defer-internals) 会展开 `_defer` 链表、堆分配 defer 与开放编码的性能对比；[第 27 讲](/core/escape-analysis) 解释闭包捕获为何让变量逃逸到堆；[第 35 讲](/core/startup) 讲 `init` 里 panic 的表现。工程上，[第 61 讲](/server/net-http) 在请求最外层挂带 `recover` 的中间件兜底。实战里，[第 105 讲](/projects/net-shortlink) 的处理器同样靠这一层防止单请求拖垮进程，[第 112 讲](/projects/kv-2-network) 用 `defer` 保证连接与锁一定被释放。
+
 ## 动手练一练
 
 <Exercise title="用 defer 把 panic 转成 error" task="补全 protect 函数：要求无论传入的函数是否 panic，都能返回一个 error；不发生 panic 时返回 nil。想想 recover 该放在哪里、返回值该怎么被改写。" solution="func protect(job func()) (err error) {\n    defer func() {\n        if r := recover(); r != nil {\n            err = fmt.Errorf(`panic: %v`, r)\n        }\n    }()\n    job()\n    return nil\n}" :hints='["recover 必须写在 defer 的函数体里，并且直接调用。","要把值写回 err，就得用命名返回值。"]' explain="命名返回值 err 让 defer 有机会改写最终结果；recover 拿到 panic 值后赋给 err，函数于是以普通 error 的形式收场。" />

@@ -266,7 +266,130 @@ func main() {
 | `goto Label` | 跳到本函数内的标签 | 不能跳过变量声明、不能跨函数 |
 | `break Label` | 跳出标签所指的那一层循环 | 标签必须紧贴被跳的循环 |
 
-<Predict no="14-3" q="用 if 初始化语句解析一个非法数字字符串，err 不为 nil 时进入对应分支，此时同名变量 n 的值和可见性是？" :options='["n 为 0 且只在链内可见","n 为解析前的值且函数内都可见","编译失败，err 分支里不能用 n","n 为 0 且函数内都可见"]' answer="0" output="n = 0，且 n 与 err 只在整条 if/else 链内可见" explain="Atoi 失败时返回 int 零值 0；初始化语句声明的 n、err 作用域覆盖整条链，离开右花括号即失效，这正是它不污染外层的价值。" />
+<Predict q="用 if 初始化语句解析一个非法数字字符串，err 不为 nil 时进入对应分支，此时同名变量 n 的值和可见性是？" :options='["n 为 0 且只在链内可见","n 为解析前的值且函数内都可见","编译失败，err 分支里不能用 n","n 为 0 且函数内都可见"]' answer="0" output="n = 0，且 n 与 err 只在整条 if/else 链内可见" explain="Atoi 失败时返回 int 零值 0；初始化语句声明的 n、err 作用域覆盖整条链，离开右花括号即失效，这正是它不污染外层的价值。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-014-control-flow`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-014-control-flow)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把上面几条结论追到语言规范与编译器节点，下面给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：唯一的 for 与自动结束的 switch 从哪来
+
+「唯一的 `for`」不是把三种循环硬塞进一个关键字，而是规范里 `ForStmt` 本来就只有一套字段。`go doc go/ast.ForStmt` 显示 `Init Stmt`、`Cond Expr`、`Post Stmt` 三个字段都标注 `or nil`：三段式是三者齐全，`for cond` 是 `Init` 与 `Post` 为 nil，`for {}` 连 `Cond` 也为 nil（等价于恒真）。编译器在 `cmd/compile/internal/walk` 把它们统一降级成带条件跳转的同一类节点，所以用 `go build -gcflags=-S` 看两段等价循环，跳转指令几乎一样。`switch` 命中即结束也不是特例：规范规定每个 `case` 是独立的隐式块，执行完即终止整个 switch；`fallthrough` 只能作为某个 case 的最后一条非空语句，且不检查下一 case 的条件。`goto` 不能跳过变量声明同样写在规范「Goto statements」里：跳进某个块会让块内声明的变量处于「已进入作用域却未初始化」的状态，编译器在类型检查阶段直接报 `goto ... jumps over declaration of ...`。`if` 初始化语句的作用域覆盖整条链，则能从 `go doc go/ast.IfStmt` 的 `Else Stmt` 字段推出：`else if` 是嵌套的 `IfStmt`，整条链被包进同一个隐式块，`Init` 声明的变量因此到最末一个 else 都可见。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：从 C 转过来，switch 的每个 case 末尾都要写 `break` 防止穿透。** Go 的 case 自带隐式结束；多写一个 `break`，若 switch 嵌在 `for` 里，跳出的是循环而不是 switch。
+
+<Compare title="case 末尾要不要写 break" :panels='[{"label":"错误：照搬 C 习惯","code":"for _, day := range []int{1, 2, 3} {\n    switch day {\n    case 1:\n        handle()\n        break\n    case 2:\n        handle()\n    }\n}","note":"break 跳出最近的 for，循环被截断"},{"label":"正确：什么都不写","code":"switch day {\ncase 1:\n    handle()\ncase 2:\n    handle()\n}","note":"命中即结束；要连带执行才写 fallthrough"}]' />
+
+`break` 作用于最近的 `for`/`switch`/`select`；不写才是 Go 想要的默认行为，这也是「格式即语法」之外另一条容易带偏的习惯。
+
+**误解二：`goto` 能跳到同函数内任意标签，包括跳进内层块。** 跳过变量声明会被编译期直接拒绝。
+
+<Compare title="goto 与变量声明" :panels='[{"label":"错误：跳过声明","code":"goto DONE\nx := 1\n_ = x\nDONE:\nprintln(\"done\")","note":"编译失败：goto DONE jumps over declaration of x"},{"label":"正确：声明放在跳转之前","code":"x := 1\ngoto DONE\n_ = x\nDONE:\nprintln(x)","note":"标签处变量已初始化，跳转合法"}]' />
+
+把声明提前、或改用带标签的 `break`，都能绕开这条限制；真正多层跳出时带标签 break 往往比 goto 更好读。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc go/ast.ForStmt
+go vet ./...
+```
+
+```text
+type ForStmt struct {
+	For  token.Pos // position of "for" keyword
+	Init Stmt      // initialization statement; or nil
+	Cond Expr      // condition; or nil
+	Post Stmt      // post iteration statement; or nil
+	Body *BlockStmt
+}
+# example.com/demo
+./main.go:9:2: unreachable code
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `Init Stmt / or nil` | 初始化语句可为空，这是「条件 for」的来源 |
+| `Cond Expr / or nil` | 条件为空即恒真，对应无限 for |
+| `Post Stmt / or nil` | 后置语句可为空，三段式退化成 while |
+| `Body *BlockStmt` | 三种形式共用同一个循环体节点 |
+| `# example.com/demo` | vet 报告的包路径 |
+| `./main.go:9:2` | 文件、行、列：不可达语句的位置 |
+| `unreachable code` | 控制流图判定该行永不执行，常见于无 break 的无限 for 之后 |
+
+下面这段把 switch 自动结束、`fallthrough` 不判条件、if 链作用域与带标签 break 一次跑出来：
+
+```go
+package main
+
+import (
+	"fmt"
+	"strconv"
+)
+
+func main() {
+	for _, day := range []int{1, 2, 3} {
+		switch day {
+		case 1:
+			fmt.Print("一 ")
+		case 2:
+			fmt.Print("二 ")
+		default:
+			fmt.Print("其它 ")
+		}
+	}
+	fmt.Println()
+
+	switch n := 1; n {
+	case 1:
+		fmt.Print("一 ")
+		fallthrough
+	case 99:
+		fmt.Print("无条件进入 ")
+	}
+	fmt.Println()
+
+	if n, err := strconv.Atoi("42"); err == nil {
+		fmt.Println("if 链内 n =", n)
+	} else {
+		fmt.Println("else 里同样可见 n =", n)
+	}
+
+FOUND:
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			if i == 1 && j == 2 {
+				fmt.Println("标签 break 跳出于", i, j)
+				break FOUND
+			}
+		}
+	}
+}
+```
+
+<OutputBox title="运行结果" output="一 二 其它 \n一 无条件进入 \nif 链内 n = 42\n标签 break 跳出于 1 2" />
+
+### 版本差异与适用边界
+
+| 版本 | 变化 | 适用边界 |
+| --- | --- | --- |
+| Go 1.18 | 泛型加入，但 `type switch` 的 case 不能写类型参数 | 仍是语法限制 |
+| Go 1.22 | 循环变量每轮新建，由 `go.mod` 的 `go` 指令决定 | 与第 15 讲衔接，闭包捕获语义改变 |
+| Go 1.22 | 新增整数 range：`for i := range 10` | 仍是同一个 ForStmt 节点 |
+| Go 1.23 | 新增函数迭代器 range：`for x := range seq` | 需 `iter.Seq`，同样是每轮新变量 |
+| 全版本 | switch 自动结束、goto 不跨声明、else 紧跟右花括号 | 结论与工具链版本无关 |
+
+无条件 `for` 里漏写可达的 `break` 会占满一个 CPU 核，这类死循环 `go vet` 不一定报得出来，只能靠「循环条件会变化」的自检；`fallthrough` 也不能放在最后一个 case。
+
+### 与 L3 底层、L10 实战的呼应
+
+[第 36 讲](/core/compiler) 会展开 SSA 与控制流降级，用 `go tool compile -S` 看这里说的跳转指令；[第 44 讲](/concurrency/select) 的 `case` 与 switch 一样是独立分支、`break` 语义相同。实战里，[第 108 讲](/projects/data-sql-tool) 的 AST 遍历满是 `type switch` 与多分支 switch，[第 117 讲](/projects/cloud-operator) 的 Reconcile 状态机靠 `for` 加 `switch` 驱动——把控制流写直，后面这些代码才好读。
 
 ## 动手练一练
 

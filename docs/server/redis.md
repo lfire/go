@@ -294,7 +294,132 @@ func main() {
 
 锁的三要素缺一不可：**唯一 token**（防止 A 的锁被 B 释放）、**TTL 租约**（持有者崩溃也能自动解锁）、**Lua 原子比对删除**。这里只是初探，完整的看门狗续期、Redlock 争议会在第 84 讲展开。
 
+### 协议与契约：过期、淘汰与一致性的推导
+
+**过期是两种删除策略的组合，不是「到期即消失」。** 若给每个带 TTL 的 key 挂一个定时器，key 数量一大，定时器本身就成了 O(N) 的内存与 CPU 负担。Redis 用的是**惰性删除加定期抽样删除**：访问某个 key 时才检查并删除已过期的（惰性保证不会把过期值返回给客户端），再由后台 `activeExpireCycle` 每隔一小段时间随机抽样一批带 TTL 的 key 清理（定期保证冷 key 也能被回收）。由此推出几个可观测结论：`TTL key` 返回 `-2` 表示 key 已不存在、`-1` 表示存在但永不过期、正数表示剩余秒数；刚过期的 key 可能仍占着内存，但 `GET` 一定读不到它。这也解释了为什么「内存该降不降」时要查的是 `maxmemory` 与淘汰策略，而不是 TTL。
+
+**淘汰与过期是两套独立机制。** 过期由时间与访问驱动；淘汰（eviction）只在内存达到 `maxmemory` 时触发，与 TTL 无关。策略里 `noeviction` 让写入直接报错，`allkeys-lru` 在全体 key 中挑最近最少用删除，`volatile-lru` 只在设了 TTL 的 key 里删，`allkeys-lfu` 按使用频率删，`volatile-ttl` 优先删剩余寿命短的。还有一层常被忽略的实现细节：Redis 的 LRU 与 LFU 都是**近似**算法——随机采样 `maxmemory-samples` 个 key，从中挑最差的淘汰，而不是维护精确的全局 LRU 链表，用一点淘汰精度换内存与 CPU。代价是 `allkeys-lru` 可能删掉没设 TTL 的重要 key，而 `volatile-lru` 在库里几乎没有带 TTL 的 key 时会退化成 `noeviction` 的行为。
+
+**缓存与 DB 不一致的窗口可以画出来。** 写库与写缓存是两个独立操作，没有跨系统事务，并发下必然存在乱序。以「先删缓存、再更新库」为例：读请求 A 恰好在删除之后、更新之前回源，读到旧值并回填，随后库更新完成，缓存里就长期留着旧值，且没有任何人再删它。改成「先更新库、再删缓存」后窗口小得多，但仍存在「读在更新前拿到旧值、删缓存之后才回填」的极小概率，于是才有延迟双删与订阅 binlog 两档加强。三条路各有代价：
+
+| 方案 | 做法 | 一致性 | 代价 |
+| --- | --- | --- | --- |
+| A 先删缓存再更库 | `DEL` 后 `UPDATE` | 最差，旧值易被回填 | 乱序窗口最大，不推荐 |
+| B 先更库再删缓存 | Cache-Aside 标准写路径 | 短暂不一致，最终一致 | 简单可靠，默认推荐 |
+| C 延迟双删 / CDC | 删、更、延迟再删，或订阅 binlog 异步删 | 更接近最终一致 | 多一次删或一套 CDC 链路 |
+
+**分布式锁的三要素也是推导出来的。** 只有 `SETNX` 不带 token 时：A 拿锁后超时、锁自动过期，B 拿到锁，A 恢复后执行 `DEL` 会把 **B 的锁**删掉。所以必须有唯一 token（删之前比对）、TTL 租约（持有者崩溃也能自动解锁）、以及 Lua 脚本把「比对加删除」做成原子（否则比对与删除之间仍可能被插入）。三者缺一不可，这也是第 84 讲 Redlock 争议的起点。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（推荐） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| 写后缓存 | 写后 `SET` 新值 | 写后 `DEL` | 并发写乱序留旧值，计算型缓存白白重算 |
+| 一致性增强 | 依靠读路径自然重建 | 延迟双删或订阅 binlog | 前者仍有极小脏窗口，后者要运维 CDC |
+| 淘汰策略 | `noeviction` | `allkeys-lru` 加监控 | 内存打满时写入直接失败，需容量兜底 |
+| 热点 key | 设「永不过期」 | 逻辑过期加后台单飞重建 | 数据改了缓存永远不刷新 |
+| 锁实现 | 裸 `SETNX` 加 `DEL` | `SET NX EX` 加 token 加 Lua 释放 | 会误删他人续期后的锁 |
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 缓存与 DB 不一致 | 先删缓存再更库且并发读 | 缓存长期留存旧值 | 缓存与库值抽样比对 | 改先更库再删，必要时延迟双删 |
+| 重试放大 | 缓存挂了全量回源无限流 | 数据库被放大数倍流量打死 | 入口与 DB QPS 对比 | 降级回源加限流 |
+| 连接池耗尽 | 大量 key 同时失效回源 | DB 等待队列堆积 | `WaitCount`、慢 SQL 日志 | TTL 抖动加单飞重建 |
+| 雪崩第二种形态 | Redis 整体不可用 | 全量流量砸向 DB | 缓存健康度告警 | 多级缓存、高可用、限流 |
+| 锁误删 | 释放时不比对 token | 删掉他人持有的锁 | 锁持有者日志 | Lua 原子比对删除 |
+| 热 key | 单 key 被极高频率访问 | 单分片网卡与 CPU 打满 | 按 key 的 QPS 分布 | 本地缓存、key 加后缀打散 |
+| 空值缓存过期长 | 空值 TTL 设太大 | 数据刚创建却长时间读不到 | 空值命中率 | 空值 TTL 远小于正常数据 |
+| 消息重复 | CDC 重投导致重复删缓存 | 无业务损害但徒增负载 | 事件 ID 去重 | 删操作天然幂等，可忽略 |
+
+<SequenceDiagram title="缓存不一致窗口与延迟双删" :actors='["Writer","Reader","Cache","DB","CDC"]' :steps='[{"from":"Writer","to":"Cache","label":"删缓存","note":"先删后更","kind":"call"},{"from":"Writer","to":"DB","label":"更新库","note":"尚未提交","kind":"call"},{"from":"Reader","to":"Cache","label":"未命中","note":"GET 返回 nil","kind":"call"},{"from":"Cache","to":"Reader","label":"返回 nil","note":"空结果","kind":"return"},{"from":"Reader","to":"DB","label":"回源旧值","note":"更新还没提交","kind":"call"},{"from":"DB","to":"Reader","label":"返回 old","note":"旧值","kind":"return"},{"from":"Reader","to":"Cache","label":"回填 old","note":"脏数据落地","kind":"call"},{"from":"Writer","to":"DB","label":"提交 new","note":"库已是新值","kind":"call"},{"from":"Writer","to":"Cache","label":"延迟再删","note":"清掉旧值","kind":"async"},{"from":"Reader","to":"Cache","label":"再次读取","note":"未命中回源","kind":"call"},{"from":"Cache","to":"Reader","label":"返回 new","note":"最终一致","kind":"return"},{"from":"CDC","to":"Cache","label":"订阅 binlog","note":"更稳妥的异步删","kind":"async"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把 TTL、淘汰策略与一致性窗口跑出来看
+
+**实验一：redis-cli 观察过期返回值与淘汰策略。** 用 `--raw` 去掉输出的引号，便于逐字段对照：
+
+```bash
+redis-cli --raw SET user:1 gopher EX 2
+redis-cli --raw TTL user:1
+redis-cli --raw GET user:1
+sleep 3
+redis-cli --raw TTL user:1
+redis-cli --raw SET user:2 alice
+redis-cli --raw TTL user:2
+redis-cli --raw CONFIG GET maxmemory-policy
+redis-cli --raw CONFIG SET maxmemory-policy allkeys-lru
+```
+
+<OutputBox title="redis-cli --raw 逐行输出" output="OK\n2\ngopher\n-2\nOK\n-1\nmaxmemory-policy\nnoeviction\nOK" note="-2 是不存在，-1 是永不过期，两者含义完全不同" />
+
+逐字段解释：`OK` 是 `SET ... EX 2` 的返回；`2` 是剩余 TTL 秒数；`gopher` 是命中值；等 3 秒后的 `-2` 表示 key 已因过期而不存在（**不是**还剩 -2 秒）；不带 `EX` 写入的 `user:2` 返回 `-1`，表示存在但永不过期——把 `-1` 误读成「已过期」是排查时的高频错误；`maxmemory-policy` 与 `noeviction` 是 `CONFIG GET` 返回的两行，说明当前不主动淘汰，内存打满时写入会报错；最后的 `OK` 是切到 `allkeys-lru` 成功。对照实验：把 `maxmemory` 设成一个很小的值、灌入上千个 key，再观察 `used_memory` 是否稳定在上限附近、`evicted_keys` 是否上涨，就能把「淘汰与过期是两套机制」验证出来。
+
+**实验二：go test -race 复现缓存与 DB 不一致窗口。** 下面这段完整可编译的测试文件用 channel 精确构造出「删缓存 → 读回填旧值 → 更新库」的交错，把第 3 节那个乱序窗口从文字变成可复现的输出：
+
+```go
+package main
+
+import (
+	"fmt"
+	"testing"
+)
+
+func inconsistentWindow() (db, cache string, consistent bool) {
+	var dbv, cachev = "old", "old"
+	deleted := make(chan struct{})
+	updated := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() { // 写线程：先删缓存，等读线程回填后再更新库
+		cachev = ""
+		close(deleted)
+		<-updated
+		dbv = "new"
+		close(done)
+	}()
+
+	<-deleted
+	if cachev == "" {
+		cachev = dbv // 回源，此刻库里还是 old
+	}
+	close(updated)
+	<-done
+	return dbv, cachev, dbv == cachev
+}
+
+func TestDelayedDoubleDeleteWindow(t *testing.T) {
+	db, cache, consistent := inconsistentWindow()
+	fmt.Println("db =", db, "cache =", cache, "一致 =", consistent)
+	if consistent {
+		t.Fatal("该交错下应当出现不一致，实验才说明问题")
+	}
+}
+```
+
+```bash
+go test -race -run TestDelayedDoubleDeleteWindow -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestDelayedDoubleDeleteWindow\ndb = new cache = old 一致 = false\n--- PASS: TestDelayedDoubleDeleteWindow (0.00s)\nPASS" note="库已是新值、缓存仍是旧值，且 race 检测无告警" />
+
+逐字段解释：`db = new` 说明写事务确实提交了；`cache = old` 是读线程在「缓存已删、库未更」的窗口里回填的旧值，此后没人再删它，于是缓存长期与库不一致；`一致 = false` 把失败矩阵第一行变成可复现的事实；`-race` 无 `WARNING: DATA RACE`，因为三个 channel 建立了 happens-before，替代了裸共享变量。对照实验：把写线程改成「先 `dbv = "new"` 再 `cachev = ""`」重跑，`一致` 会变成 `true`——两组输出直接解释了 Cache-Aside 为什么选「先更库、再删缓存」。把这段改成 `_test.go` 跑 `go test -race`，也是第 49 讲内存模型的现成练习。
+
+<Predict q="redis-cli 对某个 key 执行 TTL 返回 -1，说明什么？" :options='["key 已过期不存在","key 存在但永不过期","还剩 -1 秒过期","命令执行出错"]' answer="1" output="key 存在但没有设置过期时间，TTL 返回 -1；返回 -2 才是 key 不存在" explain="-2 与 -1 只差一个数字，含义却相反：前者是查无此键，后者是长驻键。排查「内存不降」时把 -1 误当成已过期，会完全找错方向。" />
+
+### 两条真实工程误解
+
+**误解一：设了 TTL，key 到期的瞬间就会从内存里消失。** 错。惰性加定期抽样删除意味着刚过期的 key 可能仍占着内存，只是不会被读取到；内存该降不降时，要查的是 `maxmemory`、`maxmemory-policy` 和 `evicted_keys`，而不是怀疑 TTL 没生效。这个误解还会让人误判 `INFO memory` 的曲线，把正常的惰性回收当成内存泄漏去排查。
+
+**误解二：给热点 key 设「永不过期」就能根治击穿。** 错。永不过期只是把物理失效时刻挪走，却带来「数据改了缓存永远不刷新」的新问题，等于把一致性风险从秒级放大到无限。正解是**逻辑过期**：value 里带一个逻辑过期时间，命中后若发现逻辑已过期，就由单个后台请求拿锁重建，其余请求先返回旧值；这样热点 key 既不因物理过期被并发回源，又能在可控窗口内刷新。第 2 节的单飞重建正是这套机制的前半部分。
+
+### 与后续阶段的呼应
+
+- 本讲的降级回源与限流，在 /microservice/resilience 会被形式化为熔断器状态机与重试预算；命中率、淘汰数、 latency 在 /microservice/metrics 里变成 RED 指标与告警规则。
+- 带 token 的最小锁只是初探，完整的看门狗续期与 Redlock 争议在 /distributed/distributed-lock；「短暂不一致、最终一致」的判断框架在 /distributed/cap-base，跨系统原子性在 /distributed/distributed-tx。
+- L10 的 /projects/net-shortlink 是「读多写少、能容忍秒级不一致」的标准缓存受益者；/projects/micro-seckill 则相反——热点账户与预扣减要求强一致，本讲「盲目加缓存」的警告在那里是正确性底线。
 
 缓存上线前先想清楚失败路径：Redis 全部不可用时，接口是「降级回源」还是「直接失败」？对大多数业务，降级回源换取可用性更合理，但必须配合限流，否则缓存一挂、数据库立刻被放大数倍的流量打死，这被称为缓存雪崩的第二种形态。
 
@@ -303,6 +428,12 @@ func main() {
 <FlowTimeline title="一次带缓存的读请求" :steps='[{"title":"查缓存","desc":"命中且非空值标记则直接返回","tone":"blue"},{"title":"判断未命中","desc":"区分 redis.Nil 与 Redis 故障，后者降级","tone":"purple"},{"title":"单飞回源","desc":"同 key 只放一个请求查库","tone":"orange"},{"title":"回填","desc":"写缓存并叠加 TTL 抖动","tone":"green"},{"title":"返回","desc":"空结果写短 TTL 空值，防后续穿透","tone":"gray"}]' direction="horizontal" />
 
 还有几个反模式：**给所有 key 设同一个固定 TTL**（等价于给自己安排一次整点雪崩）；**永不过期 + 不主动更新**（数据改了缓存永远不刷新）；**把缓存当数据库用**（Redis 重启或淘汰策略会丢数据，业务必须能回源重建）；**缓存大对象或大集合**（单 key 几 MB，网络与序列化成本抵消收益）；以及前面点名的**盲目加缓存**。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-067-redis`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-067-redis)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

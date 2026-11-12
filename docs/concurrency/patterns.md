@@ -275,7 +275,7 @@ go test -race ./...                              # 全量回归
 
 <ConceptDiagram type="pipeline" title="带背压与收尾顺序的管道" caption="阶段间用有界 channel 传递，谁写谁关；fan-in 等齐再关汇合通道，末端加信号量限速" />
 
-<Quiz no="48-3" q="pipeline 的生产阶段漏写 defer close(out)，下游用 for range 接收会怎样？" :options='["range 立即结束","编译报错","下游 G 永久阻塞在 recvq，发生 goroutine 泄漏","自动收到零值"]' answer="2" explain="range 只在通道关闭且排空后才退出；未关闭时 chanrecv 把 G 挂进 hchan.recvq 并 gopark，永不被唤醒。TestNoCloseLeaks 用 50ms 超时证明 done 永远不 close；-race 抓不到泄漏，要用 runtime.NumGoroutine 或 goroutine profile。" />
+<Quiz q="pipeline 的生产阶段漏写 defer close(out)，下游用 for range 接收会怎样？" :options='["range 立即结束","编译报错","下游 G 永久阻塞在 recvq，发生 goroutine 泄漏","自动收到零值"]' answer="2" explain="range 只在通道关闭且排空后才退出；未关闭时 chanrecv 把 G 挂进 hchan.recvq 并 gopark，永不被唤醒。TestNoCloseLeaks 用 50ms 超时证明 done 永远不 close；-race 抓不到泄漏，要用 runtime.NumGoroutine 或 goroutine profile。" />
 
 <Callout type="tip" title="-race 抓不到 goroutine 泄漏" text="race detector 只报数据竞争，漏关 channel、忘记 cancel、卡在无出口的 select 这类泄漏它全都放过。工程上把 go test 前后对比 runtime.NumGoroutine()、用 go.uber.org/goleak 在测试收尾校验、或看 go tool pprof 的 goroutine profile 里卡在 chanrecv 与 semacquire 的 G，才是定位手段。" />
 
@@ -283,6 +283,16 @@ go test -race ./...                              # 全量回归
 真实系统常叠加使用：ETL 用 pipeline 串起「读取、清洗、转换、写出」，转换扇出到 CPU 核数的 worker，有界 channel 背压，errgroup 出错取消全流程。批量调 RPC 时 errgroup 加超时避免慢依赖拖死请求；热点 key 回源用 singleflight 把「千个并发」压成「一次」。限速配合 context，最后用 -race 跑。
 
 <Compare :panels='[{"label":"写法 A：不设并发上限","code":"g.Go(func() error { return handle(t) })","note":"任务一次性并发，可能打垮数据库"},{"label":"写法 B：SetLimit 限速","code":"g.SetLimit(8); g.Go(func() error { return handle(t) })","note":"errgroup 把在跑任务压在 8 个内，形成背压"}]' title="并发要不要设上限" />
+
+### 与 L10 实战的呼应
+
+本讲的六种套路几乎就是后面实战的目录。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 V2 单机并发版是标准的 worker pool 加有界 `jobs` 队列，V3 分布式版把 Frontier、Fetcher、Parser、Result Store 拆成 pipeline 阶段，扇出到多 worker、扇入汇总结果，队列满时背压到生产端——「谁写谁关」「fan-in 等齐再关」正是本讲收尾纪律的放大版。第 107 讲 [日志分析 ETL](/projects/data-log-etl) 用 pipeline 串起逐行读取、清洗、窗口统计与落库，转换阶段扇出到 CPU 核数、`errgroup` 出错取消全流程。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 的 Master 分片派发是 fan-out、Worker 回报汇合是 fan-in，执行器隔离则是 worker pool 的固定槽位。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 用限流排队加有界队列削峰，`singleflight` 则常用于热点 key 回源去重、防缓存击穿。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-048-patterns`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-048-patterns)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 WaitGroup 汇合一组 worker" task="把 tasks 每项交给一个 goroutine 处理，用 WaitGroup 等全部结束再继续，要求 Add 在启动前、Done 用 defer。" :hints='["循环里先 wg.Add(1)","函数体首行 defer wg.Done()","循环结束调用 wg.Wait()"]' solution="var wg sync.WaitGroup\nfor _, t := range tasks {\n    wg.Add(1)\n    go func(x int) {\n        defer wg.Done()\n        fmt.Println(x)\n    }(t)\n}\nwg.Wait()" explain="worker pool 最小汇合骨架：Add 登记、defer Done 计数、Wait 等待。循环变量通过参数 x 传入，避免闭包捕获同一变量；正式项目再叠加 jobs 队列与 context。" />

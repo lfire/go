@@ -23,6 +23,56 @@ description: 把地基知识串成一个能跑、能用、能测的命令行程�
 
 第二张图说明测试为什么要放在纯函数这一层：单元测试多而快，靠它兜住换算规则；至于命令行进来后参数有没有被正确解析，留少量集成检查即可。底座越厚，反馈越快、定位越准。
 
+### 为什么"纯逻辑加薄接线"值得当作第一原则
+
+这条分工不是审美，可以从可测性直接推出来。单元测试要能"喂一组输入、断言一组输出"，不启动进程、不伪造终端。若换算规则写在 `main` 里，想验证"3 公里等于 3000 米"就得先伪造整套命令行参数并捕获标准输出，测试成本远高于规则本身；把规则抽成不碰终端、不碰全局状态的纯函数，测试只需要往表里加一行数据。
+
+再往下推，可复用性也跟着来：纯函数不依赖命令行，于是同一个 `convert` 能被 CLI、HTTP 接口、批处理复用（[第 61 讲](/server/net-http)、[第 103 讲](/projects/cli-todo)）。而全塞进 main 的替代方案写起来最快，代价是每加一个单位都要动主流程、规则散落各处、错误出口不统一、回归只能靠手敲命令。
+
+错误为什么要走标准错误并配非零退出码，同样能从调用方推出来：命令行程序常被脚本或 CI 调用，调用方用退出码判断成败、用标准输出拿数据。把错误打到标准输出会污染结果，让管道下游把错误文本当成数据处理。所以 `fmt.Fprintln(os.Stderr, ...)` 与 `os.Exit(1)` 是一对约定，缺一不可。
+
+### 三个能立刻跑的小实验
+
+第一组看表格驱动测试到底跑出了什么：
+
+```bash
+go test -v ./...
+```
+
+<OutputBox title="实验一：-v 展开每个子测试（节选）" output="=== RUN   TestUnitFactor\n=== RUN   TestUnitFactor/公里\n=== RUN   TestUnitFactor/米\n=== RUN   TestUnitFactor/厘米\n--- PASS: TestUnitFactor (0.00s)\n    --- PASS: TestUnitFactor/公里 (0.00s)\n    --- PASS: TestUnitFactor/米 (0.00s)\n    --- PASS: TestUnitFactor/厘米 (0.00s)\nPASS" />
+
+逐项读：`-v` 把每个子测试展开；`t.Run(tc.name, ...)` 起的名字以斜杠出现在输出里，某行数据失败时能直接定位到表里哪一条；末尾 PASS 说明三个用例都通过。想加一个单位，只要往 `cases` 里加一行，这段循环一个字都不用改。
+
+第二组验证退出码这个与外部世界的约定：
+
+```bash
+go run . -from inch -to m ; echo $?
+```
+
+<OutputBox title="实验二：错误走标准错误，退出码非零（示意）" output="错误： 未知单位，只支持 km / m / cm\nexit status 1\n1" />
+
+错误文本出现在前面，`echo $?` 打印出上一条命令的退出码 1。脚本正是靠这个数字决定要不要继续；如果直接打到标准输出，下游解析就会把这句话当成换算结果。`;` 是 Unix 的分隔写法，Windows 下要用别的写法（见本讲深入一步的平台边界）。
+
+第三组把 `go build` 与 `go run` 的分工再落地一次：
+
+```bash
+go build -o convert . && ./convert -from km -to m -value 2.5
+```
+
+<OutputBox title="实验三：先构建，再反复运行" output="2.50 km = 2500.0000 m" />
+
+`go build` 留下一个可分发、可反复执行的二进制，之后直接跑不必再编译；参数仍由 `flag` 解析。对照 [第 03 讲](/guide/hello)：`go run` 适合迭代，交付与压测要用 `go build` 后的产物。
+
+### 这些习惯会在后面哪些讲反复出现
+
+| 本讲埋下的点 | 后面在哪用到 |
+| --- | --- |
+| `flag` 参数解析 | [第 56 讲](/engineering/config) 的配置、[第 103 讲](/projects/cli-todo) 的 cobra 命令树 |
+| 结果加 error 的纯函数 | [第 20 讲](/basics/errors)、[第 57 讲](/engineering/error-design) 的错误码 |
+| 表格驱动测试 | [第 52 讲](/engineering/unit-test)、[第 54 讲](/engineering/bench-fuzz) |
+| main 接线、逻辑分层 | [第 50 讲](/engineering/project-layout)、[第 53 讲](/engineering/mock-test) 的可测试性 |
+| 整套骨架 | [第 25 讲](/basics/capstone) 的内存版 KV 存储 |
+
 ## 2. 语法与规则
 
 先看参数解析。`flag` 包为每个参数返回一个**指针**，读取时要用 `*` 解引用：
@@ -220,6 +270,59 @@ func TestUnitFactor(t *testing.T) {
 
 <FlowTimeline :steps='[{"title":"解析参数","desc":"flag.Parse 后读取三个指针","tone":"blue"},{"title":"校验输入","desc":"负数与未知单位在这里被拦下","tone":"orange"},{"title":"纯函数换算","desc":"乘倍率再除目标倍率，不碰终端","tone":"green"},{"title":"输出或报错","desc":"正常写标准输出，失败写标准错误","tone":"purple"}]' direction="horizontal" />
 
+### 推导：为什么表格驱动测试加用例不用改逻辑
+
+把结构拆开看：**用例表是数据，验证循环是逻辑**，两者被 `t.Run` 隔开。`t.Run(tc.name, ...)` 把每行数据包成一个具名子测试，循环体里的调用与断言对所有行一视同仁。于是新增一条规则只需要在表里加一行，循环、断言、子测试命名原封不动。
+
+对照另一种写法就清楚代价了：给每条规则单独写一个 Test 函数，验证逻辑会随用例数量线性复制，改一处断言要改 N 处，还容易漏改。
+
+| 写法 | 加一个用例要改什么 | 断言逻辑有几份 |
+| --- | --- | --- |
+| 每条规则一个 Test 函数 | 新写一个函数、复制一遍断言 | 与用例数相同 |
+| 表格驱动加循环 | 往表里加一行数据 | 始终一份 |
+
+这也解释了为什么失败信息能直接定位到"表里哪一行"：子测试名就是从 `tc.name` 来的，[第 52 讲](/engineering/unit-test) 会把这套写法系统化。
+
+### 推导：错误为什么要走标准错误并配非零退出码
+
+因果链很短但很关键：命令行程序常被脚本或 CI 调用 → 调用方用退出码判断成败、用标准输出拿数据 → 若错误也写到标准输出，下游会把错误文本当成结果解析 → 所以 `fmt.Fprintln(os.Stderr, ...)` 与 `os.Exit(1)` 必须成对出现。
+
+一处边界要记住：`os.Exit` 不会执行已登记的 defer（[第 10 讲](/foundation/callables) 初识过 defer），所以资源清理要放在调用它之前完成，否则句柄会随进程退出才被系统回收。
+
+### 零基础最容易带进来的四个误解
+
+| 错误理解 | 为什么站不住 | 正确理解 |
+| --- | --- | --- |
+| flag 参数要写在 `go run` 的包路径前面 | 写在 `.` 前面会被 go 命令当成自己的参数吃掉 | 参数属于程序，放在包路径之后，名字前带短横线 |
+| 表格驱动测试里每个用例要写一个 Test 函数 | 那会把断言逻辑复制 N 份 | 一个 Test 加一张表加一个循环 |
+| 只要打印了错误就算失败，退出码无所谓 | 脚本与 CI 只看退出码，0 表示成功 | 必须 `os.Exit(1)` 之类的非零码 |
+| `go test` 会先跑 main 函数再测 | 它只找 `_test.go` 里的测试函数并执行 | main 不会被测试流程调用 |
+
+第一条配一组命令对照：
+
+```bash
+# 错误：参数写在包路径前面，被 go 命令自己消费
+go run -from km . -to m
+
+# 正确：参数属于程序，放在包路径之后
+go run . -from km -to m -value 2.5
+```
+
+这与 [第 03 讲](/guide/hello) 里 `go run main.go -- -x` 要用双横线隔开是同一个道理：命令行最前面那一段归 go 工具，后面的才交给你的程序。
+
+### 版本与平台边界
+
+| 边界 | 说明 | 归属 |
+| --- | --- | --- |
+| `flag` 稳定性 | 该包行为长期稳定，Go 版本差异很小，可以放心依赖 | 与较新的泛型等特性不同 |
+| Go 1.21 | 内置 `min`、`max` 等函数，本阶段多处用到 | [第 07 讲](/foundation/numeric) |
+| 退出码读取 | Unix 与 macOS 用 `$?`，Windows 命令提示符用 `%ERRORLEVEL%`、PowerShell 用 `$LASTEXITCODE` | `os.Exit(1)` 的语义本身跨平台一致 |
+| 可执行文件 | Windows 产物是 `convert.exe`，另两者无后缀 | 构建脚本按 GOOS 拼名字 |
+| `go test` 输出 | 具体格式随 Go 版本略有差异，但子测试名与 PASS、FAIL 语义稳定 | 本讲实验一 |
+| 标准错误重定向 | `os.Stderr` 三平台都有，但 shell 里的重定向写法不同 | 写 CI 脚本时要单独适配 |
+
+<Quiz q="关于表格驱动测试与 go test，下面哪一项说法是正确的？" :options='["每加一个用例都要新写一个 Test 函数","go test 会先执行 main 函数再做测试","一张用例表加一个循环，新增用例只需加一行数据","t.Run 起的子测试名不会出现在 go test -v 的输出里"]' answer="2" explain="用例表是数据、循环是逻辑，两者分离后加用例只改数据；go test 只找 _test.go 里的测试函数，不执行 main；-v 展开的子测试名正是 t.Run 传入的名字。" />
+
 ## 4. 工程实践
 
 把这个小程序当项目来摆，文件结构应该像这样：
@@ -248,6 +351,12 @@ go build -o convert .
 
 <Callout type="tip" title="一条贯穿线" text="第 25 讲会做一个内存版 KV 存储，用的还是今天这套分工：main 只解析命令，逻辑与错误返回放在可被单测覆盖的层里。把这一讲的分层习惯练熟，后面读那个项目会轻松很多。" />
 
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l1-foundation/lesson-012-capstone`](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-012-capstone)。clone 仓库后进入 `examples/l1-foundation`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 
 <Exercise title="把换算规则抽成纯函数" task="写一个不碰 flag、不碰输出的函数 kmToM，输入公里数，返回对应的米数。想清楚它为什么能被表格驱动测试直接调用。" :hints='["一公里是一千米，函数体只需要一次乘法","签名写成 func kmToM(km float64) float64"]' solution="func kmToM(km float64) float64 {\n    return km * 1000\n}" explain="纯函数不读参数、不打印、不退出，测试可以直接喂 1、2.5、0 这些值并断言结果；负数校验再加一个返回 error 的版本即可，这正是分层让代码可测的原因。" />
@@ -258,7 +367,7 @@ go build -o convert .
 
 <Predict no="12-2" q="完整程序直接运行、不带任何参数，会输出什么？" :options='["1.00 km = 1000.0000 m","2.50 km = 2500.0000 m","什么也不输出","直接报错退出"]' answer="0" explain="三个参数都有默认值 km、m、1，换算结果为 1000 米，按格式串保留对应小数位输出。" />
 
-<FillBlank no="12-3" tpl="解析命令行参数前必须先调用 flag.___()\n表格驱动测试里用 t.___ 给每个用例起子测试名\n错误输出通常写到 os.___" :answers='["Parse","Run","Stderr"]' hint="三空分别是解析函数名、子测试方法名、标准错误的常量名。" explain="flag.Parse 完成解析，t.Run 建立具名子测试，os.Stderr 是标准错误而非标准输出。" />
+<FillBlank no="12-3" tpl="解析命令行参数前必须先调用 flag.___()\n表格驱动测试里用 t.___ 给每个用例起子测试名\n错误输出通常写到 os.___" :answers='["Parse","Run","Stderr"]' hint="三空分别是解析函数名、子测试方法名、标准错误的常量名。" explain="flag.Parse 完成解析，t.Run 建立具名子测试，os.Stderr 是标准错误而非标准输出。" :explains='["flag 包只把参数注册进结构体，真正从 os.Args 解析赋值要等 Parse 调用；不调用它，标志都停在默认值。","t.Run 为每个用例建立具名子测试，失败时能精确定位到具体数据行，还能用 -run 单独过滤重跑某个用例。","诊断与错误信息应写 os.Stderr 而不是标准输出，让正常结果与错误流分离，重定向或管道处理时不会互相污染。"]' />
 
 ## 一页纸速记
 

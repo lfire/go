@@ -315,7 +315,129 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+### 协议与契约：占位符、NULL 与事务隔离的推导
+
+**占位符为什么能从根上消除注入。** `database/sql` 把 SQL 文本与参数**分两条通道**交给驱动：文本走预处理语句（或 `QueryerContext`），参数以 `driver.Value` 单独绑定，值永远不参与 SQL 语法解析。推导：字符串拼接 `WHERE name = '` + 输入 + `'` 时，输入里的 `' OR 1=1 --` 会改变语句的语法树，让 WHERE 恒真；而 `QueryRowContext(ctx, "WHERE name = ?", 输入)` 里同一个字符串只是一个 VARCHAR 值，语法树保持不变。边界同样重要：占位符只能替**值**，不能替表名、列名、排序方向——`SELECT ? FROM users` 会把字符串当列值而不是列名，因为标识符在 SQL 里不是值。动态标识符必须走白名单映射。占位符风格（`?`、`$1`、sqlx 的 `:name`）与 DSN 格式都由**驱动**定义，不是 `database/sql` 统一规定的，换库时要重新确认。
+
+**NULL 的坑都源于三值逻辑。** SQL 用 TRUE / FALSE / **UNKNOWN** 三值：`col = NULL` 的结果恒为 UNKNOWN，而 `WHERE` 只保留 TRUE，所以查空值必须写 `IS NULL` 而不是 `= NULL`；`NOT IN` 子查询里只要含一个 NULL，整条结果就变空；聚合函数大多忽略 NULL，但 `COUNT(*)` 不忽略。Go 的零值里没有「未知」这一态，于是 `Scan` 把 NULL 扫进 `*string` / `*int` 会报 `converting NULL to string is unsupported`。`sql.NullString` 用一个 `Valid` 位补上这一态，`COALESCE(col, 默认值)` 则在 SQL 侧把 UNKNOWN 折叠成确定值。推导结论：所有 NULL 事故，本质都是「两值语言的变量去接三值逻辑的结果」。
+
+**隔离级别是现象定义，不是跨库承诺。** ANSI SQL-92 用三种异常现象（脏读、不可重复读、幻读）定义四级隔离；级别越高，锁范围越大、持有越久（或 MVCC 快照越保守），并发吞吐越低。Go 的 `sql.LevelXxx` 只是常量，最终由驱动翻译成 `SET TRANSACTION ISOLATION LEVEL ...`，并非所有驱动支持全部级别（SQLite 基本只支持默认与 serializable），指定不支持的会直接报错。实现差异更大：MySQL InnoDB 的 Repeatable Read 靠 MVCC 加间隙锁，实际能挡住大部分幻读；Postgres 的 Repeatable Read 用事务级快照，行为又不同。所以第 3 节那张表是「现象定义」，迁移数据库时必须重新验证，别把它当跨库保证。
+
+**连接池耗尽可以用排队论推出来。** `MaxOpenConns` 之外的请求**不会报错，而是阻塞在等待队列**，直到有连接归还或 ctx 超时。按 Little's Law，并发数约等于吞吐乘以延迟：若一条慢 SQL 把平均延迟从 5ms 推到 500ms，维持同样 QPS 就需要约 100 倍并发连接，池会瞬间被借空。这就是为什么压测里先看到的是延迟毛刺而不是错误码，第一诊断现场应是 `db.Stats()` 的 `WaitCount` 与 `WaitDuration`，而不是应用日志里的报错。
+
+### 设计取舍与替代方案
+
+| 决策点 | 方案 A | 方案 B（推荐） | 方案 A 的代价 |
+| --- | --- | --- | --- |
+| 动态 SQL | 字符串拼接 | 值用占位符，标识符走白名单 | 拼接改变语法树，注入与全表扫描风险 |
+| 可空列 | 扫进普通 `string` / `int` | `sql.NullXxx` 保留未知，或 `COALESCE` 折叠 | 遇到 NULL 直接报错或悄悄把「没填」当成空串 |
+| 隔离级别 | 盲目上 Serializable | 用默认级别，按需局部提升 | 锁竞争加剧，吞吐显著下降 |
+| 池容量 | 不设上限或拍很大 | 略大于 `max_connections / 实例数` | 把连接数打满数据库，或只是把瓶颈挪到 DB |
+| 事务边界 | 事务里做 RPC / 文件 IO | 事务尽量短，只包数据库操作 | `BeginTx` 独占连接，长事务把池打满 |
+
+### 失败矩阵
+
+| 失败场景 | 触发条件 | 可观测现象 | 定位手段 | 对策 |
+| --- | --- | --- | --- | --- |
+| 连接池耗尽 | 漏 `rows.Close()`、长事务、慢 SQL | `WaitCount` 上涨、延迟毛刺 | `db.Stats()` | 显式关闭、短事务、超时 |
+| 慢查询 | 缺索引或深分页 | `InUse` 贴近上限，吞吐上不去 | `EXPLAIN`、慢 SQL 日志 | 补索引、改游标分页 |
+| 事务失原子 | 事务里误用 `db` 而非 `tx` | 部分写入不受回滚保护 | 代码评审、SQL 日志 | 全程只用 `tx` |
+| NULL 崩溃 | 可空列扫进普通类型 | `converting NULL` 报错 | 错误日志 | `sql.NullXxx` 或 `COALESCE` |
+| 注入 | 输入拼进 SQL | 数据泄露或全表被拖 | SQL 审计日志 | 参数化加白名单 |
+| 占位符误用 | 把表名当参数绑定 | 语法错误或类型错误 | 驱动报错信息 | 标识符白名单 |
+| 死连接 | `ConnMaxLifetime` 大于中间设备空闲断连 | 借到半开连接，偶发 EOF | 连接存活时长 | 缩短 lifetime 加读探测 |
+| 取消未透传 | 用 `Query` 而非 `QueryContext` | 客户端已断，慢查询仍占连接 | SQL 慢日志 | 全程透传 ctx |
+| 重试放大 | 下游超时被无限重试 | 池等待队列越排越长 | 入口与 DB QPS 对比 | 退避加重试预算 |
+
+<SequenceDiagram title="借连接、事务独占与取消传播" :actors='["Handler","sql.DB","Pool","Driver","DB"]' :steps='[{"from":"Handler","to":"sql.DB","label":"QueryContext","note":"带 r.Context 与占位符","kind":"call"},{"from":"sql.DB","to":"Pool","label":"借连接","note":"池空则排队","kind":"call"},{"from":"Pool","to":"Driver","label":"绑定参数","note":"值与 SQL 分通道","kind":"call"},{"from":"Driver","to":"DB","label":"发送语句","note":"预处理加参数","kind":"call"},{"from":"DB","to":"Driver","label":"返回游标","note":"结果集","kind":"return"},{"from":"Driver","to":"Handler","label":"逐行 Scan","note":"NULL 需 NullXxx","kind":"return"},{"from":"Handler","to":"Handler","label":"rows.Close","note":"连接才归还","kind":"self"},{"from":"Handler","to":"sql.DB","label":"BeginTx","note":"独占一条连接","kind":"call"},{"from":"sql.DB","to":"Pool","label":"独占","note":"直到 Commit 或 Rollback","kind":"call"},{"from":"Handler","to":"Handler","label":"误用 db","note":"另借连接破坏原子性","kind":"self"},{"from":"Handler","to":"sql.DB","label":"Commit","note":"释放独占","kind":"call"},{"from":"Pool","to":"DB","label":"ctx 取消","note":"驱动取消在途 SQL","kind":"async"}]' />
+
 ## 4. 工程实践
+
+### 可验证实验：把执行计划与 NULL 契约跑出来看
+
+**实验一：EXPLAIN QUERY PLAN 看索引与占位符。** 用第 2 节的 SQLite 库，对比加索引前后同一个查询的执行计划：
+
+```bash
+sqlite3 app.db "EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = 'a@b.com';"
+sqlite3 app.db "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);"
+sqlite3 app.db "EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = 'a@b.com';"
+```
+
+<OutputBox title="加索引前后的执行计划" output="第 1 次: QUERY PLAN\n`--SCAN users\n第 2 次: QUERY PLAN\n`--SEARCH users USING INDEX idx_users_email (email=?)" note="SCAN 是全表扫描，SEARCH 是索引定位" />
+
+逐字段解释：`QUERY PLAN` 是结果集头；`SCAN users` 表示对 users 做全表逐行扫描，代价 O(N)，用户表一大就会变成慢查询并占住连接；`SEARCH users USING INDEX idx_users_email` 表示走索引定位，代价近似 O(log N)；`(email=?)` 里的 `?` 正是参数绑定占位符在执行计划里的样子——它说明这条查询用过参数化，而不是把字面量拼进 SQL。把这一步和「连接池耗尽」连起来：一次 `SCAN` 若从 5ms 变 500ms，按排队论并发需求放大约 100 倍，池立刻被打满。生产里对应 MySQL 的 `EXPLAIN`，重点看 `type`、`rows`、`Extra` 三列。
+
+**实验二：sqlmock 加 go test -race 断言 NULL 与参数绑定。** 下面这段完整可编译的测试文件用 `github.com/DATA-DOG/go-sqlmock` 把「NULL 不能扫进普通 string」「`sql.NullString` 能表达未知」「参数绑定把值单独交给驱动」三件事变成可执行断言：
+
+```go
+package main
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+)
+
+func TestNullScanAndQueryContract(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"name", "email"}).
+		AddRow("gopher", nil) // 模拟可空列为 NULL
+	mock.ExpectQuery("SELECT name, email FROM users").WillReturnRows(rows)
+
+	var name, email string
+	if err := db.QueryRow("SELECT name, email FROM users").Scan(&name, &email); err == nil {
+		t.Fatal("把 NULL 扫进 string 竟然成功了，三值语义被吞掉")
+	}
+
+	rows2 := sqlmock.NewRows([]string{"name", "email"}).AddRow("gopher", nil)
+	mock.ExpectQuery("SELECT name, email FROM users").WillReturnRows(rows2)
+	var ns sql.NullString
+	if err := db.QueryRow("SELECT name, email FROM users").Scan(&name, &ns); err != nil {
+		t.Fatalf("sql.NullString 应能接受 NULL: %v", err)
+	}
+	if ns.Valid || ns.String != "" {
+		t.Fatalf("NULL 应令 Valid=false: %+v", ns)
+	}
+
+	mock.ExpectExec(`INSERT INTO users\(name, email\) VALUES\(\?, \?\)`).
+		WithArgs("gopher", "g@x.com").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	if _, err := db.Exec("INSERT INTO users(name, email) VALUES(?, ?)", "gopher", "g@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+```
+
+```bash
+go test -race -run TestNullScanAndQueryContract -v ./...
+```
+
+<OutputBox title="go test -race 预期输出" output="=== RUN   TestNullScanAndQueryContract\n--- PASS: TestNullScanAndQueryContract (0.00s)\nPASS\nok   example.com/server   1.312s" note="三个断言全过，且 race 检测无告警" />
+
+逐字段解释：第一个断言要求 `Scan(&name, &email)` **必须报错**，若它成功说明驱动把 NULL 悄悄转成了空串、三值语义被吞掉；第二个断言要求 `sql.NullString` 成功且 `Valid=false`，证明「未知」这一态被显式保留；`ExpectExec` 里用正则转义了括号与 `?`，`WithArgs` 单独声明期望的参数值，这正是「SQL 文本与参数分两条通道」的可验证形式——把 `WithArgs` 改成错误值，用例立即失败，说明参数确实是独立传下去的。`ExpectationsWereMet` 确认没有遗漏或多余的 SQL；`-race` 无告警说明 mock 与断言间无共享状态竞争。把 `sql.NullString` 换回普通 `string` 再跑，第一处 `t.Fatal` 就会触发，NULL 契约一目了然。
+
+<Predict q="执行 SELECT * FROM users WHERE deleted_at = NULL 想查出未删除的用户，结果如何？" :options='["正常返回未删除的用户","一条都查不到","报语法错误","返回全部用户"]' answer="1" output="一条都查不到，因为 deleted_at = NULL 的结果是 UNKNOWN，WHERE 只保留 TRUE" explain="SQL 是三值逻辑，与 NULL 的等值比较恒为 UNKNOWN；查空值必须用 IS NULL。NOT IN 子查询含 NULL 时同理会让结果集为空。" />
+
+### 两条真实工程误解
+
+**误解一：`WHERE email = NULL` 能查出没填邮箱的用户。** 错。三值逻辑下 `= NULL` 恒为 UNKNOWN，`WHERE` 不会保留，结果必然是空集；正确写法是 `IS NULL` 或 `IS NOT NULL`。更隐蔽的是 `id NOT IN (SELECT parent_id FROM t)`，只要子查询里出现一个 NULL，整个条件就变 UNKNOWN、返回零行。这类 bug 不会报错，只会「数据莫明变少」，靠单测最难发现，必须靠对三值逻辑的理解提前避开。
+
+**误解二：占位符能参数化一切，把表名也用 `?` 传进去更省事。** 错。SQL 标识符（表名、列名、`ASC/DESC`）不是值，不能绑定；`SELECT ? FROM users` 会把参数当成一个字面量列，返回一堆常量或类型错误。真实业务里「按租户分表」「按字段排序」又确实需要动态标识符，正解是服务端维护一张白名单，把用户输入映射成有限几个合法标识符，再拼进 SQL 的标识符位置，值部分继续用占位符。把「参数化」当成万能，反而会在需要动态标识符的地方写出注入漏洞。
+
+### 与后续阶段的呼应
+
+- 本讲的 ctx 透传与连接池参数，在 /microservice/grpc-advanced 会升级为跨服务 Deadline 传播；在 /microservice/resilience 里由超时、重试预算与熔断决定「下游慢时还该不该继续放大查询」；/microservice/metrics 则把 `WaitCount`、`InUse`、`WaitDuration` 做成可告警曲线。
+- 占位符、NULL 与隔离级别在 /server/orm 会被 ORM 重新包装一遍，但底层仍是同一套 `database/sql` 契约；/distributed/distributed-tx 处理跨库事务时，本讲的本地事务与 ACID 是理解 2PC / TCC / Saga 的起点。
+- L10 的 /projects/net-shortlink 读路径几乎全是单行主键查询，正是「短事务加连接池有上限」的典型受益者；/projects/data-sql-tool 要把 `EXPLAIN` 的执行计划做成通用查询工具，/projects/micro-ecommerce 的订单与库存则把事务边界当成正确性底线。
 
 把数据层接进服务时，有三个边界要守。第一，**context 一定从请求透传到查询**：用 `QueryRowContext(r.Context(), ...)`，客户端断开或超时，数据库查询才会随之取消，否则慢 SQL 会继续占着连接。第二，**所有 SQL 都参数化**，表名列名若必须动态拼接就用白名单，绝不把用户输入插进语句。第三，**把 `db` 收进结构体而不是散落全局**，但注意别把 `context.Context` 存进结构体字段长期持有——context 应当作为函数第一个参数显式传递（这一点在第 47 讲与第 61 讲都强调过）。
 
@@ -324,6 +446,12 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 <FlowTimeline title="一次查询的连接生命周期" :steps='[{"title":"借连接","desc":"池中有空闲则复用，否则新建或进等待队列","tone":"blue"},{"title":"执行 SQL","desc":"受 ctx 超时与取消约束","tone":"purple"},{"title":"遍历 rows","desc":"游标持有连接，逐行 Scan","tone":"orange"},{"title":"归还","desc":"rows.Close 或耗尽后连接回到池中","tone":"green"},{"title":"回收","desc":"超过 ConnMaxLifetime 或 MaxIdleTime 时物理关闭","tone":"gray"}]' direction="horizontal" />
 
 线上排查连接问题先看 `db.Stats()`：`OpenConnections`、`InUse`、`Idle`、`WaitCount`。`WaitCount` 持续增长说明 `MaxOpenConns` 偏小或有连接没归还；`InUse` 长期贴近 `MaxOpenConns` 而吞吐上不去，多半是慢 SQL 或长事务。另一个反模式是**事务里混用 db 与 tx**，前文已说明它会绕过原子性，代码评审时值得专门盯一眼。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l6-server/lesson-065-database-sql`](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-065-database-sql)。clone 仓库后进入 `examples/l6-server`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

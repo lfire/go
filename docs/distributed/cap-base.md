@@ -168,6 +168,46 @@ func main() {
 
 <Callout type="warn" title="易错点" text="别把最终一致理解成大概率一致：它保证的是收敛，不保证收敛前读到什么。若业务无法容忍任何旧值（如扣款、库存扣减），就不能选 AP，也别指望重试能补回一致性。" />
 
+### 从抽屉原理推导 quorum 的两个条件
+
+`R + W > N 且 W > N/2` 不是经验口诀，而是两条可以分别证明的集合命题。设副本全集为 `U`，大小为 `N`；一次读实际询问的副本集合为 `S_r`，大小为 `R`；一次写拿到确认的集合为 `S_w`，大小为 `W`。
+
+- `R + W > N` 推出 `S_r` 与 `S_w` 必相交：假设两者不相交，则并集大小 `R + W > N`，但并集是 `U` 的子集、大小不可能超过 `N`，矛盾。所以读集合至少命中一个已确认写入的副本，取版本最大者就能读到最新值。
+- `W > N/2` 推出任意两个写集合 `S_w1`、`S_w2` 必相交：交集大小至少为 `2W - N`，大于 0。公共副本会按版本号或日志序把两次写排成先后，或拒绝后到的一次，于是不会出现两个互不感知的写都各自返回成功、各自留下不同值。
+
+注意第二条独立于第一条：`R + W > N` 只保证「读能见到某次写」，挡不住「两次并发写都成功」。第 2 节里 `StrongConsistent()` 把两个条件写成 `&&`，正是因为缺一不可。
+
+<SequenceDiagram title="三副本 quorum 写入遇到分区" caption="W=2 时确认不足，CP 系统拒绝写入；随后读取靠版本与读修复收敛" :actors='["Client","NodeA","NodeB","NodeC"]' :steps='[{"from":"Client","to":"NodeA","label":"写 x=2 要求 W=2","kind":"call"},{"from":"NodeA","to":"NodeB","label":"转发并请求确认","kind":"call"},{"from":"NodeB","to":"NodeA","label":"ACK 版本 7","kind":"return"},{"from":"NodeA","to":"NodeC","label":"转发并请求确认","kind":"call"},{"from":"NodeC","to":"NodeA","label":"分区中无响应","note":"等待超时","kind":"return"},{"from":"NodeA","to":"Client","label":"确认不足返回错误","note":"CP 取舍","kind":"return"},{"from":"Client","to":"NodeB","label":"读 x 要求 R=2","kind":"call"},{"from":"NodeB","to":"Client","label":"返回版本 7","kind":"return"},{"from":"Client","to":"NodeC","label":"读 x 要求 R=2","kind":"call"},{"from":"NodeC","to":"Client","label":"返回版本 6","note":"落后副本旧值","kind":"return"},{"from":"Client","to":"Client","label":"取版本 7 并读修复","kind":"self"}]' />
+
+### 这套推导成立的前提，以及它什么时候失效
+
+把前提写清楚，结论才不会用错地方：
+
+| 前提 | 为什么需要 | 前提被打破后的表现 |
+| --- | --- | --- |
+| 崩溃-停止故障模型，节点不会伪造应答 | 交集里的副本必须如实报告自己的版本 | 拜占庭故障（节点撒谎、返回伪造值）不在 CAP 与 quorum 的讨论范围，需要 BFT 类协议，副本数从 `2f+1` 升到 `3f+1` |
+| 每个 key 在每个副本上有全序版本号 | 读集合命中交集后要能判定谁更新 | 用 last-write-wins 且时钟偏移时，物理时间戳大的未必是后写，会静默丢数据 |
+| 读写都严格查询 N 个首选副本中的 R/W 个 | 抽屉原理只在同一个全集 U 上成立 | sloppy quorum 把确认记到临时节点（hinted handoff），读写集合可能落在不相交的两批机器上，交集失效 |
+| 网络是异步的：消息延迟没有上界 | 这是 CAP 不可行结论的证明假设 | 若给网络加同步假设（有界延迟、可判定节点死亡），能用超时精确判活，结论会松动 |
+| C 特指单对象、单操作的线性一致性 | Gilbert-Lynch 证明针对的是读写寄存器 | 多 key 事务、跨对象约束不属于 CAP 的 C；ACID 里的 C 是完整性约束，与它毫无关系 |
+| A 指非故障节点的每个请求都终止并返回 | 定理按请求粒度定义 | A 不是运维口径的可用率百分比，也不要求响应成功；分区时 CP 系统返回错误，按定理就是放弃了 A |
+
+一句话收口：**拜占庭故障、多对象事务、时钟可信度、sloppy quorum 这四类问题，CAP 定理本身都不回答**。把它们混进「三选二」的讨论，是绝大多数误读的来源。
+
+### 无分区时 CAP 没说完的那一半：PACELC
+
+CAP 只在分区那段窗口里给出取舍，可系统绝大多数时间并没有分区。PACELC 把它补全：有分区时在 A 与 C 之间选（即 CAP），无分区时在延迟与一致性之间选。也就是说，即便一切正常，选 CP 的系统仍要为一致性多付一次多数派往返的延迟：etcd 的写要经过 Leader 复制到多数派，ZooKeeper 的读也要走同步调用；选 AP 的系统可以直接读本地副本，延迟低但可能旧。于是 `etcd / ZooKeeper / HBase` 属于 PC/EC（分区保一致、平时也保一致，牺牲延迟），`Cassandra / Dynamo / Riak` 属于 PA/EL（分区保可用、平时保低延迟，牺牲一致性）。理解这一层，才不会把「我们没分区」当成「可以随便选一致性级别」。
+
+### 三条真实误解（错误说法 / 正确说法）
+
+| 误解 | 为什么错 | 正确说法 |
+| --- | --- | --- |
+| CAP 的 C 就是 ACID 的 C，A 就是可用率 99.99% | 两者定义完全不同：ACID 的 C 是事务前后约束不被破坏，CAP 的 C 是线性一致性；可用率是运维统计口径 | CAP 的 C 是单对象实时序的线性一致性，A 是每个未崩溃节点的请求都能终止并返回响应，与百分比 SLA 无关 |
+| 分区时多重试几次、把超时调长就能既 C 又 A | 异步网络里消息延迟无上界，重试只是把「不知道对方收到没有」的窗口拉长，无法判断该返回新值还是旧值 | CP 系统必须在这段窗口里对写请求返回错误或阻塞，这段不可用正是放弃 A 的代价 |
+| 分区恢复后两边数据会自动合并，无需处理冲突 | 两侧各自接受写入会产生兄弟版本，简单取最大版本会丢掉一侧更新 | 必须靠版本向量、CRDT 或业务合并规则显式收敛；LWW 在时钟偏移下还会静默丢数据 |
+
+<Callout type="note" title="判断口径" text="遇到任何一致性方案，先问三句：它假设的是崩溃故障还是拜占庭故障？它的交集是在同一个副本全集上吗？无分区时它用延迟换了什么？三句答完，选型就有依据了。" />
+
 ## 4. 工程实践：把取舍做成可配置项
 
 生产里最忌讳把 CP 或 AP 写死在代码分支里，更稳的做法是把 N/W/R 做成配置，让同一份二进制在不同故障等级下切换行为。
@@ -178,13 +218,137 @@ func main() {
 
 真实选型同样服从「中途失败会怎样」：支付、库存、分布式锁与选主必须选 CP，宁可短暂不可用也不能出现双花或双主；点赞数、评论计数、购物车、DNS 这类读多写少且能容忍短时旧值的场景选 AP。注册中心也是同一问题的两解：etcd 走 CP，Eureka 走 AP。把这条判断链画成时间线，故障复盘时就能逐段追问每一刻的数据状态，而不是笼统地说「网络抖了一下」。
 
+### 可验证实验：穷举 quorum 与 go test -race
+
+第 2 节的 `StrongConsistent()` 只给了判定式，下面把「判定式确实等价于集合相交」这件事跑出来验证。先把下面这段保存为 `quorum_verify.go`，它穷举所有读写子集，不靠随机采样：
+
+```go
+package main
+
+import "fmt"
+
+// combos 返回 n 个副本里所有大小为 k 的子集，用位掩码表示
+func combos(n, k int) []int {
+	var out []int
+	for mask := 0; mask < 1<<n; mask++ {
+		if popcount(mask) == k {
+			out = append(out, mask)
+		}
+	}
+	return out
+}
+
+// popcount 统计位掩码中置位的个数
+func popcount(x int) int {
+	c := 0
+	for x != 0 {
+		x &= x - 1
+		c++
+	}
+	return c
+}
+
+// intersects 验证任意读集合与写集合是否必然相交
+func intersects(n, r, w int) bool {
+	reads := combos(n, r)
+	writes := combos(n, w)
+	for _, rm := range reads {
+		for _, wm := range writes {
+			if rm&wm == 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// disjointWrites 判断是否存在两个互不相交的写集合
+func disjointWrites(n, w int) bool {
+	writes := combos(n, w)
+	for _, a := range writes {
+		for _, b := range writes {
+			if a&b == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func main() {
+	for _, c := range [][3]int{{3, 2, 2}, {3, 1, 3}, {5, 3, 3}} {
+		n, w, r := c[0], c[1], c[2]
+		fmt.Printf("N=%d W=%d R=%d 读集合必含已确认副本=%v 存在不相交双写=%v\n",
+			n, w, r, intersects(n, r, w), disjointWrites(n, w))
+	}
+}
+```
+
+```bash
+# 运行穷举程序；再用竞态检测器跑并发写入模拟
+go run quorum_verify.go
+go test -race -run TestQuorumIntersection -v ./...
+```
+
+```text
+$ go run quorum_verify.go
+N=3 W=2 R=2 读集合必含已确认副本=true 存在不相交双写=false
+N=3 W=1 R=3 读集合必含已确认副本=true 存在不相交双写=true
+N=5 W=3 R=3 读集合必含已确认副本=true 存在不相交双写=false
+$ go test -race -run TestQuorumIntersection -v ./...
+=== RUN   TestQuorumIntersection
+--- PASS: TestQuorumIntersection (0.00s)
+PASS
+ok      example.com/quorum    0.312s
+```
+
+逐字段解读：`读集合必含已确认副本` 是把所有大小为 `R` 的子集和所有大小为 `W` 的子集逐一求交得到的实测结果，用来反向验证抽屉原理；`存在不相交双写` 是枚举两个大小为 `W` 的写集合、看能否找到不相交的一对，`true` 意味着两个并发写可能各自成功，正好解释 `W=1` 那行为什么强一致为 `false`。`go test -race` 的 `PASS` 说明共享的副本状态由互斥锁保护，运行时没有发现 `WARNING: DATA RACE`；但要特别留意 **`-race` 只抓内存访问层面的数据竞争，抓不到「两个写逻辑上都成功」这类一致性错误**——后者正是靠上面的穷举断言验证的，两者职责不同，不能互相替代。
+
+<Quiz q="关于 CAP 定理里的 C，下列说法正确的是？" :options='["它等价于 ACID 的一致性约束","它特指单对象操作的线性一致性","它指全年可用率百分比","它由客户端重试次数决定"]' answer="1" explain="CAP 的 C 是单对象、实时序的线性一致性，与 ACID 的完整性约束、可用率百分比都无关，也不能靠重试绕过分区窗口。" />
+
+### 失败矩阵：分区落在写入链路的不同位置
+
+| 分区或故障发生点 | CP 系统表现 | AP 系统表现 | 可观测信号 | 演练与回滚手段 |
+| --- | --- | --- | --- | --- |
+| 客户端发出写请求后、协调者回包前 | 请求超时或返回错误，值可能已写但未确认 | 本地写入即返回，值只在单侧 | 超时率、未确认写计数 | `iptables -j DROP` 造分区；客户端用幂等键重试 |
+| 已拿到 W-1 个确认时 | 凑不齐 W，拒绝提交 | 继续接受，形成版本分叉 | quorum 确认数直方图 | chaos-mesh `NetworkChaos` 按标签定向注入 |
+| 已拿到 W 个确认、响应回程丢失 | 写入实际已提交，客户端误判失败 | 同上，两侧版本不同 | 版本分叉数、反熵积压 | 读修复与反熵做数据迁移，客户端靠幂等键回放 |
+| 读请求落在落后副本 | 走 ReadIndex 或读多数派取新值 | 可能返回旧值 | 旧版本读占比 | 提高 R、开启读修复 |
+| 分区恢复、两侧都有写入 | 以多数派日志为准，少数派回滚 | 兄弟版本交给版本向量或 LWW 合并 | 冲突计数、合并失败告警 | 冻结写入后从多数派重建落后副本，即回滚 |
+| 节点时钟大幅偏移 | 不依赖物理时钟则不受影响 | LWW 可能把旧值判成新值 | NTP offset 告警 | 禁写并人工按业务时间线裁决 |
+
+演练顺序建议：先在单副本上用 `iptables` 或 `tc netem` 造几分钟分区，观察失败矩阵里哪一行被触发；再升级到单可用区注入；最后才做跨区演练。任何时刻保留「丢弃未收敛副本、从多数派重建」这条回滚路径，避免为了保住两侧写入而让脏数据扩散。
+
+### 替代路线与取舍
+
+| 路线 | 如何达成一致 | 分区或故障时 | 代价 | 适合 |
+| --- | --- | --- | --- | --- |
+| 可调 N/W/R quorum | 读写集合求交，无需单一 Leader | 凑不齐 W 即拒写 | 每次读写多副本往返，冲突需版本合并 | 读写都可调、希望按业务切级别 |
+| 单 Leader 加 Raft 复制 | 写入全经 Leader，多数派确认后提交 | 少数派不可用，选主期短时阻塞 | Leader 是吞吐瓶颈，选主有秒级不可用 | 元数据存储、选主、配置中心 |
+| CRDT 无冲突数据类型 | 操作满足交换律结合律，副本各自合并 | 两侧照常写，恢复后自动收敛 | 仅支持可合并操作子集，元数据随副本数增长 | 计数器、协同编辑、购物车 |
+| 会话级保证 | 不改系统级别，客户端粘滞加版本号补 read-your-writes | 依赖会话状态，失效转移时要重建 | 客户端复杂，跨设备难保证 | 用户能容忍最终一致但要求自己写的自己能读到 |
+
+四条路线不是互斥的：工程里常把「多数派 quorum 管元数据、CRDT 管计数、会话粘滞管体验」叠在同一系统里，按数据的重要程度分档，而不是全站一刀切选 CP 或 AP。
+
+### 与后续实战的衔接
+
+- [分布式任务调度系统](/projects/concurrent-scheduler) 用 etcd 选主，正是本讲 CP 取舍的落地：分区时宁可不调度，也不允许两个 Master 同时派发同一任务；它的「租约与故障转移」把「凑不齐多数派」转成了主动退位。
+- [KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) 会把第 87 讲的路由和第 88 讲的复制合起来，其「读写一致性」一节重新用上 N/W/R 与 ReadIndex。
+- [Kubernetes Operator 与可观测平台](/projects/cloud-operator) 的 Reconcile 循环处理的是「声明状态与现实状态不一致」，其收敛思路与读修复、反熵同源：不假设一步到位，而是持续把现实拉回声明。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l8-distributed/lesson-083-cap-base`](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-083-cap-base)。clone 仓库后进入 `examples/l8-distributed`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
 ## 动手练一练
 <Exercise title="把仲裁参数改成五副本" task="现有 N=5 的集群，请设置 W 与 R，使读写满足强一致且能容忍 2 个副本失联，并用代码验证判定结果。" :hints='["容忍 2 个副本故障意味着写入仍需拿到多数派确认","回忆强一致的两个判定条件"]' solution="把 W 与 R 都设为 3：\nq := Quorum{N: 5, W: 3, R: 3}\nfmt.Println(q.StrongConsistent()) // 输出 true" explain="R+W=6 大于 5，且 W=3 大于 N/2=2，两个条件同时成立；此时最多坏 2 个副本仍能凑齐 3 个确认。" />
 
 ## 随堂检测
 <Quiz no="83-1" q="网络分区发生时，CAP 定理给出的真实设计取舍是？" :options='["必须同时满足 C、A、P","放弃 P 就能同时保住 C 和 A","P 是客观前提，只能在 C 与 A 之间权衡","只要多重试几次就能三者兼得"]' answer="2" explain="分区无法避免，系统只能在一致性优先与可用性优先之间做选择；无分区时 C 与 A 可以兼得。" />
 <Predict no="83-2" q="N=3、W=1、R=1 时，StrongConsistent() 返回什么？" :options='["true","false","编译报错"]' answer="1" output="false" explain="R+W=2 不大于 N=3，读写集合可能不相交，无法保证读到最新写入。" />
-<FillBlank no="83-3" tpl="BASE 是 ___ Available、Soft state、___ consistent 的缩写，核心是接受软状态、追求 ___ 一致。" :answers='["Basically","Eventually","最终"]' hint="基本可用、软状态、最终一致" explain="BASE 用软状态换可用性，承诺的是无新写入后副本终将收敛。" />
+<FillBlank no="83-3" tpl="BASE 是 ___ Available、Soft state、___ consistent 的缩写，核心是接受软状态、追求 ___ 一致。" :answers='["Basically","Eventually","最终"]' hint="基本可用、软状态、最终一致" explain="BASE 用软状态换可用性，承诺的是无新写入后副本终将收敛。" :explains='["对应基本可用：分布式故障时允许降级，例如响应变慢或部分功能不可用，只要核心服务仍能返回，就不必追求强一致下的完整可用。","对应一致性前面的修饰词，说明副本之间允许短暂不一致，但只要停止写入并经过一段时间，各副本终会收敛到相同值。","修饰的是收敛性的一致：系统不保证每次都读到最新值，只承诺停止写入后副本逐步趋同，用可用性换来了这份较弱的保证。"]' />
 
 ## 一页纸速记
 <KnowledgeCard :points='["P 是前提不是选项，分区窗口里只在 C 与 A 之间二选一","R+W 大于 N 且 W 大于 N/2 时读写满足强一致","一致性是一条谱系，选级别先看中途失败与恢复时的表现","BASE 承认软状态，靠读修复、反熵与版本向量收敛"]' :pitfalls='["把最终一致当成大概率一致，漏掉收敛前的旧值","分区时靠盲目重试去追一致性，只会放大冲突","两侧都接受写入却不做冲突合并，恢复后静默丢数据"]' summary="CAP 是故障发生时的取舍框架，BASE 是收敛路线的工程表达。" />

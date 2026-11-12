@@ -298,6 +298,109 @@ func main() {
 
 <Callout type="warn" title="框架的边界比能力更重要" text="别把业务状态机、SQL 或第三方 SDK 封装塞进框架，那会让最常变的代码压在最不该动的层里。Options 一定要有能跑的默认值，否则每起一个服务都要抄一长串配置。优雅退出务必先反注册再停流量，并给在途请求留足收尾时间。" />
 
+### 3.2 框架边界与 Functional Options 的推导
+
+判断一个框架该收敛什么，标准只有一条：把「每个服务都重复、且与业务无关」的部分收进来，其余一律留给业务。配置装配、超时与错误契约、拦截链、注册发现、可观测属于前者；领域模型、SQL、第三方 SDK 封装属于后者。这条边界不是审美，而是稳定性约束——最常变的代码如果压在最不该动的底层，框架就会长成谁都不敢改的巨石。
+
+Functional Options 为什么优于全局单例，也能逐条推出来。每个 `WithXxx` 只改一个字段，于是：依赖显式传入，读代码就知道这份配置从哪来；`defaultOptions` 兜底，不传任何 Option 也能跑；调用方按需组合，新增能力只需加一个函数；测试时换几个 Option 就能造出完全隔离的实例。全局单例恰好相反——多实例测试互相干扰、配置来源隐晦、能力一多就无从收拾。而「每个 Option 只改一个字段」还顺带保证了**应用顺序无关**，这是可组合的前提：无论先 `WithAddr` 还是先 `WithTimeout`，最终配置都一样。
+
+统一 Error 之所以要支持 `errors.As` 沿链判定，是因为错误会被 `%w` 层层包装，只有沿错误链还原出稳定码，网关才能把它映射成对外状态码而不泄露内部细节。
+
+<SequenceDiagram title="最小框架的启动与优雅停机" caption="装配后先注册再服务，收到信号先反注册、停接新流量、等在途收尾" :actors='["Main","App","Registry","Handler","Signal"]' :steps='[{"from":"Main","to":"App","label":"New 装配 Options","note":"显式依赖","kind":"call"},{"from":"App","to":"Registry","label":"Start 注册","note":"登记实例","kind":"call"},{"from":"App","to":"Handler","label":"装载拦截链","note":"日志指标追踪","kind":"call"},{"from":"Handler","to":"Handler","label":"处理业务","note":"领域逻辑","kind":"self"},{"from":"Handler","to":"App","label":"内建观测上报","note":"RED 与链路","kind":"call"},{"from":"Signal","to":"App","label":"收到 SIGTERM","note":"退出信号","kind":"call"},{"from":"App","to":"Registry","label":"先反注册","note":"停止派发新请求","kind":"call"},{"from":"App","to":"Handler","label":"停接新流量","note":"关闭监听","kind":"call"},{"from":"Handler","to":"App","label":"在途请求收尾","note":"drain 完成","kind":"return"},{"from":"App","to":"Main","label":"释放资源退出","note":"顺序收尾","kind":"return"}]' />
+
+### 3.3 生命周期顺序与替代方案取舍
+
+生命周期的核心是顺序，而且顺序错了不会立刻报错，只会悄悄漏流量。`Start` 必须先把实例登记进注册中心、起心跳，再开始对外服务；`Stop` 必须**先反注册**，让调用方不再把新请求派发过来，然后停止接新流量、等在途请求收尾、最后释放资源。如果先关监听再反注册，摘除生效前的那段窗口里，仍会有请求打到已经不再处理的实例上。到了 Kubernetes 里，这个顺序要靠 preStop 钩子与 `terminationGracePeriodSeconds` 配合，给在途请求留出足够的收尾时间。
+
+| 装配方式 | 显式性 | 可测试性 | 代价 |
+| --- | --- | --- | --- |
+| Functional Options | 高，依赖逐个传入 | 换 Option 即隔离实例 | 能力多时 Option 数量增长 |
+| wire 依赖注入 | 高，编译期生成 | 需重新生成依赖图 | 引入代码生成步骤 |
+| 全局单例配置 | 低，来源隐晦 | 多实例互相干扰 | 写起来快，长期最难维护 |
+| 配置驱动 | 中，集中在文件 | 依赖配置文件 | 类型安全靠运行时校验 |
+
+| 框架形态 | 装配 | 治理能力 | 主要取舍 |
+| --- | --- | --- | --- |
+| 自研最小框架 | Functional Options | 拦截链加内建观测 | 可控、可教学、能力少 |
+| kratos | Options 加 wire | middleware、registry、balancer | 分层清晰、贴近标准，要自己拼积木 |
+| go-zero | 配置驱动加 goctl | 内建熔断限流降载 | 开箱即用、约定强、定制成本高 |
+| Service Mesh | 控制面下发 | 治理全在 sidecar | 应用零感知，但多一跳、运维复杂 |
+
+| 可观测怎么给 | 覆盖度 | 侵入性 | 失败边界 |
+| --- | --- | --- | --- |
+| 内建默认中间件 | 全量覆盖 | 业务零感知 | 需提供逃生舱允许替换或关闭 |
+| 业务按需埋点 | 取决于自觉 | 侵入业务代码 | 出事时才发现没有指标与链路 |
+| 外部 sidecar 采集 | 传输层覆盖 | 零侵入 | 拿不到应用级语义属性 |
+
+### 3.4 可验证实验：Option 顺序无关与工程检查
+
+「Option 应用顺序无关」不是口头承诺，用一段表驱动测试就能钉死：
+
+```go
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+type Options struct {
+	Addr    string
+	Timeout time.Duration
+}
+
+type Option func(*Options)
+
+func WithAddr(a string) Option {
+	return func(o *Options) { o.Addr = a }
+}
+
+func WithTimeout(d time.Duration) Option {
+	return func(o *Options) { o.Timeout = d }
+}
+
+func New(opts ...Option) Options {
+	o := Options{Addr: ":8080", Timeout: 2 * time.Second}
+	for _, apply := range opts {
+		apply(&o)
+	}
+	return o
+}
+
+func TestOptionOrderIrrelevant(t *testing.T) {
+	a := New(WithAddr(":9090"), WithTimeout(500*time.Millisecond))
+	b := New(WithTimeout(500*time.Millisecond), WithAddr(":9090"))
+	if a != b {
+		t.Fatalf("Option 顺序不应影响结果")
+	}
+}
+```
+
+```bash
+go test -v -run TestOptionOrderIrrelevant
+```
+
+```text
+=== RUN   TestOptionOrderIrrelevant
+--- PASS: TestOptionOrderIrrelevant (0.00s)
+PASS
+```
+
+逐字段解释：两次 `New` 用完全相反的 Option 顺序装配，若每个 Option 只改自己那一个字段，两份 `Options` 应当相等；`PASS` 证明顺序确实无关，这是可组合性的直接证据。把 Options 换成含 slice、map 等不可比较字段的结构体时，需要用 `reflect.DeepEqual` 或逐字段比较，不能直接用 `!=`。
+
+工程检查还差最后一步——确认整份框架能编译、能过静态检查：
+
+```bash
+go build ./...
+go vet ./...
+```
+
+```text
+（无输出，退出码 0）
+```
+
+逐字段解释：`go build ./...` 编译全部包，成功时默认不打印任何内容；`go vet ./...` 做静态检查，无告警时同样静默。两条命令都以非零退出码表示问题，这正是 CI 里把它们串进流水线的原因——框架的 Options、Error、Middleware 是对外公共契约，编译与 vet 通过才算守住了这层契约没被破坏。
+
 ## 4. 工程实践
 
 对照两个主流框架能看清取舍。kratos 走「分层清晰、可插拔」路线：接口定义、传输、中间件、注册发现各自独立，靠 Options 与 wire 组装，贴近 gRPC 与 OTel 标准，适合需要长期演进、多团队协作的项目，代价是要自己拼不少积木。go-zero 走「约定优于配置」路线：goctl 从 api 文件一键生成 handler、logic、路由与熔断限流，单体到微服务的上手成本极低，代价是目录结构与生成代码约束强，深度定制要和框架的约定搏斗。本讲的最小框架则刻意只保留骨架，用来理解「它们都在解决同一组问题」。
@@ -305,6 +408,43 @@ func main() {
 <Compare :panels='[{"label":"全局单例配置","code":"var globalCfg = load()\nserve(globalCfg)","note":"写起来快，但多实例测试困难、配置来源隐晦，能力一多就无从收拾"},{"label":"Options 装配","code":"app := New(WithAddr(a), WithTimeout(t))\napp.Run()","note":"依赖显式可组合、带默认值，测试时换几个 Option 就能造出隔离实例"}]' title="框架该怎么装配" />
 
 真正落地时还有几条经验。框架要提供「逃生舱」：默认策略可用，但允许业务替换某个中间件或关掉某项内建观测，否则遇到特殊场景只能去改框架源码。版本上把 Options、Error、Middleware 这几个对外类型当成公共契约，轻易别改签名，内部实现随意重构。错误码、超时、重试预算这些跨服务约定要有全局规范，框架只是把它们强制执行。可观测必须默认打开且带 trace_id 与低基数 label，出问题时才查得动。最后，自研框架适合「能力收敛、团队规模可控」的场景；如果团队需要代码生成、多协议、成熟治理与社区支持，直接选 kratos 或 go-zero 往往更划算——能看懂它们的分层，正是这一讲的目的。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l7-microservice/lesson-082-framework`](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-082-framework)。clone 仓库后进入 `examples/l7-microservice`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+### 4.2 框架的失败矩阵
+
+框架的错误通常不在功能，而在边界与顺序，一旦写错会波及所有接进来的服务：
+
+| 故障 | 触发点 | 现象 | 防线 |
+| --- | --- | --- | --- |
+| 优雅退出漏流量 | 先停监听再反注册 | 摘除窗口内请求打到已停实例 | 先反注册再停流量 |
+| 可观测漏埋 | 按需开启而非默认内建 | 出事时才发现没有指标与链路 | 默认打开 + trace_id + 低基数 label |
+| 装配顺序错位 | Start 与注册顺序反 | 已接流量但注册中心查不到 | 生命周期统一调度顺序 |
+| 逃生舱缺失 | 默认策略不可替换 | 特殊场景只能改框架源码 | 允许替换中间件或关某项能力 |
+| 公共契约易变 | 随意改 Options 签名 | 所有下游服务跟着改 | 对外类型当契约，内部随意重构 |
+| 过度抽象 | 没几个服务先造十层接口 | 框架长成谁都不敢改的巨石 | 只收敛重复且无关业务的部分 |
+
+### 4.3 两条真实工程误解
+
+**误解一：功能越多越好，能收进框架的都收进来。** 框架该收敛的只有「每个服务都重复、且与业务无关」的部分。把领域模型、SQL、第三方 SDK 封装塞进来，等于把最常变的代码压在最不该动的底层，结果就是谁都不敢改的巨石。能力少而边界清楚，比功能多却无法演进更有价值。
+
+<Callout type="warn" title="框架的边界比能力更重要" text="别把业务状态机、SQL 或第三方 SDK 封装塞进框架，那会让最常变的代码压在最不该动的底层；能力少而边界清楚，比功能多却谁都不敢改更有价值。" />
+
+**误解二：优雅退出直接关掉监听 socket 就行。** 关掉监听只能挡住新连接，却改不了注册中心里那个仍然健康的地址。摘除生效前的窗口里，上游仍会不断把新请求派发到这个已经不再处理的实例。正确顺序是先反注册、再停止接新流量、最后等在途请求收尾。
+
+<Compare :panels='[{"label":"错误：先停服务","code":"listener.Close()\nderegister()","note":"停服到摘除之间仍有流量打到已不处理的实例"},{"label":"正确：先反注册","code":"deregister()\nstopAccepting()\ndrain()","note":"先让调用方停止派发，再停接新流量并等在途收尾"}]' title="优雅退出的顺序" />
+
+### 4.4 与后续阶段的呼应
+
+本讲收束的四层能力，在 L8 会逐一落到具体基础设施：[/distributed/kubernetes](/distributed/kubernetes) 的探针与优雅退出把 Start/Stop 顺序变成 Pod 生命周期，[/distributed/gitops](/distributed/gitops) 的 Helm 与灰度发布把「可回滚」升级成声明式流程，[/distributed/sre](/distributed/sre) 与 [/distributed/high-availability](/distributed/high-availability) 则把内建可观测与容错纳入稳定性治理。框架选型本身也是架构决策，[/advanced/architecture](/advanced/architecture) 的模块拆分与演进、[/advanced/senior-path](/advanced/senior-path) 的技术选型方法，能解释为什么「自研还是用 kratos/go-zero」没有标准答案。到 L10，[/projects/cli-codegen](/projects/cli-codegen) 的代码生成补上框架没做的那一环，[/projects/micro-seckill](/projects/micro-seckill) 与 [/projects/micro-ecommerce](/projects/micro-ecommerce) 则把这一整套骨架真正放到峰值流量下检验——能拆开、能装回，才是这一讲的目的。
+
+<Quiz q="优雅退出时，Stop 为什么必须先反注册再停止接新流量？" :options='["反注册更省时间","让调用方先停止派发新请求，避免摘除窗口内流量打到已停实例","注册中心强制要求这个顺序","两者顺序无所谓"]' answer="1" explain="关监听只挡新连接，注册中心里地址仍健康；先反注册让上游停止派发，再停流量并等在途收尾，才能避免摘除窗口内的漏流量。" />
+
+<Predict q="按 3.4 的测试，两个 Option 用完全相反的顺序装配，TestOptionOrderIrrelevant 的结果是？" :options='["失败，顺序影响结果","PASS，两份 Options 相等","直接编译报错","结果取决于随机数"]' answer="1" output="--- PASS: TestOptionOrderIrrelevant (0.00s)" explain="每个 Option 只改一个字段，装配顺序无关，两份 Options 相等；PASS 正是可组合性的直接证据。" />
 
 ## 动手练一练
 <Exercise title="给最小框架补上配置热更新与熔断默认策略" task="把第 77 讲的配置 Store 与第 79 讲的 Breaker 作为两个内建能力接进 App：用 WithConfigStore 装配，并在 middleware 链里默认加一层熔断，超时用 Options.Timeout 统一注入。" :hints='["新增 Option 只改一个字段，App 里存一个配置 Store 指针","熔断中间件放在拦截链外层，失败达到阈值就短路后续 handler","超时通过 context.WithTimeout 从 Options.Timeout 派生并传给 handler"]' solution="要点一：加 WithConfigStore(s) Option，App 持有 Store，业务用 Get 读当前快照，配置变更由第 77 讲的 Push 热更。\n要点二：Build 里追加 breaker 中间件，调用前 Allow、调用后 Record，Open 状态直接返回统一 Error。\n要点三：入口用 context.WithTimeout(ctx, opts.Timeout) 派生 ctx 并逐层传递，保证 deadline 全链路一致。" explain="把配置、熔断、超时收成框架默认能力，业务就再也不会漏掉这几道防线，这正是「内建」相对「按需调用」的价值。" />

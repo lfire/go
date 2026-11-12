@@ -62,11 +62,6 @@ description: 把前十个阶段的知识在 8 类真实场景中反复用熟
 
 同一套存储系统连着 4 讲逐步长大，用来体会「架构是被需求逼出来的」：
 
-<FlowTimeline direction="vertical" :steps='[
-  {"title":"① 内存版与接口抽象","desc":"先定义 Command 与 Storage，把可演进的点留出来","tone":"blue"},
-  {"title":"② TCP 协议帧与网络层","desc":"设计帧格式、处理粘包、做连接管理与客户端 SDK","tone":"green"},
-  {"title":"③ WAL、持久化与并发控制","desc":"追加写、崩溃恢复、锁分片与快照","tone":"orange"},
-  {"title":"④ 分片、复制与 Raft","desc":"引入副本与共识，面对网络分区与成员变更","tone":"red"}
-]' />
+<FlowTimeline direction="vertical" :steps='[{"title":"① 内存版与接口抽象","desc":"先定义 Command 与 Storage，把可演进的点留出来","tone":"blue"},{"title":"② TCP 协议帧与网络层","desc":"设计帧格式、处理粘包、做连接管理与客户端 SDK","tone":"green"},{"title":"③ WAL、持久化与并发控制","desc":"追加写、崩溃恢复、锁分片与快照","tone":"orange"},{"title":"④ 分片、复制与 Raft","desc":"引入副本与共识，面对网络分区与成员变更","tone":"red"}]' />
 
 <Callout type="idea" title="项目怎么用" text="先看架构蓝图，再自己写一版设计，最后对照关键实现找差异。把边界条件、测试和压测补齐，才算真正做完一个项目。" />

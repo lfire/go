@@ -1235,7 +1235,7 @@ groups:
 
 用这套可观测定位一次真实故障的完整路径：`LLMTTFTDegraded` 告警触发 → 看 `llm_ttft_seconds` 按 provider 分组，发现只有 A 家劣化 → 用 `trace_id` 过滤 slog 日志，看到 `stream_done` 的 `ttft_ms` 从 300 跳到 4000 → 再查同一批请求是否带了 `X-Accel-Buffering` → 结论是灰度发布的新版 Nginx 丢了这条 header，逐块被攒成一次性下发。兜底动作是回滚代理配置，TTFT 立刻恢复，全程不需要登录机器翻文本日志。
 
-<FillBlank no="118-F1" tpl="流式转发的四要素是：正确的 Content-Type、每块立即 ___、设置 X-Accel-Buffering 为 no、每块检查 ___ 以便客户端断开时停止上游。" :answers='["Flush~刷出","r.Context().Done()~context~ctx"]' hint="一个是 HTTP 层的动作，一个是 Go 的取消信号" explain="四者缺一都会让流式退化成一次性返回：不 Flush 会攒在缓冲区，不禁用反代缓冲会被代理攒批，不检查 context 则客户端断开后上游继续烧钱。" />
+<FillBlank tpl="流式转发的四要素是：正确的 Content-Type、每块立即 ___、设置 X-Accel-Buffering 为 no、每块检查 ___ 以便客户端断开时停止上游。" :answers='["Flush~刷出","r.Context().Done()~context~ctx"]' hint="一个是 HTTP 层的动作，一个是 Go 的取消信号" explain="四者缺一都会让流式退化成一次性返回：不 Flush 会攒在缓冲区，不禁用反代缓冲会被代理攒批，不检查 context 则客户端断开后上游继续烧钱。" :explains='["响应写入默认先进缓冲，不刷出就攒着，客户端迟迟拿不到首字节；每块立即 Flush 才压得住首字节延迟，否则流式退化成一次性返回。","客户端一断开，请求 ctx 的 Done 通道就关闭；每块转发前查它能及时停掉上游、退出循环，漏了这步连接已断上游还继续生成，白烧算力。"]' />
 
 ## 10. 测试策略
 
@@ -1409,6 +1409,12 @@ func BenchmarkParse(b *testing.B) {
 **坑七：Scanner 缓冲太小截断长 token。** 现象是偶尔丢半截文本，尤其工具调用返回大段 JSON 时。原因是 `bufio.Scanner` 默认 64 KB 单行上限。正确写法是 `sc.Buffer(make([]byte, 4096), 1048576)` 放大到 1 MiB，并检查 `sc.Err()` 区分 `ErrTooLong` 与正常结束。提前发现：造一帧 200 KB 的 data 行做契约测试，断言不被静默截断。
 
 <Callout type="warn" title="响应头发出之后没有后悔药" text="WriteHeader(200) 一旦执行，状态码、Header 都不可再改。这决定了流式网关一半的失败处理：首字节之前你可以 401、429、502、重试、换供应商；首字节之后你只剩「在流里写一个 error 事件」这一个动作。把所有失败处理代码都先问一句「此刻头发出去了吗」，能避开绝大多数线上事故。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l10-projects/lesson-118-ai-gateway`](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-118-ai-gateway)。clone 仓库后进入 `examples/l10-projects`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 

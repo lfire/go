@@ -536,15 +536,118 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 .go-stage .chip b { color: var(--go-brand); }
 .go-goal { font-size: 12.5px; color: var(--go-muted); }
 
-/* ---------- Quiz ---------- */
+/* ---------- 随堂检测题号（Quiz / Predict / FillBlank 共用） ---------- */
 .go-quiz { border-left: 4px solid var(--go-purple); }
-.go-quiz .q-head { display: flex; gap: .6rem; align-items: baseline; }
-.go-quiz .q-no {
-  font: 700 11px/1 var(--vp-font-family-mono); color: var(--go-purple);
-  background: var(--go-purple-soft); padding: 5px 8px; border-radius: 6px;
+.q-head { display: flex; gap: .6rem; align-items: baseline; }
+/* 题号统一成同一枚胶囊：不随组件类型变色，缺失时不渲染（不用 Q/P 假占位） */
+.q-no {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  min-width: 2.7rem;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--go-brand) 30%, var(--go-line));
+  border-radius: 99px;
+  background: var(--go-brand-soft);
+  color: var(--go-brand);
+  font: 700 11px/1.35 var(--vp-font-family-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
   white-space: nowrap;
+  vertical-align: middle;
 }
-.go-quiz .q-text { font-weight: 680; font-size: 15.5px; line-height: 1.6; }
+.q-text { font-weight: 680; font-size: 15.5px; line-height: 1.6; }
+/* 填空题模板：中文与代码混合，按容器自动换行，不用横向滚动条 */
+.fb-tpl {
+  background: var(--vp-code-block-bg);
+  color: var(--vp-c-text-1);
+  padding: 1rem;
+  border-radius: 10px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 13.5px;
+  line-height: 2.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: visible;
+}
+/* 输入框必须单独设小行高：若继承 pre 的 2.35，盒高会超过行盒，
+   导致换行后上下两行的输入框贴在一起甚至重叠 */
+.fb-tpl input {
+  white-space: nowrap;
+  font: inherit;
+  line-height: 1.5;
+  vertical-align: middle;
+  margin: 0 .3em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--go-surface);
+  color: var(--go-brand);
+  text-align: center;
+  outline: none;
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* 逐空答案与解析：不同空各自成卡片，答案区与解析区用虚线明确分隔 */
+.fb-review { margin-top: .9rem; }
+.fb-review-head {
+  display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; font-size: 13.5px;
+}
+.fb-review-head b { font-size: 14px; }
+.fb-review-head.ok b { color: var(--go-green); }
+.fb-review-head.no b { color: var(--go-red); }
+.fb-review-head span { font-size: 12px; color: var(--go-muted); }
+.fb-review-list { display: grid; gap: .6rem; margin-top: .7rem; }
+.fb-review-item {
+  border: 1px solid var(--go-line);
+  border-left: 3px solid var(--go-muted);
+  border-radius: 10px;
+  background: var(--go-surface);
+  overflow: hidden;
+}
+.fb-review-item.ok { border-left-color: var(--go-green); }
+.fb-review-item.no { border-left-color: var(--go-red); }
+.fb-item-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .45rem .8rem; background: var(--go-soft);
+  font-size: 12.5px; font-weight: 700;
+}
+.fb-item-state { font-size: 11.5px; font-weight: 650; }
+.fb-review-item.ok .fb-item-state { color: var(--go-green); }
+.fb-review-item.no .fb-item-state { color: var(--go-red); }
+.fb-item-answer {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+  padding: .6rem .8rem; font-size: 13px;
+}
+.fb-tag {
+  flex: 0 0 auto; padding: 2px 7px; border-radius: 99px;
+  background: var(--go-brand-soft); color: var(--go-brand);
+  font-size: 11px; font-weight: 700;
+}
+.fb-tag.muted { background: var(--go-surface); color: var(--go-muted); }
+.fb-item-answer code {
+  font-family: var(--vp-font-family-mono); font-size: 12.5px; font-weight: 700;
+  padding: 2px 7px; border-radius: 6px;
+  background: var(--vp-code-block-bg); color: var(--go-brand);
+}
+.fb-alts, .fb-yours { font-size: 11.5px; color: var(--go-muted); }
+.fb-yours em { font-style: normal; color: var(--go-ink); }
+.fb-item-explain {
+  border-top: 1px dashed var(--go-line);
+  background: var(--go-soft);
+  padding: .55rem .8rem;
+  display: flex; align-items: flex-start; gap: .5rem;
+  font-size: 12.5px; line-height: 1.75; color: var(--go-ink);
+}
+.fb-item-explain p { margin: 0; flex: 1; }
+.fb-overall {
+  margin-top: .7rem; padding: .6rem .8rem;
+  border: 1px solid var(--go-line); border-radius: 10px;
+  background: var(--go-surface); font-size: 12.5px; line-height: 1.75;
+}
+.fb-overall b { color: var(--go-muted); font-size: 12px; }
+.fb-overall p { margin: .25rem 0 0; }
+
 .go-options { display: grid; gap: .55rem; margin: 1rem 0 .4rem; }
 .go-opt {
   display: flex; gap: .7rem; align-items: flex-start; text-align: left;

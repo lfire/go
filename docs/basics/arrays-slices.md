@@ -220,7 +220,109 @@ func main() {
 | 直接 `append(s, 1)` | 安全，会分配 | 安全，会分配 |
 | `slices.Clone(s) == nil` | true | false |
 
-<Predict no="13-3" q="dst := make([]int, 2) 后 n := copy(dst, []int{10,20,30})，打印 n 与 dst 的结果是？" :options='["3 [10 20 30]","2 [10 20]","2 [10 20 0]","编译失败"]' answer="1" output="2 [10 20]" explain="copy 只搬 min(len(dst), len(src)) 个元素，dst 只有两格，第三个数被静默丢弃；所以要检查返回值、别假设全量复制。" />
+<Predict q="dst := make([]int, 2) 后 n := copy(dst, []int{10,20,30})，打印 n 与 dst 的结果是？" :options='["3 [10 20 30]","2 [10 20]","2 [10 20 0]","编译失败"]' answer="1" output="2 [10 20]" explain="copy 只搬 min(len(dst), len(src)) 个元素，dst 只有两格，第三个数被静默丢弃；所以要检查返回值、别假设全量复制。" />
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l2-basics/lesson-013-arrays-slices`](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-013-arrays-slices)。clone 仓库后进入 `examples/l2-basics`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
+
+如果还想把前面几条结论追到语言规范与运行时，下面这一段给出可自己复现的推导、两条真实误解的对照，以及带逐字段解释的实验。
+
+### 再推一层：描述符为什么必须拷贝、cap 为什么这样算
+
+切片描述符的三个字不是实现细节的巧合，而是规范对 `[]T` 的定义：`go doc reflect.SliceHeader` 里 `Data uintptr`、`Len int`、`Cap int` 就是编译器为切片生成的运行时表示；64 位平台上 `unsafe.Sizeof([]int(nil))` 恒为 24，正是 3 乘 8。`append` 为什么必须写成 `s = append(s, x)`，查 `go doc builtin.append` 就能从签名推出来：`func append(slice []Type, elems ...Type) []Type`，第一个参数是按值传进来的描述符副本，函数体内一旦扩容，会构造一个 `Data` 指向新数组的全新描述符；副本改不了调用方那三个字，新描述符只能通过返回值交回，不接住就等于丢弃。`cap` 为什么是 4 而不是 3，同样写在规范「Slice expressions」条款里：`a[low:high]` 等价于 `a[low:high:max]`，`max` 默认取 `len(a)`，而 `cap = max - low`；`part := arr[1:4]` 中 `arr` 长度 5、`low` 为 1，于是 `cap = 5 - 1 = 4`。三索引写法 `a[low:high:max]` 还能人为压低 cap，逼下一次 `append` 一定分配新数组，这是语法级而非约定级的隔离手段。数组之所以是「值」，依据是规范「Assignment」：赋值把右值拷进左值，`[N]T` 不含间接层，拷的就是 N 个元素；`[]T` 只拷描述符。差别在类型定义里，不在编译器优化里。
+
+### 两条真实误解：错误写法与正确写法
+
+**误解一：`make([]int, 3)` 是「能装 3 个、当前为空」的切片，`append` 一次后得到 3 个元素。** 第二参数是 `len`，会立即把三个元素初始化为零值；`append` 追加的是第 4 个。
+
+<Compare title="make 的第二参数不是容量" :panels='[{"label":"错误：把 len 当成容量","code":"s := make([]int, 3)\ns = append(s, 9)\nfmt.Println(s)","note":"得到 [0 0 0 9]，凭空多出三个前导零"},{"label":"正确：0 长度配 3 容量","code":"s := make([]int, 0, 3)\ns = append(s, 9)\nfmt.Println(s)","note":"得到 [9]，长度从 0 增长且不扩容"}]' />
+
+把 `len` 与 `cap` 记反，输出里就会多出前导零值；第三参数才只影响增长，不改可见长度。
+
+**误解二：把切片传进函数，函数里 `append` 之后调用方的切片也变长了。** 传参拷的是描述符的三个字，函数内换掉的是副本。
+
+<Compare title="函数内 append 要不要回传" :panels='[{"label":"错误：以为改到了调用方","code":"func add(s []int) {\n    s = append(s, 9)\n}\n// 调用后原切片 len 不变","note":"描述符按值传递，函数内改的是副本"},{"label":"正确：返回并接住","code":"func add(s []int) []int {\n    return append(s, 9)\n}\ns = add(s)","note":"新描述符经返回值交回，赋值后才生效"}]' />
+
+这与「`range` 给的是副本」是同一条按值语义的不同表现：第 26 讲会把数组、切片、结构体传参的拷贝成本一并量化。
+
+### 可验证实验：命令、输出与逐字段解释
+
+```bash
+go doc builtin.append
+go doc builtin.copy
+```
+
+```text
+func append(slice []Type, elems ...Type) []Type
+    Append returns the updated slice. It is therefore necessary to store the
+    result of append, often in the variable holding the slice itself:
+func copy(dst, src []Type) int
+    Copy returns the number of elements copied, which will be the minimum of
+    len(src) and len(dst).
+```
+
+| 输出片段 | 含义 |
+| --- | --- |
+| `slice []Type` | 按值传入的描述符，函数内改动不影响调用方 |
+| `elems ...Type` | 变参，一次可追加多个元素 |
+| 返回 `[]Type` | 可能仍是原描述符、也可能是全新的，必须接住 |
+| `copy(dst, src []Type) int` | 两个参数都是描述符，函数自身不分配内存 |
+| 返回 `int` | 实际搬了多少个，等于 `min(len(src), len(dst))` |
+| `minimum of len(src) and len(dst)` | 静默截断的规范依据，别假设全量复制 |
+
+下面这段一次跑完上面两条误解与三索引隔离，输出可直接对照：
+
+```go
+package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+func add(s []int) []int { return append(s, 9) }
+
+func main() {
+	fmt.Println("描述符字节 =", unsafe.Sizeof([]int(nil)))
+
+	a := make([]int, 3)
+	b := make([]int, 0, 3)
+	fmt.Println("make(3) 追加后 =", append(a, 9))
+	fmt.Println("make(0,3) 追加后 =", append(b, 9))
+
+	s := []int{1, 2}
+	_ = add(s)
+	fmt.Println("没接住返回值 =", s, len(s))
+	s = add(s)
+	fmt.Println("接住返回值 =", s, len(s))
+
+	base := []int{1, 2, 3, 4}
+	isolated := append(base[0:2:2], 99)
+	fmt.Println("压低 cap 后原切片 =", base, "新切片 =", isolated)
+}
+```
+
+<OutputBox title="运行结果" output="描述符字节 = 24\nmake(3) 追加后 = [0 0 0 9]\nmake(0,3) 追加后 = [9]\n没接住返回值 = [1 2] 2\n接住返回值 = [1 2 9] 3\n压低 cap 后原切片 = [1 2 3 4] 新切片 = [1 2 99]" />
+
+### 版本差异与适用边界
+
+| 版本或平台 | 变化 | 对本讲的影响 |
+| --- | --- | --- |
+| Go 1.2 | 引入三索引切片表达式 `a[low:high:max]` | 可显式压低 cap 强制隔离 |
+| Go 1.17 | `unsafe.Slice` 允许从指针构造切片 | 指针有效性要自己保证，属 L3 |
+| Go 1.21 | 标准库加入 `slices` 包（`Clone`/`Contains`/`Sort`） | 手写克隆与查找有了官方替代 |
+| Go 1.21 | 内建 `clear(s)` 对切片把元素置零，不缩容 | 与 `clear(m)` 删键的语义不同，别混 |
+| 32 位平台 | 描述符只有 12 字节，`int` 为 4 字节 | 谈 `Sizeof` 先说清 `GOARCH` |
+| 全版本 | `append` / `copy` 的签名与按值语义不变 | 结论不依赖工具链版本 |
+
+`slices.Clone` 要求 `go.mod` 的 `go` 指令不低于 1.21；读老项目先翻这一行再决定能不能用。另外 `clear(s)` 只把已有元素置零、保留 `len` 与 `cap`，想真正释放底层数组得赋 `nil`。
+
+### 与 L3 底层、L10 实战的呼应
+
+本讲只到「描述符 + 扩容可能换数组」这一层。[第 28 讲](/core/slice-internals) 会打开 `runtime/slice.go` 里 `growslice` 的容量公式、256 阈值与共享别名陷阱；[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 解释底层数组何时从栈逃逸到堆；[第 26 讲](/core/value-semantics) 把「数组传参整块拷贝、切片传参只拷三个字」量化成成本。实战里，[第 106 讲](/projects/net-image-server) 处理上传缓冲要靠 `buf[:n]` 与 `copy` 控制内存，[第 107 讲](/projects/data-log-etl) 的 pipeline 用预分配切片承住窗口数据——预分配与隔离这两条习惯会在那里反复用到。
 
 ## 动手练一练
 

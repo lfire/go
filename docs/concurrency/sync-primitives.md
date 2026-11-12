@@ -271,7 +271,7 @@ go vet ./...                                           # 抓 copylocks 等静态
 
 <ConceptDiagram type="scheduler-loop" title="锁竞争下的 G 挂起与唤醒" caption="抢不到 Mutex 的 G 经 runtime_SemacquireMutex 挂入 semaRoot 等待队列，Unlock 时 goready 唤醒，回到调度循环重新入队" />
 
-<Quiz no="45-3" q="把 wg.Add(1) 从循环里挪进 goroutine 函数体，最可能观察到什么？" :options='["编译报错","Wait 可能在计数登记前观察到 0 而提前返回，结果随机少算","程序一定 panic","RWMutex 自动退化成普通 Mutex"]' answer="1" explain="Add 与 Wait 没有自动排序；实测让任务睡 1ms、go test -count=3，Wait 返回时完成数有时是 50、有时是 0。先 Add 再 go 才能让 Done synchronizes before Wait 的返回。" />
+<Quiz q="把 wg.Add(1) 从循环里挪进 goroutine 函数体，最可能观察到什么？" :options='["编译报错","Wait 可能在计数登记前观察到 0 而提前返回，结果随机少算","程序一定 panic","RWMutex 自动退化成普通 Mutex"]' answer="1" explain="Add 与 Wait 没有自动排序；实测让任务睡 1ms、go test -count=3，Wait 返回时完成数有时是 50、有时是 0。先 Add 再 go 才能让 Done synchronizes before Wait 的返回。" />
 
 <Callout type="warn" title="局部死锁 -race 也救不了" text="两个 goroutine 以相反顺序获取两把 Mutex 形成的 AB-BA 死锁，Go 运行时只在『所有 goroutine 都睡死』时才抛 fatal error；只要还有别的 G 在跑，它会一直挂着。go vet 能抓 copylocks（复制已用锁），抓不到加锁顺序；工程上固定全局加锁顺序、给等待配超时或减少共享，才是兜底。" />
 
@@ -279,6 +279,16 @@ go vet ./...                                           # 抓 copylocks 等静态
 锁的首选是「不用锁」：能用 channel 传所有权、用不可变数据就别引入共享状态。确实要共享时按读写比例选锁——写多或临界区极短时普通 Mutex 更快，RWMutex 读锁记账有成本。锁和数据定义在一起，导出方法内部加解锁；初始化用 Once，广播退出优先 close(channel)，比 Cond 简洁。
 
 <Compare :panels='[{"label":"写法 A：Add 放进协程内","code":"go func() { wg.Add(1); defer wg.Done(); work() }(); wg.Wait()","note":"主协程可能先看到计数为 0 就返回，任务未统计"},{"label":"写法 B：Add 放在启动前","code":"wg.Add(1); go func() { defer wg.Done(); work() }(); wg.Wait()","note":"计数在 Wait 之前登记，语义确定，唯一推荐写法"}]' title="WaitGroup.Add 的位置" />
+
+### 与 L10 实战的呼应
+
+「临界区要覆盖全部共享访问」这条推导，在三个实战里都是正确性的硬约束。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 把「先 SELECT 余量、判断大于 0、再 UPDATE 减一」列为超卖根因：两个并发事务读到同一个旧值、各自扣减，100 件库存能卖出 137 件；修法正是把检查、判重、扣减合成一个临界区或一条原子语句，与本讲 `badGet` 漏加锁、`TestGuard` 全绿是同一个 happens-before 问题。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Robots 与限速器用 `sync.Mutex` 护每 host 的映射，但「拿令牌的等待」必须放在锁外，否则临界区被 I/O 等待撑大、并发度归零——这正是「粒度不是越小越好，而是刚好覆盖共享访问」的取舍。第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 用任务状态机与 fencing token 把故障转移后的重复执行收敛掉，`WaitGroup` 的「先 Add 再 go、循环外 Wait」则是执行器收尾的最小纪律。
+
+<Callout type="idea" title="配套示例工程">
+
+本讲的全部示例代码已整理为可运行工程：[`examples/l4-concurrency/lesson-045-sync-primitives`](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-045-sync-primitives)。clone 仓库后进入 `examples/l4-concurrency`，按该目录 `README.md` 里的命令 `go run` / `go test` 即可逐段验证。章节内的代码与讲解仍按教学需要完整保留，这里提供的是工程化、可直接运行的版本。
+
+</Callout>
 
 ## 动手练一练
 <Exercise title="用 WaitGroup 等待一批任务" task="启动 5 个 goroutine 各打印编号，主协程等全部结束再退出，要求正确放置 Add、Done、Wait。" :hints='["Add 在 go 之前调用","函数体内 defer wg.Done()","循环结束再 wg.Wait()"]' solution="var wg sync.WaitGroup\nfor i := 0; i != 5; i++ {\n    wg.Add(1)\n    go func(id int) {\n        defer wg.Done()\n        fmt.Println(id)\n    }(i)\n}\nwg.Wait()" explain="先 Add 登记再启动，defer Done 保证计数，循环外 Wait 阻塞到归零。把 Add 挪进 goroutine 是最常见错误，会让主协程提前退出。" />
