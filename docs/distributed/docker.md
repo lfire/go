@@ -1,11 +1,11 @@
 ---
-title: 第 90 讲 · 容器化：多阶段构建与镜像瘦身
+title: 第 090 讲 · 容器化：多阶段构建与镜像瘦身
 description: 交付一个小而可复现的 Go 镜像，理解 CGO_ENABLED 与多阶段构建
 ---
 
 <StageHeader stage="L8 · 分布式与云原生" level="★★★☆☆" time="45 分钟" goal="交付一个小而可复现的 Go 镜像，能解释每一步在防哪种故障" prereq="高可用：多活、容灾与混沌工程" />
 
-# 第 90 讲 · 容器化：多阶段构建与镜像瘦身
+# 第 090 讲 · 容器化：多阶段构建与镜像瘦身
 
 > 前面把服务设计得能扛故障，可如果每次构建出的镜像都不一样、里面还塞着整套编译工具链，稳定性就无从谈起。Go 天生适合容器化：编译产物是单个二进制，静态链接后连 glibc 都不需要。本讲把「多阶段构建 + CGO_ENABLED=0 + scratch」这条主线走通，并逐个追问中点：动态链接的二进制放进空镜像会怎样、没有证书时 HTTPS 调用会怎样、以 root 运行又埋了什么雷。
 
@@ -286,7 +286,7 @@ d7e3f2a1c0b9   2 minutes ago  COPY ca-certificates.crt /etc/ssl/certs/       220
 | `COPY . .` 放在下载依赖前 | 改一行代码就重新下载依赖 | 调整指令顺序加 `.dockerignore` | 改一行代码后看 CACHED 是否消失 | 恢复顺序 |
 | 以 root 运行且可写根文件系统 | 容器逃逸影响面大 | `USER` 数字 UID 加只读根文件系统 | 在容器内尝试写根目录 | 收紧 securityContext |
 
-演练要点：把「故意构建错一次」当成回归用例（缺证书、开 cgo、用 latest），确认 CI 里的 `file`、`ldd`、`docker history` 自检能拦住它们，而不是等上线后才发现。这里的「回滚」是制品级回滚——固定 tag 让重新部署上一个 tag 立即可用，这也呼应了第 92 讲「回滚必须连 Git 声明一起回退」。
+演练要点：把「故意构建错一次」当成回归用例（缺证书、开 cgo、用 latest），确认 CI 里的 `file`、`ldd`、`docker history` 自检能拦住它们，而不是等上线后才发现。这里的「回滚」是制品级回滚——固定 tag 让重新部署上一个 tag 立即可用，这也呼应了第 092 讲「回滚必须连 Git 声明一起回退」。
 
 ### 替代路线与取舍
 
@@ -302,8 +302,8 @@ d7e3f2a1c0b9   2 minutes ago  COPY ca-certificates.crt /etc/ssl/certs/       220
 
 ### 与后续实战的衔接
 
-- [Kubernetes Operator 与可观测平台](/projects/cloud-operator) 会把本讲的镜像作为 CRD 控制器的交付物，`USER 65532`、只读根文件系统与固定 tag 正好对应第 91 讲的 `securityContext`。
-- [Kubernetes 部署与服务暴露](/distributed/kubernetes) 里的 `preStop exec` 要求镜像有 shell，这一限制正是本讲「scratch 没有 shell」在编排层的直接后果——所以第 91 讲强调代码里自处理 SIGTERM 才可靠。
+- [Kubernetes Operator 与可观测平台](/projects/cloud-operator) 会把本讲的镜像作为 CRD 控制器的交付物，`USER 65532`、只读根文件系统与固定 tag 正好对应第 091 讲的 `securityContext`。
+- [Kubernetes 部署与服务暴露](/distributed/kubernetes) 里的 `preStop exec` 要求镜像有 shell，这一限制正是本讲「scratch 没有 shell」在编排层的直接后果——所以第 091 讲强调代码里自处理 SIGTERM 才可靠。
 - [Helm / GitOps / 灰度发布](/distributed/gitops) 的可声明可回滚依赖制品身份清晰：本讲用 ldflags 注入版本与提交号、固定镜像 tag，正是让 `values-prod.yaml` 里的 `image.tag` 能唯一定位一份制品的前提。
 
 <Callout type="idea" title="配套示例工程">
@@ -316,9 +316,9 @@ d7e3f2a1c0b9   2 minutes ago  COPY ca-certificates.crt /etc/ssl/certs/       220
 <Exercise title="写出能跑在空镜像里的构建命令" task="要让 Go 二进制能直接放进 scratch 运行，构建命令里最关键的一步是什么？并写出运行阶段拷贝产物的写法。" :hints='["想想动态链接缺了什么","产物只从构建阶段拿，不带源码"]' solution="关键是把 CGO 关掉并交叉编译到 linux：\nCGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/app ./cmd/server\n运行阶段用 FROM scratch 起步，再用 COPY --from=builder /out/app /app 只拷二进制" explain="动态链接二进制在 scratch 里找不到 loader 会启动失败；COPY --from 保证编译器与源码不进入最终镜像。" />
 
 ## 随堂检测
-<Quiz no="90-1" q="把未关 CGO 的动态链接 Go 二进制放进 scratch 镜像，最可能发生什么？" :options='["正常运行","容器启动时因缺少动态链接器而失败","自动改用静态链接","镜像体积变大但不影响运行"]' answer="1" explain="scratch 里没有任何动态库与 loader，动态链接二进制无法加载，报错常被误读成文件丢失。" />
-<Predict no="90-2" q="多阶段 Dockerfile 里，把 COPY . . 放在 go mod download 之前会怎样？" :options='["构建更快","改一行业务代码就会让依赖下载层缓存失效","依赖不再下载","没有影响"]' answer="1" output="改一行业务代码就会让依赖下载层缓存失效" explain="源码层内容一变，其后的所有层缓存都作废，依赖被反复下载，构建明显变慢。" />
-<FillBlank no="90-3" tpl="多阶段构建用 ___ 从构建阶段拷贝产物；要让二进制跑在 scratch 里必须设置 ___ = 0；非 root 运行建议用 ___ 指定数字 UID。" :answers='["COPY --from","CGO_ENABLED","USER"]' hint="拷贝指令、CGO 开关、切换用户指令" explain="三者分别对应产物隔离、静态链接与最小权限，是 Go 镜像的标配三件套。" :explains='["多阶段里用 COPY --from 指向前一阶段的别名，只取编译好的二进制，不把 SDK 与源码带进最终镜像，体积骤降。","置为 0 时禁用 cgo 走静态链接，二进制不再依赖 glibc；scratch 无动态库，动态链接的程序会起不来。","镜像默认以 root 启动，用 USER 指定数字 UID 降权运行，容器逃逸或挂载宿主目录时把影响限制在非特权账号。"]' />
+<Quiz no="090-1" q="把未关 CGO 的动态链接 Go 二进制放进 scratch 镜像，最可能发生什么？" :options='["正常运行","容器启动时因缺少动态链接器而失败","自动改用静态链接","镜像体积变大但不影响运行"]' answer="1" explain="scratch 里没有任何动态库与 loader，动态链接二进制无法加载，报错常被误读成文件丢失。" />
+<Predict no="090-2" q="多阶段 Dockerfile 里，把 COPY . . 放在 go mod download 之前会怎样？" :options='["构建更快","改一行业务代码就会让依赖下载层缓存失效","依赖不再下载","没有影响"]' answer="1" output="改一行业务代码就会让依赖下载层缓存失效" explain="源码层内容一变，其后的所有层缓存都作废，依赖被反复下载，构建明显变慢。" />
+<FillBlank no="090-3" tpl="多阶段构建用 ___ 从构建阶段拷贝产物；要让二进制跑在 scratch 里必须设置 ___ = 0；非 root 运行建议用 ___ 指定数字 UID。" :answers='["COPY --from","CGO_ENABLED","USER"]' hint="拷贝指令、CGO 开关、切换用户指令" explain="三者分别对应产物隔离、静态链接与最小权限，是 Go 镜像的标配三件套。" :explains='["多阶段里用 COPY --from 指向前一阶段的别名，只取编译好的二进制，不把 SDK 与源码带进最终镜像，体积骤降。","置为 0 时禁用 cgo 走静态链接，二进制不再依赖 glibc；scratch 无动态库，动态链接的程序会起不来。","镜像默认以 root 启动，用 USER 指定数字 UID 降权运行，容器逃逸或挂载宿主目录时把影响限制在非特权账号。"]' />
 
 ## 一页纸速记
 <KnowledgeCard :points='["CGO_ENABLED=0 产出静态二进制，是 scratch 能运行的前提","多阶段构建让工具链与源码不进入最终镜像","依赖清单先于源码拷贝，才能吃到层缓存","基础镜像固定 tag、版本信息注入、USER 非 root，保证可复现与安全"]' :pitfalls='["scratch 不补证书与时区，HTTPS 与时间相关路径才突然失败","用 latest 基础镜像，构建结果随上游漂移","以 root 运行且不加只读根文件系统，扩大容器逃逸影响"]' summary="小而确定的镜像，既是交付效率，也是稳定性与安全性的一部分。" />

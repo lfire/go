@@ -1,11 +1,11 @@
 ---
-title: 第 47 讲 · context：取消、超时、值传递
+title: 第 047 讲 · context：取消、超时、值传递
 description: 用 Context 统一叫停并发任务，掌握取消传播、超时控制、context.Value 的克制使用与服务端标准用法
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="让并发任务可被统一叫停" prereq="第 46 讲 · atomic 与 sync.Pool" />
+<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="让并发任务可被统一叫停" prereq="第 046 讲 · atomic 与 sync.Pool" />
 
-# 第 47 讲 · context：取消、超时、值传递
+# 第 047 讲 · context：取消、超时、值传递
 
 > 一个请求往往要同时查库、调 RPC、读缓存。若客户端断开或整体超时，下游 goroutine 还在傻跑就是资源浪费。context 是标准库的统一答案：管理一次请求的生命周期，把取消信号沿调用链传下去。本讲讲清接口、四种构造函数、取消树与最易滥用的 Value。
 
@@ -265,8 +265,8 @@ go vet ./...                             # 补全 defer cancel 后 lostcancel �
 <Exercise title="给下游调用加上超时" task="基于 parent 派生 50ms 超时的 context，defer 释放 cancel，并用 NewRequestWithContext 把 ctx 绑定到一次请求。" :hints='["用 context.WithTimeout 并 defer cancel()","标准库提供 http.NewRequestWithContext","ctx 绑定进请求后超时或断开都能取消"]' solution="ctx, cancel := context.WithTimeout(parent, 50*time.Millisecond)\ndefer cancel()\nreq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)\nif err != nil {\n    return err\n}\nresp, err := http.DefaultClient.Do(req)\nif err != nil {\n    return err\n}\ndefer resp.Body.Close()\nreturn nil" explain="WithTimeout 给下游独立预算，defer cancel 保证提前返回也释放计时器；ctx 绑进请求后超时或断开，底层传输立刻中止。" />
 
 ## 随堂检测
-<Quiz no="47-1" q="关于 context.Value，下面哪种用法是推荐的？" :options='["把可选参数都塞进 Value 简化签名","存放请求作用域 trace id，用自定义非导出类型做 key","用 string 做 key 方便各包共享","把数据库连接放进 Value 复用"]' answer="1" explain="Value 只承载跨切面元数据，key 用非导出自定义类型避免冲突，取值判 ok；业务参数走函数签名。" />
-<Predict no="47-2" q="父 context 被 cancel 后，由它派生的两个子 context 会怎样？" :options='["只有直接调 cancel 的那个被取消","父与所有子孙的 Done 同时关闭","子不受影响需各自取消","编译报错"]' answer="1" output="父与所有子孙的 Done 同时关闭，Err 均为 context canceled" explain="context 是取消树，信号沿父到子单向广播，子取消不影响父或兄弟。" />
+<Quiz no="047-1" q="关于 context.Value，下面哪种用法是推荐的？" :options='["把可选参数都塞进 Value 简化签名","存放请求作用域 trace id，用自定义非导出类型做 key","用 string 做 key 方便各包共享","把数据库连接放进 Value 复用"]' answer="1" explain="Value 只承载跨切面元数据，key 用非导出自定义类型避免冲突，取值判 ok；业务参数走函数签名。" />
+<Predict no="047-2" q="父 context 被 cancel 后，由它派生的两个子 context 会怎样？" :options='["只有直接调 cancel 的那个被取消","父与所有子孙的 Done 同时关闭","子不受影响需各自取消","编译报错"]' answer="1" output="父与所有子孙的 Done 同时关闭，Err 均为 context canceled" explain="context 是取消树，信号沿父到子单向广播，子取消不影响父或兄弟。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["接口只有 Deadline、Done、Err、Value 四方法","WithCancel 手动，WithTimeout 相对，WithDeadline 绝对","取消沿父到子单向广播","ctx 作第一参数，cancel 必须 defer","Value 只放元数据，key 自定义"]' :pitfalls='["丢弃 cancel 导致计时器无法释放","把业务参数塞进 Value 当隐形参数","把 context 存进结构体"]' summary="context 管一次请求的生命周期：取消树统一叫停，deadline 控预算，Value 透传元数据" />

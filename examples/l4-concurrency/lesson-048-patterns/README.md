@@ -1,9 +1,9 @@
-# 第 48 讲 · 并发模式：pipeline / fan-out / worker pool
+# 第 048 讲 · 并发模式：pipeline / fan-out / worker pool
 
 - **阶段**：L4 · 并发编程
 - **目标**：把常见并发结构写成可复用套路
 - **知识点**：管道与阶段 / 扇出扇入 / worker pool / errgroup / singleflight / 限速与背压
-- **教程正文**：[第 48 讲 · 并发模式：pipeline / fan-out / worker pool](/concurrency/patterns)
+- **教程正文**：[第 048 讲 · 并发模式：pipeline / fan-out / worker pool](/concurrency/patterns)
 - **GitHub 目录**：[l4-concurrency/lesson-048-patterns](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-048-patterns)
 
 ## 运行

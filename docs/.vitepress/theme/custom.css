@@ -648,6 +648,52 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 .fb-overall b { color: var(--go-muted); font-size: 12px; }
 .fb-overall p { margin: .25rem 0 0; }
 
+/* 单选题 / 猜结果共用的答题反馈卡片：同一套「答案 → 输出 → 解析」分段结构 */
+.go-review {
+  margin-top: .9rem;
+  border: 1px solid var(--go-line);
+  border-left: 3px solid var(--go-muted);
+  border-radius: 10px;
+  background: var(--go-surface);
+  overflow: hidden;
+  font-size: 13px;
+}
+.go-review.ok { border-left-color: var(--go-green); }
+.go-review.no { border-left-color: var(--go-red); }
+.go-review-head {
+  display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+  padding: .5rem .8rem; background: var(--go-soft); font-size: 13.5px;
+}
+.go-review.ok .go-review-head b { color: var(--go-green); }
+.go-review.no .go-review-head b { color: var(--go-red); }
+.go-review-head span { font-size: 12px; color: var(--go-muted); }
+.go-review-answer, .go-review-output, .go-review-explain {
+  display: flex; align-items: flex-start; gap: .55rem; padding: .6rem .8rem;
+}
+.go-review-tag {
+  flex: 0 0 auto; padding: 2px 8px; border-radius: 99px;
+  background: var(--go-brand-soft); color: var(--go-brand);
+  font-size: 11px; font-weight: 700; line-height: 1.6;
+}
+.go-review-tag.muted { background: var(--go-surface); color: var(--go-muted); }
+.go-review-answer-list { flex: 1; display: grid; gap: .3rem; }
+.go-review-answer-row { display: flex; gap: .5rem; align-items: baseline; line-height: 1.65; }
+.go-review-answer-row b {
+  flex: 0 0 auto; min-width: 1.4rem; text-align: center;
+  padding: 1px 5px; border-radius: 5px;
+  background: var(--vp-code-block-bg); color: var(--go-brand);
+  font-family: var(--vp-font-family-mono); font-size: 12px;
+}
+.go-review-output, .go-review-explain {
+  border-top: 1px dashed var(--go-line);
+  background: var(--go-soft);
+}
+.go-review-output pre {
+  margin: 0; flex: 1; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--vp-font-family-mono); font-size: 12.5px; line-height: 1.7;
+}
+.go-review-explain p { margin: 0; flex: 1; line-height: 1.75; }
+
 .go-options { display: grid; gap: .55rem; margin: 1rem 0 .4rem; }
 .go-opt {
   display: flex; gap: .7rem; align-items: flex-start; text-align: left;
@@ -775,6 +821,21 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 }
 .go-ex-head:hover { background: var(--go-brand-soft); }
 .go-ex-body { padding: .9rem 1rem; border-top: 1px solid var(--go-line); }
+/* 参考实现：说明文字与代码混排，按容器自动换行，不出现横向滚动条 */
+.go-ex-solution {
+  margin: .7rem 0 0;
+  background: var(--vp-code-block-bg);
+  color: var(--vp-c-text-1);
+  padding: .9rem 1rem;
+  border-radius: 10px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: visible;
+}
 
 /* ---------- CheckList ---------- */
 .go-check {
@@ -982,7 +1043,8 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 .ob-body {
   margin: 0; padding: .9rem 1rem; background: var(--vp-code-block-bg);
   color: var(--vp-c-text-1); font-family: var(--vp-font-family-mono);
-  font-size: 13px; line-height: 1.8; overflow-x: auto; white-space: pre-wrap;
+  font-size: 13px; line-height: 1.8; white-space: pre-wrap;
+  overflow-wrap: anywhere; word-break: break-word; overflow-x: visible;
 }
 .ob-hidden {
   padding: 1.5rem 1rem; text-align: center; color: var(--go-muted);

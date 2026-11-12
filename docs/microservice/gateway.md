@@ -1,11 +1,11 @@
 ---
-title: 第 78 讲 · API 网关、鉴权与限流
+title: 第 078 讲 · API 网关、鉴权与限流
 description: 自建轻量网关，做路由转发、协议转换、统一鉴权与令牌桶限流，守住系统边界
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="设计统一入口并守住边界" prereq="第 77 讲 配置中心与动态配置" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="设计统一入口并守住边界" prereq="第 077 讲 配置中心与动态配置" />
 
-# 第 78 讲 · API 网关、鉴权与限流
+# 第 078 讲 · API 网关、鉴权与限流
 
 > 服务拆细之后，外部客户端不该知道背后有几十个实例、更不该逐个去对接鉴权和限流。API 网关就是那个统一入口：把请求按路径路由到正确服务，把外部 HTTP/JSON 翻译成内部 RPC，顺手完成鉴权、限流、日志与协议转换。它让内部服务专注于业务，也把「边界」收敛到一个可以严防死守的位置。本讲用标准库搭一个能跑的轻量网关，亲手实现令牌桶限流与协议桥接，再对照 Kong、APISIX 的取舍——目标是知道该自建还是该选型，以及无论用哪种，哪些职责绝不能放进网关。
 
@@ -413,9 +413,9 @@ Previous write at 0x00c0000b4010 by goroutine 8:
 <Exercise title="给网关加上按用户维度的限流与 429 响应" task="扩展 2.1 的 Gateway：用 map[string]*TokenBucket 为每个用户 ID 维护一个独立令牌桶，在鉴权通过后按用户限流，超限时返回 429 与 Retry-After 头。" :hints='["用户 ID 可在鉴权成功后写入 context，或在 token 映射里带出","每个用户首次访问时懒创建令牌桶，用一把锁保护 map","限流失败时 http.Error 之前先设置 Retry-After 头"]' solution="要点一：Gateway 增加 limits map[string]*TokenBucket 与 mu，鉴权成功后取用户 ID。\n要点二：getBucket 懒创建，用户首次请求时用 NewTokenBucket 初始化。\n要点三：Allow 为 false 时先 Set Retry-After，再 WriteHeader(429) 返回，不放行到 ReverseProxy。" explain="按用户隔离配额才不会让一个高频用户挤占所有人的令牌；明确的 429 与 Retry-After 让客户端能退避重试而不是盲目打爆网关。" />
 
 ## 随堂检测
-<Quiz no="78-1" q="令牌桶限流里，capacity 与 rate 分别控制什么？" :options='["capacity 控制补充速度，rate 控制最大并发","capacity 控制允许的最大突发量，rate 控制长期平均放行速率","两者都控制超时时间","capacity 是窗口大小，rate 是错误码"]' answer="1" explain="桶容量决定闲置后一次最多能放行多少请求（突发），补充速率决定稳态下的平均 QPS；二者独立，才既能限平均又能容忍突发。" />
+<Quiz no="078-1" q="令牌桶限流里，capacity 与 rate 分别控制什么？" :options='["capacity 控制补充速度，rate 控制最大并发","capacity 控制允许的最大突发量，rate 控制长期平均放行速率","两者都控制超时时间","capacity 是窗口大小，rate 是错误码"]' answer="1" explain="桶容量决定闲置后一次最多能放行多少请求（突发），补充速率决定稳态下的平均 QPS；二者独立，才既能限平均又能容忍突发。" />
 
-<Predict no="78-2" q="代码 2.2 里令牌桶初始容量 3、每秒补 2 个，连续 5 次几乎无间隔地调用 Allow，结果是？" :options='["5 次全放行","前 3 次放行，后 2 次拒绝","前 2 次放行，后 3 次拒绝","全部拒绝"]' answer="1" output="第 1 到 3 次请求 放行=true；第 4、5 次请求 放行=false" explain="初始令牌 3 个，连续调用几乎不产生时间差，补充量可忽略；前 3 次各取走 1 个后耗尽，后 2 次因 tokens 小于 1 被拒。" />
+<Predict no="078-2" q="代码 2.2 里令牌桶初始容量 3、每秒补 2 个，连续 5 次几乎无间隔地调用 Allow，结果是？" :options='["5 次全放行","前 3 次放行，后 2 次拒绝","前 2 次放行，后 3 次拒绝","全部拒绝"]' answer="1" output="第 1 到 3 次请求 放行=true；第 4、5 次请求 放行=false" explain="初始令牌 3 个，连续调用几乎不产生时间差，补充量可忽略；前 3 次各取走 1 个后耗尽，后 2 次因 tokens 小于 1 被拒。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["网关 = 路由表 + ReverseProxy + 前置中间件，鉴权在外、转发在内，未授权请求到不了后端","令牌桶按速率补充、桶满截断，capacity 管突发、rate 管平均，避免固定窗口临界双倍流量","协议转换把 REST 路径与 JSON 映射成内部方法调用，让下游服务不必懂 HTTP","网关只做边界治理，必须无状态、可水平扩容，且自身也要被限流与监控"]' :pitfalls='["把业务逻辑塞进网关，让它变成难以变更的巨石","只在网关鉴权、内部服务完全互信，绕过网关即全线失守","限流计数放本地内存却多副本部署，各实例配额不一致"]' summary="一句话记住：网关守住入口，把鉴权、限流、路由、协议转换收成一层，但别让它长出业务。" />

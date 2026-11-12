@@ -1,11 +1,11 @@
 ---
-title: 第 50 讲 · 项目结构与分层设计
+title: 第 050 讲 · 项目结构与分层设计
 description: 用 cmd / internal / pkg / api 搭出依赖方向清晰的骨架，分清按领域还是按层，划清 DO / DTO / VO 并克制过度设计
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="搭出能被团队接手的项目骨架" prereq="第 49 讲 · 数据竞争与 race detector" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="搭出能被团队接手的项目骨架" prereq="第 049 讲 · 数据竞争与 race detector" />
 
-# 第 50 讲 · 项目结构与分层设计
+# 第 050 讲 · 项目结构与分层设计
 
 > 一个人写三天的脚本，全部塞进 main.go 毫无问题；可一旦要两个人协作、要半年后回来改，目录怎么切就决定了「改一处会不会牵连十处」。项目结构不是审美偏好，而是一份关于「谁可以依赖谁」的团队约定。这一讲把这份约定落成一棵新人一眼能看懂的目录树，并把判断标准定在可维护、可测试上，而不是目录看起来够不够「专业」。
 
@@ -306,7 +306,7 @@ func main() {
 | DTO | 服务间传输 | proto / OpenAPI 契约 | 上下游协商的接口演进 | 字段名变更即破坏性变更，需版本化 |
 | VO | 前端展示 | UI 需求 | 文案、格式化、展示字段 | 一般无敏感信息，但会与 UI 强耦合 |
 
-代价也要讲清楚：多一层结构体、多一次字段拷贝，字段在两处重复，改字段名要同步；当领域对象多到几十个时，手写转换本身会成为负担，这时会用代码生成批量产出转换函数（呼应第 60 讲的 `go generate`）。所以判断标准回到一句话：**变化原因不同才拆，变化原因相同就别拆**。只有一个消费者、字段完全一致的场景硬拆三层，就是本讲易错点点名的过度设计。这也是第 53 讲 mock 边界的前置条件：DTO 定义得越贴近契约，替换外部服务时就越不用改业务代码。
+代价也要讲清楚：多一层结构体、多一次字段拷贝，字段在两处重复，改字段名要同步；当领域对象多到几十个时，手写转换本身会成为负担，这时会用代码生成批量产出转换函数（呼应第 060 讲的 `go generate`）。所以判断标准回到一句话：**变化原因不同才拆，变化原因相同就别拆**。只有一个消费者、字段完全一致的场景硬拆三层，就是本讲易错点点名的过度设计。这也是第 053 讲 mock 边界的前置条件：DTO 定义得越贴近契约，替换外部服务时就越不用改业务代码。
 
 ## 3. 深入一步
 
@@ -329,7 +329,7 @@ func main() {
 
 「会一起改的东西放近」这条经验背后有更硬的机制。包是 Go 最小的编译与复用单元，也是改动的波及半径：改一个包，所有 import 它的包都要重新编译、重新跑测试。按技术层横向分包时，「调整订单折扣」这件事的代码散落在 handler、service、dao、model 四个目录里，而 dao 目录里还混着 user、payment 的表，一次改动波及多个包，还容易漏掉某一处。按领域纵向切分后，同一业务概念的改动落在一个包内，编译波及面最小，新人打开 `order/` 就看到全貌。
 
-还有一条与成环相关的推导。Go 不允许 import 成环，而按层分包极易制造回指需求：比如在 `model` 里想复用 `service` 的一段校验，或在 `dao` 里回调 `service` 的钩子，方向一乱就成环，最后只能再抽一层 `common` 来打散，目录越拆越碎。按领域分包把这类循环消化在领域包内部，跨领域之间只保留少量单向接口。目录树往往也是组织结构的镜像：两个团队共改同一个横向 `service/` 包，合并冲突率最高；按领域切能把归属落到目录上，再用第 60 讲会讲的 CODEOWNERS 把责任固定下来。
+还有一条与成环相关的推导。Go 不允许 import 成环，而按层分包极易制造回指需求：比如在 `model` 里想复用 `service` 的一段校验，或在 `dao` 里回调 `service` 的钩子，方向一乱就成环，最后只能再抽一层 `common` 来打散，目录越拆越碎。按领域分包把这类循环消化在领域包内部，跨领域之间只保留少量单向接口。目录树往往也是组织结构的镜像：两个团队共改同一个横向 `service/` 包，合并冲突率最高；按领域切能把归属落到目录上，再用第 060 讲会讲的 CODEOWNERS 把责任固定下来。
 
 | 判断条件 | 倾向按层 | 倾向按领域 |
 | --- | --- | --- |
@@ -362,7 +362,7 @@ printf '\n// touch\n' >> calc.go && go build -x ./...      # 改一个包后再�
 
 逐字段看：`-x` 打印每一步实际执行的命令；首次出现一条 `compile`，第二次一条都没有，说明命中 `GOCACHE` 后连编译器都没启动；改了 `calc.go` 后，`-p example.com/cov` 这个包的 `-buildid` 变了，该包及其下游重新执行 `compile`。判断依据是内容哈希是否命中，而不是「文件比目标新」——第二次文件没改，自然也不重编。`-o $WORK/b001/_pkg_.a` 是临时工作目录里的归档产物，`-pack ./calc.go` 指明本次编译的输入文件，`-buildid` 正是哈希的可见形式。
 
-**边界与失效条件**：`GOCACHE` 只缓存编译中间产物，不缓存测试结论（那是另一套 key，见第 52 讲 `-count=1`）；`-gcflags`、`-trimpath`、`CGO_ENABLED`、Go 版本任一变化都会换一套哈希，跨版本不复用；`go clean -cache` 只清编译缓存，不动 `GOMODCACHE` 里的依赖源码。它证明的是「哪些包被重新编译」，不能证明「改动是否语义正确」，后者仍要靠测试。
+**边界与失效条件**：`GOCACHE` 只缓存编译中间产物，不缓存测试结论（那是另一套 key，见第 052 讲 `-count=1`）；`-gcflags`、`-trimpath`、`CGO_ENABLED`、Go 版本任一变化都会换一套哈希，跨版本不复用；`go clean -cache` 只清编译缓存，不动 `GOMODCACHE` 里的依赖源码。它证明的是「哪些包被重新编译」，不能证明「改动是否语义正确」，后者仍要靠测试。
 
 **版本前提**：内容寻址的 build cache 自 Go 1.10 起引入；Go 1.20 起的 `-buildvcs`、1.21 起的 `tool` 指令会往构建信息里加字段，都参与哈希输入。本实验在 Go 1.23.8（darwin/arm64）实测，输出里的 GOROOT 路径随本机安装位置变化。
 
@@ -436,7 +436,7 @@ go list -m -json all | jq -c '{Path,Version,Main,Indirect,GoVersion,Replace,Dir}
 
 **边界与失效条件**：`-e` 只改加载器的容错策略，不改变错误本身，`go build` 仍会失败；`DepsErrors` 只覆盖「加载 / 查 module」阶段，类型检查错误落在 `Error`，编译错误两者都不含；`go list -m -json all` 在 `go.work` workspace、`vendor/` 模式、或 `-mod=mod` 自动补依赖时字段会变（`Replace` 也可能被 workspace 的 `use` 覆盖）；`GOPROXY=off` 只影响 `Err` 的措辞，不影响字段结构。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`jq` 仅为格式化工具；`DepsErrors` / `Incomplete` 字段与 `go list -m -json` 的 Module 结构自 Go 1.11（modules）起稳定，`GoVersion` 字段自 1.12 起加入，VCS 版本信息自 1.18 起进构建信息。第 50 讲前面用 `go list -deps` 看「依赖方向」，这里补的是「依赖图解析失败时工具把错误记在哪」，以及包图与模块图的分层——第 51 讲 vet 的 facts 跨包传递正是沿这张包图按拓扑序传递的。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`jq` 仅为格式化工具；`DepsErrors` / `Incomplete` 字段与 `go list -m -json` 的 Module 结构自 Go 1.11（modules）起稳定，`GoVersion` 字段自 1.12 起加入，VCS 版本信息自 1.18 起进构建信息。第 050 讲前面用 `go list -deps` 看「依赖方向」，这里补的是「依赖图解析失败时工具把错误记在哪」，以及包图与模块图的分层——第 051 讲 vet 的 facts 跨包传递正是沿这张包图按拓扑序传递的。
 
 ### 两条最常见的误解
 
@@ -470,7 +470,7 @@ go list -m -json all | jq -c '{Path,Version,Main,Indirect,GoVersion,Replace,Dir}
 
 修复方式与第二块代码的装配完全一致：把 `sql.Open` 收进 `cmd/api/main.go`，`OrderService` 只持有 `OrderRepository` 接口，测试传 `memoryRepo` 替身。构造函数注入把「连谁」变成入口的一次决定，生产与测试跑同一套业务代码、换的只是实现；而 `init()` 里的全局副作用，编译期看不出来，运行期也要等踩中默认值才暴露，只能靠结构约束提前消除。
 
-替代做法不是没有，但代价要算清：用构建标签隔离集成测试，只是把问题挪到另一个测试集，业务代码仍不可替换；在 `TestMain` 里改写全局变量，本质上还是全局可变状态，开 `go test -race` 并行跑包时多个测试会互相覆盖。构造注入是唯一让「替换」由类型系统保证的做法，这也是第 52 讲表驱动测试与第 53 讲 mock 能成立的前提——结构没搭对，后面所有质量手段都会打折。
+替代做法不是没有，但代价要算清：用构建标签隔离集成测试，只是把问题挪到另一个测试集，业务代码仍不可替换；在 `TestMain` 里改写全局变量，本质上还是全局可变状态，开 `go test -race` 并行跑包时多个测试会互相覆盖。构造注入是唯一让「替换」由类型系统保证的做法，这也是第 052 讲表驱动测试与第 053 讲 mock 能成立的前提——结构没搭对，后面所有质量手段都会打折。
 
 ### 把结构检查放进 CI
 
@@ -496,13 +496,13 @@ jobs:
           go list -deps ./internal/... | grep -E '^example.com/shop/(cmd|api)/' && exit 1 || true
 ```
 
-逐条解释：`go build ./...` 让任何新出现的 import 环当场失败；`go vet ./...` 顺带抓拷贝锁、格式化动词不匹配这类结构性问题；最后一条从 `internal` 出发展开依赖，若结果里出现 `cmd` 或 `api` 下的包，说明内部实现反向依赖了入口，grep 命中即让步骤失败。`go-version-file: go.mod` 是关键的版本锁定：CI 使用 `go.mod` 里声明的 Go 版本，而不是浮动的 `latest`，否则本地用 1.21、CI 用 1.23 时，逃逸分析结论、`go vet` 规则集甚至诊断输出都可能不同，CI 结论无法在本地复现。`actions/checkout@v4` 与 `setup-go@v5` 钉住大版本，避免上游 action 的破坏性更新让整条流水线某天集体失效——这正是第 60 讲会展开的版本漂移问题。
+逐条解释：`go build ./...` 让任何新出现的 import 环当场失败；`go vet ./...` 顺带抓拷贝锁、格式化动词不匹配这类结构性问题；最后一条从 `internal` 出发展开依赖，若结果里出现 `cmd` 或 `api` 下的包，说明内部实现反向依赖了入口，grep 命中即让步骤失败。`go-version-file: go.mod` 是关键的版本锁定：CI 使用 `go.mod` 里声明的 Go 版本，而不是浮动的 `latest`，否则本地用 1.21、CI 用 1.23 时，逃逸分析结论、`go vet` 规则集甚至诊断输出都可能不同，CI 结论无法在本地复现。`actions/checkout@v4` 与 `setup-go@v5` 钉住大版本，避免上游 action 的破坏性更新让整条流水线某天集体失效——这正是第 060 讲会展开的版本漂移问题。
 
 <OutputBox title="门禁失败时的输出" output="internal/order 反向依赖 cmd/api，步骤以非零码退出" note="这类检查把「谁可以依赖谁」变成每次 PR 都会执行的断言，而不是评审时的一句提醒。" />
 
 ### 与 L10 实战工程结构的呼应
 
-这套骨架不是纸上约定，L10 会反复用到它：`/projects/kv-1-memory` 里由业务层定义 `Storage` 接口、内存实现放在内部，正是本讲「接口归业务、实现藏 internal」的最小样本；`/projects/micro-ecommerce` 把用户、商品、订单、库存各切为独立领域包，是按领域分包的规模化版本；`/projects/cli-todo` 则演示了一个极小项目如何用不到十个目录收场，不必上四层。再往后，第 51 讲的 lint 规则集、第 52 讲的表驱动测试、第 53 讲的 mock 边界，全都建立在「依赖可替换」这一结构前提上。看懂了依赖方向，才看得懂后面每一道工序为什么那样设计。
+这套骨架不是纸上约定，L10 会反复用到它：`/projects/kv-1-memory` 里由业务层定义 `Storage` 接口、内存实现放在内部，正是本讲「接口归业务、实现藏 internal」的最小样本；`/projects/micro-ecommerce` 把用户、商品、订单、库存各切为独立领域包，是按领域分包的规模化版本；`/projects/cli-todo` 则演示了一个极小项目如何用不到十个目录收场，不必上四层。再往后，第 051 讲的 lint 规则集、第 052 讲的表驱动测试、第 053 讲的 mock 边界，全都建立在「依赖可替换」这一结构前提上。看懂了依赖方向，才看得懂后面每一道工序为什么那样设计。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -516,9 +516,9 @@ jobs:
 
 ## 随堂检测
 
-<Quiz no="50-1" q="关于 Go 的 internal 目录，下面哪项说法正确？" :options='["任何包都能 import，只是命名上表示内部","只有 internal 父目录以内的包可以 import 它","它会被编译器优化掉，不参与构建","只能存放 _test.go 文件"]' answer="1" explain="internal 是 Go 的保留目录名，编译器会拒绝来自父目录树之外的 import，因此能物理隔离实现细节。" />
+<Quiz no="050-1" q="关于 Go 的 internal 目录，下面哪项说法正确？" :options='["任何包都能 import，只是命名上表示内部","只有 internal 父目录以内的包可以 import 它","它会被编译器优化掉，不参与构建","只能存放 _test.go 文件"]' answer="1" explain="internal 是 Go 的保留目录名，编译器会拒绝来自父目录树之外的 import，因此能物理隔离实现细节。" />
 
-<Predict no="50-2" q="把 postgres.go 放进 myshop/internal/order 后，外部模块 myshop/other 尝试 import 它，会发生什么？" :options='["编译通过，运行时才报错","编译直接失败并提示不允许使用内部包","go mod tidy 自动把文件挪出去","只在 go vet 时给出警告"]' answer="1" output="build myshop/other: use of internal package myshop/internal/order not allowed" explain="internal 的可见性由编译器在构建期强制，不需要等到运行时，也不会只降级为警告。" />
+<Predict no="050-2" q="把 postgres.go 放进 myshop/internal/order 后，外部模块 myshop/other 尝试 import 它，会发生什么？" :options='["编译通过，运行时才报错","编译直接失败并提示不允许使用内部包","go mod tidy 自动把文件挪出去","只在 go vet 时给出警告"]' answer="1" output="build myshop/other: use of internal package myshop/internal/order not allowed" explain="internal 的可见性由编译器在构建期强制，不需要等到运行时，也不会只降级为警告。" />
 
 ## 一页纸速记
 

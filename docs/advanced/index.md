@@ -17,16 +17,16 @@ description: 具备源码级理解、极致性能调优与架构演进能力
 
 ## 讲次安排
 
-本阶段共 **9 讲**（第 94–102 讲），合计约 490 分钟，难度 3–5 级。
+本阶段共 **9 讲**（第 094–102 讲），合计约 490 分钟，难度 3–5 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 94 | [runtime 源码：进程启动与初始化](/advanced/runtime-startup) | ★★★★★ | 55 分钟 | 入口汇编 · 参数与栈初始化 · schedinit |
-| 95 | [调度器源码：schedule / findRunnable / sysmon](/advanced/runtime-scheduler) | ★★★★★ | 60 分钟 | schedule 主循环 · findRunnable 顺序 · 窃取与全局队列 |
-| 96 | [GC 源码与真实调优案例](/advanced/runtime-gc) | ★★★★★ | 60 分钟 | 触发条件 · 后台标记 worker · 辅助标记与屏障 |
-| 97 | [channel / mutex 源码与锁竞争](/advanced/runtime-sync) | ★★★★★ | 55 分钟 | chansend/chanrecv · selectgo · mutex 状态机 |
-| 98 | [编译器源码：SSA、逃逸与内联](/advanced/compiler-ssa) | ★★★★★ | 55 分钟 | 编译前端与 IR · SSA 构造与优化 pass · 内联预算 |
-| 99 | [Go 内存模型与 happens-before 精解](/advanced/memory-model) | ★★★★★ | 50 分钟 | 官方内存模型定义 · 同步原语的保证 · 数据竞争的形式化 |
+| 094 | [runtime 源码：进程启动与初始化](/advanced/runtime-startup) | ★★★★★ | 55 分钟 | 入口汇编 · 参数与栈初始化 · schedinit |
+| 095 | [调度器源码：schedule / findRunnable / sysmon](/advanced/runtime-scheduler) | ★★★★★ | 60 分钟 | schedule 主循环 · findRunnable 顺序 · 窃取与全局队列 |
+| 096 | [GC 源码与真实调优案例](/advanced/runtime-gc) | ★★★★★ | 60 分钟 | 触发条件 · 后台标记 worker · 辅助标记与屏障 |
+| 097 | [channel / mutex 源码与锁竞争](/advanced/runtime-sync) | ★★★★★ | 55 分钟 | chansend/chanrecv · selectgo · mutex 状态机 |
+| 098 | [编译器源码：SSA、逃逸与内联](/advanced/compiler-ssa) | ★★★★★ | 55 分钟 | 编译前端与 IR · SSA 构造与优化 pass · 内联预算 |
+| 099 | [Go 内存模型与 happens-before 精解](/advanced/memory-model) | ★★★★★ | 50 分钟 | 官方内存模型定义 · 同步原语的保证 · 数据竞争的形式化 |
 | 100 | [极致性能优化：从 pprof 到 30w QPS](/advanced/perf-case) | ★★★★★ | 60 分钟 | 建立基线 · 定位 CPU/分配/锁 · 逐项优化与验证 |
 | 101 | [架构设计：模块拆分、演进与重构](/advanced/architecture) | ★★★★★ | 55 分钟 | 识别变化方向 · 模块与边界 · 分层与依赖倒置 |
 | 102 | [资深能力图谱、技术选型与持续精进](/advanced/senior-path) | ★★★☆☆ | 40 分钟 | 能力四维模型 · 技术选型方法 · 影响力与协作 |
@@ -45,4 +45,4 @@ description: 具备源码级理解、极致性能调优与架构演进能力
 
 <ProgressTracker />
 
-[← 上一阶段：阶段八 · 分布式与云原生](/distributed/) · [第 94 讲开始 →](/advanced/runtime-startup) · [下一阶段：阶段十 · 工程实战](/projects/)
+[← 上一阶段：阶段八 · 分布式与云原生](/distributed/) · [第 094 讲开始 →](/advanced/runtime-startup) · [下一阶段：阶段十 · 工程实战](/projects/)

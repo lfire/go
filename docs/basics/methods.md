@@ -1,11 +1,11 @@
 ---
-title: 第 18 讲 · 方法与接收者：值还是指针
+title: 第 018 讲 · 方法与接收者：值还是指针
 description: 理解方法集，分清值与指针接收者，写出不踩坑的接收者设计
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="30 分钟" goal="理解方法集，写出不踩坑的接收者" prereq="第 17 讲 · 结构体、标签与内存对齐" />
+<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="30 分钟" goal="理解方法集，写出不踩坑的接收者" prereq="第 017 讲 · 结构体、标签与内存对齐" />
 
-# 第 18 讲 · 方法与接收者：值还是指针
+# 第 018 讲 · 方法与接收者：值还是指针
 
 > 结构体把数据装好了，接下来要让它有行为：计数、校验、序列化。Go 没有类，但可以给类型绑定函数，调用时写成 `x.F()`，读起来和面向对象一样自然。真正需要想清楚的是那个写在 `func` 后面的接收者：用值还是用指针？这个选择决定方法能不能改到原值，也决定类型能不能满足某个接口。学完本讲，你能给出有依据的判断，而不是凭感觉挑一个。
 
@@ -270,7 +270,7 @@ func main() {
 
 <Compare title="值接收者与引用型字段" :panels='[{"label":"错误：以为改不到原对象","code":"func (u User) Rename() {\n    u.Tags[0] = \"x\"\n}","note":"切片字段只拷描述符，改元素会回写"},{"label":"正确：指针接收者加显式拷贝","code":"func (u *User) SetTags(t []string) {\n    u.Tags = append([]string(nil), t...)\n}","note":"语义清晰，需要隔离时显式深拷贝"}]' />
 
-这与第 17 讲的浅拷贝是同一条规则：字段本身是描述符，副本里的描述符仍指向同一份数据。
+这与第 017 讲的浅拷贝是同一条规则：字段本身是描述符，副本里的描述符仍指向同一份数据。
 
 **误解二：类型实现了接口的全部方法，值 `T` 和指针 `*T` 就都能赋给该接口。** 只由指针接收者实现的方法不进 `T` 的方法集。
 
@@ -352,7 +352,7 @@ func main() {
 | 版本 | 变化 | 适用边界 |
 | --- | --- | --- |
 | Go 1.9 | 引入类型别名 `type B = A` | 不能给别名再定义新方法，仍受「只能给本包类型加方法」约束 |
-| Go 1.18 | 泛型类型可声明方法，接收者须重列类型参数 | 见第 22 讲 |
+| Go 1.18 | 泛型类型可声明方法，接收者须重列类型参数 | 见第 022 讲 |
 | Go 1.18 | `any` 别名引入，接口实现判定不变 | 与 `interface{}` 等价 |
 | 全版本 | `T` 只含值接收者方法、`*T` 含两类 | 结论与版本无关 |
 
@@ -360,7 +360,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 会展开 itab 与方法表，把「接口赋值查方法集」落到运行时结构；[第 26 讲](/core/value-semantics) 量化值接收者的整份拷贝成本；[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 看接收者何时逃逸。工程上，[第 51 讲](/engineering/code-style) 把 `go vet` 接进 CI 拦住 copylocks，[第 53 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 全部用指针接收者，[第 118 讲](/projects/ai-gateway) 的多供应商适配则靠接口把行为差异收在一处。
+[第 030 讲](/core/interface-internals) 会展开 itab 与方法表，把「接口赋值查方法集」落到运行时结构；[第 026 讲](/core/value-semantics) 量化值接收者的整份拷贝成本；[第 027 讲](/core/escape-analysis) 用 `-gcflags=-m` 看接收者何时逃逸。工程上，[第 051 讲](/engineering/code-style) 把 `go vet` 接进 CI 拦住 copylocks，[第 053 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 全部用指针接收者，[第 118 讲](/projects/ai-gateway) 的多供应商适配则靠接口把行为差异收在一处。
 
 ## 动手练一练
 
@@ -368,9 +368,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="18-1" q="关于方法集，正确的是？" :options='["T 含指针接收者方法","*T 只能调指针方法","值接收者让 T 与 *T 都满足接口","能给其他包类型加方法"]' answer="2" explain="T 只含值接收者方法；非本地类型不能加方法。" />
+<Quiz no="018-1" q="关于方法集，正确的是？" :options='["T 含指针接收者方法","*T 只能调指针方法","值接收者让 T 与 *T 都满足接口","能给其他包类型加方法"]' answer="2" explain="T 只含值接收者方法；非本地类型不能加方法。" />
 
-<Predict no="18-2" q="Cat 仅由 *Cat 实现 Speaker，把 Cat{} 赋给 Speaker 会怎样？" :options='["正常编译","编译失败","运行时 panic","输出空串"]' answer="1" output="编译失败：Cat does not implement Speaker" explain="值类型方法集只含值接收者方法。" />
+<Predict no="018-2" q="Cat 仅由 *Cat 实现 Speaker，把 Cat{} 赋给 Speaker 会怎样？" :options='["正常编译","编译失败","运行时 panic","输出空串"]' answer="1" output="编译失败：Cat does not implement Speaker" explain="值类型方法集只含值接收者方法。" />
 
 ## 一页纸速记
 

@@ -1,9 +1,9 @@
-# 第 03 讲 · 第一行 Go 代码：从源码到可执行文件
+# 第 003 讲 · 第一行 Go 代码：从源码到可执行文件
 
 - **阶段**：L0 · 导学与学习路线
 - **目标**：彻底看懂一个最小 Go 程序的每一行
 - **知识点**：package main 与 import / func main 入口 / fmt.Println / go run 与 go build 的差别
-- **教程正文**：[第 03 讲 · 第一行 Go 代码：从源码到可执行文件](/guide/hello)
+- **教程正文**：[第 003 讲 · 第一行 Go 代码：从源码到可执行文件](/guide/hello)
 - **GitHub 目录**：[l0-guide/lesson-003-hello](https://github.com/lfire/go/tree/main/examples/l0-guide/lesson-003-hello)
 
 ## 运行

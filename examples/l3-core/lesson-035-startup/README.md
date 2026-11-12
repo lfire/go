@@ -1,9 +1,9 @@
-# 第 35 讲 · 程序启动、init 顺序与包初始化
+# 第 035 讲 · 程序启动、init 顺序与包初始化
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：搞清楚 main 之前发生了什么
 - **知识点**：依赖图与初始化顺序 / init 的使用边界 / runtime 初始化 / 全局变量的代价 / 启动耗时分析
-- **教程正文**：[第 35 讲 · 程序启动、init 顺序与包初始化](/core/startup)
+- **教程正文**：[第 035 讲 · 程序启动、init 顺序与包初始化](/core/startup)
 - **GitHub 目录**：[l3-core/lesson-035-startup](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-035-startup)
 
 ## 运行

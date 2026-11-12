@@ -1,11 +1,11 @@
 ---
-title: 第 49 讲 · 数据竞争、内存模型与 race detector
+title: 第 049 讲 · 数据竞争、内存模型与 race detector
 description: 用 happens-before 判定数据竞争，给出可复现竞态与修复对照，讲清 -race 的原理、开销、误报与漏报
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="45 分钟" goal="能发现并修复隐蔽的并发 bug" prereq="第 48 讲 · 并发模式：pipeline / fan-out / worker pool" />
+<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="45 分钟" goal="能发现并修复隐蔽的并发 bug" prereq="第 048 讲 · 并发模式：pipeline / fan-out / worker pool" />
 
-# 第 49 讲 · 数据竞争、内存模型与 race detector
+# 第 049 讲 · 数据竞争、内存模型与 race detector
 
 > 「能跑」和「正确」之间隔着数据竞争：它不一定崩溃、不一定复现，可能悄悄少算一次、偶发返回旧值。本讲先用 happens-before 给出判定，再给可复现示例与三种修复，最后拆开 -race 的原理、开销与盲区。
 
@@ -249,8 +249,8 @@ GORACE="halt_on_error=1" go test -race ./...                # 命中首个竞态
 <Exercise title="修复一段计数竞态" task="100 个 goroutine 各给 counter 加一，请用 Mutex 修复竞争并打印结果。" :hints='["声明 sync.Mutex 并前后 Lock、Unlock","Add 在 go 之前，Done 用 defer","wg.Wait() 后再读结果"]' solution="var mu sync.Mutex\nvar counter int\nvar wg sync.WaitGroup\nfor i := 0; i != 100; i++ {\n    wg.Add(1)\n    go func() {\n        defer wg.Done()\n        mu.Lock()\n        counter = counter + 1\n        mu.Unlock()\n    }()\n}\nwg.Wait()\nfmt.Println(counter)" explain="锁把读改写圈成不可分割的临界区，并在解锁与加锁间建立 happens-before，100 次更新一次不丢，输出 100。也可改用 atomic 或 channel。" />
 
 ## 随堂检测
-<Quiz no="49-1" q="关于 -race，下面说法正确的是？" :options='["靠静态分析找出所有竞态，无漏报","应长期开在生产做监控","编译期插桩、运行时用向量时钟检测未同步冲突访问，开销大只用于测试","能查出所有逻辑竞态，如检查后使用的时序 bug"]' answer="2" explain="-race 动态检测，开销数倍且只覆盖本次执行路径；它抓数据竞争而非逻辑竞态，适合测试与 CI。" />
-<Predict no="49-2" q="给 counter++ 加上 Mutex 后，1000 个 goroutine 各加一次，最终输出是？" :options='["总是 1000","通常小于 1000","随机崩溃","编译失败"]' answer="0" output="期望 1000，实际： 1000" explain="互斥锁让读改写独占执行，Unlock 与后续 Lock 建立 happens-before，更新不被覆盖。" />
+<Quiz no="049-1" q="关于 -race，下面说法正确的是？" :options='["靠静态分析找出所有竞态，无漏报","应长期开在生产做监控","编译期插桩、运行时用向量时钟检测未同步冲突访问，开销大只用于测试","能查出所有逻辑竞态，如检查后使用的时序 bug"]' answer="2" explain="-race 动态检测，开销数倍且只覆盖本次执行路径；它抓数据竞争而非逻辑竞态，适合测试与 CI。" />
+<Predict no="049-2" q="给 counter++ 加上 Mutex 后，1000 个 goroutine 各加一次，最终输出是？" :options='["总是 1000","通常小于 1000","随机崩溃","编译失败"]' answer="0" output="期望 1000，实际： 1000" explain="互斥锁让读改写独占执行，Unlock 与后续 Lock 建立 happens-before，更新不被覆盖。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["判据：两访问同一变量至少一写且无 happens-before","go、channel、Mutex、WaitGroup、Once、atomic 建同步","counter++ 是读改写三步，交错会丢更新","-race 插桩加向量时钟检测，开销数倍","三修复：锁、原子、channel"]' :pitfalls='["把 -race 长开生产或以为能查所有竞态","只求报告消失，没理清变量由谁保护"]' summary="先用 happens-before 判竞争，再用锁、原子或 channel 建同步，用 -race 验证" />

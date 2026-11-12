@@ -1,9 +1,9 @@
-# 第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC
+# 第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：理解 GC 触发、停顿与调优
 - **知识点**：三色标记 / 写屏障与混合屏障 / STW 与并发标记 / GOGC 与 MemoryLimit / GC 友好代码
-- **教程正文**：[第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC](/core/gc)
+- **教程正文**：[第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC](/core/gc)
 - **GitHub 目录**：[l3-core/lesson-033-gc](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-033-gc)
 
 ## 运行

@@ -1,11 +1,11 @@
 ---
-title: 第 48 讲 · 并发模式：pipeline / fan-out / worker pool
+title: 第 048 讲 · 并发模式：pipeline / fan-out / worker pool
 description: 把 pipeline、扇出扇入、worker pool、errgroup、singleflight 与限速背压写成可复用的并发套路
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="50 分钟" goal="把常见并发结构写成可复用套路" prereq="第 47 讲 · context：取消、超时、值传递" />
+<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="50 分钟" goal="把常见并发结构写成可复用套路" prereq="第 047 讲 · context：取消、超时、值传递" />
 
-# 第 48 讲 · 并发模式：pipeline / fan-out / worker pool
+# 第 048 讲 · 并发模式：pipeline / fan-out / worker pool
 
 > 前面给了积木，真实业务却要把数据流组织成稳定的生产线。本讲把积木拼成六种高频套路：阶段管道、扇出扇入、worker pool、errgroup、singleflight、限速背压，每种都给出可编译实现。
 
@@ -298,8 +298,8 @@ go test -race ./...                              # 全量回归
 <Exercise title="用 WaitGroup 汇合一组 worker" task="把 tasks 每项交给一个 goroutine 处理，用 WaitGroup 等全部结束再继续，要求 Add 在启动前、Done 用 defer。" :hints='["循环里先 wg.Add(1)","函数体首行 defer wg.Done()","循环结束调用 wg.Wait()"]' solution="var wg sync.WaitGroup\nfor _, t := range tasks {\n    wg.Add(1)\n    go func(x int) {\n        defer wg.Done()\n        fmt.Println(x)\n    }(t)\n}\nwg.Wait()" explain="worker pool 最小汇合骨架：Add 登记、defer Done 计数、Wait 等待。循环变量通过参数 x 传入，避免闭包捕获同一变量；正式项目再叠加 jobs 队列与 context。" />
 
 ## 随堂检测
-<Quiz no="48-1" q="关于 errgroup 与 singleflight，下面说法正确的是？" :options='["errgroup 合并相同 key 的重复请求","singleflight 让首错取消其它任务","两者都在标准库 sync 包里","errgroup 编组任务，任一出错即可统一取消其余"]' answer="3" explain="errgroup 编组 goroutine 并在首错时取消其余；singleflight 合并同 key 调用防击穿；二者都来自 golang.org/x/sync。" />
-<Predict no="48-2" q="把 1 到 8 交给 4 个 worker 各自平方再汇总，平方和是？" :options='["204","36","不确定取决于调度","会死锁"]' answer="0" output="平方和 = 204" explain="1 到 8 平方和为 204；worker 数只改并行度，close 与 WaitGroup 保证每任务恰好处理一次。" />
+<Quiz no="048-1" q="关于 errgroup 与 singleflight，下面说法正确的是？" :options='["errgroup 合并相同 key 的重复请求","singleflight 让首错取消其它任务","两者都在标准库 sync 包里","errgroup 编组任务，任一出错即可统一取消其余"]' answer="3" explain="errgroup 编组 goroutine 并在首错时取消其余；singleflight 合并同 key 调用防击穿；二者都来自 golang.org/x/sync。" />
+<Predict no="048-2" q="把 1 到 8 交给 4 个 worker 各自平方再汇总，平方和是？" :options='["204","36","不确定取决于调度","会死锁"]' answer="0" output="平方和 = 204" explain="1 到 8 平方和为 204；worker 数只改并行度，close 与 WaitGroup 保证每任务恰好处理一次。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["pipeline 每阶段返回只读 channel，谁写谁关","fan-out 共享输入，fan-in 用 merge 汇总","worker pool 固定数量配 jobs 队列","errgroup 首错取消，singleflight 合并调用","有界 channel 与 SetLimit 形成背压"]' :pitfalls='["生产阶段忘关 channel，range 永挂","fan-in 过早关汇合通道丢数据","无限速起 goroutine 压垮下游"]' summary="拆成阶段、扇出扇入并行、pool 与限速控规模、errgroup 与 singleflight 处理错误与去重" />

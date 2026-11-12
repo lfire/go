@@ -1,11 +1,11 @@
 ---
-title: 第 16 讲 · map：哈希、遍历与 Set 技巧
+title: 第 016 讲 · map：哈希、遍历与 Set 技巧
 description: 掌握 map 的 CRUD、comma-ok、遍历无序、Set 技巧与并发不安全的边界
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="30 分钟" goal="会用 map 并知道它的边界" prereq="第 15 讲 · for range 与闭包捕获陷阱" />
+<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="30 分钟" goal="会用 map 并知道它的边界" prereq="第 015 讲 · for range 与闭包捕获陷阱" />
 
-# 第 16 讲 · map：哈希、遍历与 Set 技巧
+# 第 016 讲 · map：哈希、遍历与 Set 技巧
 
 > 切片靠下标找元素，下标必须是连续整数。可现实里更多是「按名字查年龄」「按订单号查状态」这类需求：键是字符串，且不知道第几个。map 就是为这种查找而生——用哈希把键折算成桶位置，平均一次命中。学完本讲，你能写对增删改查、分辨「零值」与「不存在」、用 Set 去重，并知道它在并发下的红线。
 
@@ -363,7 +363,7 @@ func main() {
 | 版本 | 变化 | 适用边界 |
 | --- | --- | --- |
 | Go 1.18 | `any` 成为 `interface{}` 别名，可作 map 的 value 类型 | 与 `interface{}` 等价 |
-| Go 1.20 | `comparable` 约束放宽，普通接口值可满足 | 影响泛型 map 键，见第 22 讲 |
+| Go 1.20 | `comparable` 约束放宽，普通接口值可满足 | 影响泛型 map 键，见第 022 讲 |
 | Go 1.21 | 内建 `clear(m)` 一行清空所有键 | 对 nil map 是空操作 |
 | Go 1.21 | 标准库 `maps` 包提供 `Clone`/`Keys`/`Values` | 手写拷贝有了官方替代 |
 | Go 1.23 | `maps.Keys`/`Values` 返回 `iter.Seq` 迭代器 | 需配合 `for range` 使用 |
@@ -373,7 +373,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 29 讲](/core/map-internals) 会展开 `hmap`/`bmap`、桶分裂与渐进扩容，把「为什么地址不稳定」落到结构里；[第 30 讲](/core/interface-internals) 解释 map 里装 `any` 时的动态类型；[第 45 讲](/concurrency/sync-primitives) 与 [第 49 讲](/concurrency/race) 分别给出 `RWMutex` 与竞态的判据。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 就是「一张 map 加一把锁」，[第 116 讲](/projects/micro-seckill) 的库存热点 key 则把锁粒度与 `sync.Map` 的取舍摆到台面上。
+[第 029 讲](/core/map-internals) 会展开 `hmap`/`bmap`、桶分裂与渐进扩容，把「为什么地址不稳定」落到结构里；[第 030 讲](/core/interface-internals) 解释 map 里装 `any` 时的动态类型；[第 045 讲](/concurrency/sync-primitives) 与 [第 049 讲](/concurrency/race) 分别给出 `RWMutex` 与竞态的判据。实战里，[第 111 讲](/projects/kv-1-memory) 的 `MemStore` 就是「一张 map 加一把锁」，[第 116 讲](/projects/micro-seckill) 的库存热点 key 则把锁粒度与 `sync.Map` 的取舍摆到台面上。
 
 ## 动手练一练
 
@@ -381,9 +381,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="16-1" q="关于 map，正确的是？" :options='["nil map 可以直接写入","m[k] 返回零值说明键一定不存在","map 的 value 可以安全取地址","delete 对不存在的键是安全的"]' answer="3" explain="nil map 写入会 panic；零值也可能是键存在且值恰为零；value 因扩容不能取址；delete 对缺失键无害。" />
+<Quiz no="016-1" q="关于 map，正确的是？" :options='["nil map 可以直接写入","m[k] 返回零值说明键一定不存在","map 的 value 可以安全取地址","delete 对不存在的键是安全的"]' answer="3" explain="nil map 写入会 panic；零值也可能是键存在且值恰为零；value 因扩容不能取址；delete 对缺失键无害。" />
 
-<Predict no="16-2" q="m 是空的 map[string]int，执行 v, ok := m[x] 后 v 与 ok 是？" :options='["0 与 false","0 与 true","nil 与 false","编译失败"]' answer="0" output="0 false" explain="键不存在时返回值类型零值，ok 为 false；这正是 comma-ok 存在的意义。" />
+<Predict no="016-2" q="m 是空的 map[string]int，执行 v, ok := m[x] 后 v 与 ok 是？" :options='["0 与 false","0 与 true","nil 与 false","编译失败"]' answer="0" output="0 false" explain="键不存在时返回值类型零值，ok 为 false；这正是 comma-ok 存在的意义。" />
 
 ## 一页纸速记
 

@@ -1,11 +1,11 @@
 ---
-title: 第 61 讲 · net/http 深入：Handler、ServeMux 与中间件链
+title: 第 061 讲 · net/http 深入：Handler、ServeMux 与中间件链
 description: 吃透 Handler 接口、ServeMux 路由、Request 与 ResponseWriter、中间件洋葱模型以及超时与优雅退出，不依赖框架也能写清 HTTP 服务
 ---
 
 <StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="不依赖框架也能写清楚 HTTP 服务" prereq="阶段五 · 工程化与质量" />
 
-# 第 61 讲 · net/http 深入：Handler、ServeMux 与中间件链
+# 第 061 讲 · net/http 深入：Handler、ServeMux 与中间件链
 
 > Go 后端几乎都跑在 `net/http` 之上，Gin、Echo、Chi 本质上只是把这一层包得更顺手。这一讲我们不用任何第三方库，直接用标准库搭出带路由、中间件、超时与优雅退出的服务。把地基看透之后，后面学框架会变成一件轻松的事：你只需要问「它替我做了什么」。
 
@@ -186,7 +186,7 @@ func main() {
 
 **方法语义与幂等。** RFC 9110 把方法拆成「安全（safe）」与「幂等（idempotent）」两个正交维度：安全指不改变服务端状态（GET、HEAD、OPTIONS、TRACE），幂等指同一请求执行一次与执行 N 次、服务端最终状态相同（GET、HEAD、PUT、DELETE、OPTIONS、TRACE）。POST 既不幂等也不安全，PATCH 通常也不幂等。为什么服务端工程师必须较真？因为「谁可以重放请求」是基础设施决定的：浏览器、CDN、网关、负载均衡器在超时或连接被重置时，默认只会自动重试**安全且幂等**的方法。把创建订单设计成 GET，或让 GET 承担扣库存，缓存、预取、重试就会替你悄悄多下几单。推导结论：方法不是路由标签，而是写给全链路中间件的一纸承诺。
 
-**状态码是给机器读的契约。** 2xx / 4xx / 5xx 的首位直接决定缓存与告警：2xx 配合 `Cache-Control` 默认可缓存；4xx 表示请求方错了、重试同样请求不会有不同结果；5xx 表示服务端暂时失败、可以带退避重试。这正是第 63 讲把 400 与 422 分开、把 409 从 500 里摘出来的依据。混用的代价很具体：把限流写成 503 而不是 429，客户端重试逻辑会当成服务端故障而继续加大流量（重试放大）；把鉴权失败写成 404 而不是 401 / 403，SDK 不会触发重新登录。
+**状态码是给机器读的契约。** 2xx / 4xx / 5xx 的首位直接决定缓存与告警：2xx 配合 `Cache-Control` 默认可缓存；4xx 表示请求方错了、重试同样请求不会有不同结果；5xx 表示服务端暂时失败、可以带退避重试。这正是第 063 讲把 400 与 422 分开、把 409 从 500 里摘出来的依据。混用的代价很具体：把限流写成 503 而不是 429，客户端重试逻辑会当成服务端故障而继续加大流量（重试放大）；把鉴权失败写成 404 而不是 401 / 403，SDK 不会触发重新登录。
 
 **超时与取消是一条链，不是一个数。** `r.Context()` 在三种情况下被取消：客户端断开、服务端 `Server` 主动关闭或写超时、以及显式 `CancelFunc`。RFC 并不规定超时怎么设，但 Go 把四类超时拆开正是为了对齐 TCP 生命周期：`ReadHeaderTimeout` 对齐「请求行加头部必须在时限内到达」，`ReadTimeout` 覆盖到 body 读完，`WriteTimeout` 从读完请求头算起覆盖写回，`IdleTimeout` 管 keep-alive 空闲连接。推导：只设 `ReadTimeout` 而不设 `ReadHeaderTimeout`，Slowloris 仍能在头部阶段占住连接；只设 `WriteTimeout` 而让连接永久 keep-alive，fd 仍会被空闲连接耗尽。四个字段必须配套——这就是第 3 节那张表的「为什么」。
 
@@ -384,9 +384,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="61-1" q="http.Handler 接口要求实现哪个方法？" :options='["ServeHTTP","HandlerFunc","Handle","Serve"]' answer="0" explain="Handler 只约定一个 ServeHTTP(ResponseWriter, *Request) 方法；HandlerFunc 是把函数适配成该接口的类型，不是接口方法。" />
+<Quiz no="061-1" q="http.Handler 接口要求实现哪个方法？" :options='["ServeHTTP","HandlerFunc","Handle","Serve"]' answer="0" explain="Handler 只约定一个 ServeHTTP(ResponseWriter, *Request) 方法；HandlerFunc 是把函数适配成该接口的类型，不是接口方法。" />
 
-<Predict no="61-2" q="用 chain(mux, recoverPanic, logging) 组装后，一次正常请求中日志的打印顺序是？" :options='["先打印进入，业务执行，最后打印退出","先打印退出，再打印进入，最后业务执行","只打印进入，退出永远不执行"]' answer="0" output="进入 GET /\nbusiness logic\n退出 / 耗时 12.3µs" explain="洋葱模型下前置逻辑在内层调用之前执行，后置逻辑在 next.ServeHTTP 返回之后执行，因此是进入、业务、退出。" />
+<Predict no="061-2" q="用 chain(mux, recoverPanic, logging) 组装后，一次正常请求中日志的打印顺序是？" :options='["先打印进入，业务执行，最后打印退出","先打印退出，再打印进入，最后业务执行","只打印进入，退出永远不执行"]' answer="0" output="进入 GET /\nbusiness logic\n退出 / 耗时 12.3µs" explain="洋葱模型下前置逻辑在内层调用之前执行，后置逻辑在 next.ServeHTTP 返回之后执行，因此是进入、业务、退出。" />
 
 ## 一页纸速记
 

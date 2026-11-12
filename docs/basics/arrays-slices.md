@@ -1,11 +1,11 @@
 ---
-title: 第 13 讲 · 数组与切片：定义与操作
+title: 第 013 讲 · 数组与切片：定义与操作
 description: 数组是值、切片是描述符，掌握 len/cap、append、copy 与切片表达式
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="熟练使用 Go 最常用的序列结构" prereq="第 12 讲 · 阶段综合：CLI 单位换算器" />
+<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="熟练使用 Go 最常用的序列结构" prereq="第 012 讲 · 阶段综合：CLI 单位换算器" />
 
-# 第 13 讲 · 数组与切片：定义与操作
+# 第 013 讲 · 数组与切片：定义与操作
 
 > 程序总在处理「一串数据」。Go 给了两种载体：长度写死的数组，和长度可变的切片。为什么日常代码几乎只用切片？因为数组赋值、传参都要整块搬走，切片只带一张轻量「取货单」。学完本讲，你能选对容器、读懂 len 与 cap，并避开共享底层数组的隐性改动。
 
@@ -246,7 +246,7 @@ func main() {
 
 <Compare title="函数内 append 要不要回传" :panels='[{"label":"错误：以为改到了调用方","code":"func add(s []int) {\n    s = append(s, 9)\n}\n// 调用后原切片 len 不变","note":"描述符按值传递，函数内改的是副本"},{"label":"正确：返回并接住","code":"func add(s []int) []int {\n    return append(s, 9)\n}\ns = add(s)","note":"新描述符经返回值交回，赋值后才生效"}]' />
 
-这与「`range` 给的是副本」是同一条按值语义的不同表现：第 26 讲会把数组、切片、结构体传参的拷贝成本一并量化。
+这与「`range` 给的是副本」是同一条按值语义的不同表现：第 026 讲会把数组、切片、结构体传参的拷贝成本一并量化。
 
 ### 可验证实验：命令、输出与逐字段解释
 
@@ -322,7 +322,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-本讲只到「描述符 + 扩容可能换数组」这一层。[第 28 讲](/core/slice-internals) 会打开 `runtime/slice.go` 里 `growslice` 的容量公式、256 阈值与共享别名陷阱；[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 解释底层数组何时从栈逃逸到堆；[第 26 讲](/core/value-semantics) 把「数组传参整块拷贝、切片传参只拷三个字」量化成成本。实战里，[第 106 讲](/projects/net-image-server) 处理上传缓冲要靠 `buf[:n]` 与 `copy` 控制内存，[第 107 讲](/projects/data-log-etl) 的 pipeline 用预分配切片承住窗口数据——预分配与隔离这两条习惯会在那里反复用到。
+本讲只到「描述符 + 扩容可能换数组」这一层。[第 028 讲](/core/slice-internals) 会打开 `runtime/slice.go` 里 `growslice` 的容量公式、256 阈值与共享别名陷阱；[第 027 讲](/core/escape-analysis) 用 `-gcflags=-m` 解释底层数组何时从栈逃逸到堆；[第 026 讲](/core/value-semantics) 把「数组传参整块拷贝、切片传参只拷三个字」量化成成本。实战里，[第 106 讲](/projects/net-image-server) 处理上传缓冲要靠 `buf[:n]` 与 `copy` 控制内存，[第 107 讲](/projects/data-log-etl) 的 pipeline 用预分配切片承住窗口数据——预分配与隔离这两条习惯会在那里反复用到。
 
 ## 动手练一练
 
@@ -330,9 +330,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="13-1" q="关于数组与切片，正确的是？" :options='["数组赋值只复制描述符","s[1:3] 的 cap 一定是 2","长度属于类型，[3]int 与 [4]int 不能互赋","nil 切片必须先 make 才能 append"]' answer="2" explain="数组是值，整块拷贝，长度不同即类型不同；cap 从起点算到数组末尾；nil 切片可直接 append。" />
+<Quiz no="013-1" q="关于数组与切片，正确的是？" :options='["数组赋值只复制描述符","s[1:3] 的 cap 一定是 2","长度属于类型，[3]int 与 [4]int 不能互赋","nil 切片必须先 make 才能 append"]' answer="2" explain="数组是值，整块拷贝，长度不同即类型不同；cap 从起点算到数组末尾；nil 切片可直接 append。" />
 
-<Predict no="13-2" q="arr 长度为 5，part := arr[1:4] 后打印 len(part), cap(part) 的结果是？" :options='["3 3","3 4","4 4","2 4"]' answer="1" output="3 4" explain="左闭右开取 3 个元素；cap 从下标 1 数到末尾共 4 格。" />
+<Predict no="013-2" q="arr 长度为 5，part := arr[1:4] 后打印 len(part), cap(part) 的结果是？" :options='["3 3","3 4","4 4","2 4"]' answer="1" output="3 4" explain="左闭右开取 3 个元素；cap 从下标 1 数到末尾共 4 格。" />
 
 ## 一页纸速记
 

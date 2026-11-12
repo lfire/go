@@ -1,11 +1,11 @@
 ---
-title: 第 57 讲 · 错误码、错误栈与统一响应
+title: 第 057 讲 · 错误码、错误栈与统一响应
 description: 设计前后端共用的错误契约，掌握错误分类与错误码、错误栈封装、内部错误到 HTTP/gRPC 状态映射与不泄露细节
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★★☆" time="45 分钟" goal="设计前后端都能用的错误契约" prereq="第 56 讲 · 配置：flag / env / viper / 配置中心" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★★☆" time="45 分钟" goal="设计前后端都能用的错误契约" prereq="第 056 讲 · 配置：flag / env / viper / 配置中心" />
 
-# 第 57 讲 · 错误码、错误栈与统一响应
+# 第 057 讲 · 错误码、错误栈与统一响应
 
 > `errors.Is` 与 `%w` 解决了「程序内部怎么判定错误」，但一个对外服务还要回答另外三个问题：客户端怎么稳定识别错误类别、线上怎么定位是哪一行抛的、以及哪些信息绝对不能返回给调用方。这一讲把内部错误收敛成一份契约，重点不是多包一层，而是划清「给机器判定的码」与「给人看的提示」之间的边界。
 
@@ -192,7 +192,7 @@ internal log: sql: no rows in order table
 
 错误码用整数而不是字符串，是因为它给机器判定：文案会改错别字、会做多语言、会被不同人各写一份，客户端若靠「资源不存在」这几个字分支，一次文案调整就能让全线失效；整数码一旦发布就是契约。`%w` 与 `Unwrap` 保留错误链，则是因为既要给人看上下文、又要让机器追根因：如果把底层错误用字符串拼进 message，`errors.Is(err, sql.ErrNoRows)` 立刻失效，调用方再也无法区分「没找到」和「数据库挂了」，只能一律当内部错误。`errors.As` 沿链取出最近的自定义类型拿类别，`errors.Is` 沿链追到原始哨兵，两者靠 `Unwrap` 同时成立——第一块代码的输出正是这个结论。
 
-调用位置只在错误产生处记一次，是因为 `runtime.Callers` 有成本，每层都包栈会让同一故障在日志里刷出十几行，反而淹没根因；其余层用 `%w` 附上下文就够了。映射收敛到边界一处（`statusOf`），是因为散落在各 handler 里必然出现「新加的 handler 忘了映射，把 `err.Error()` 原样返回」或「未知类别漏出 200」；集中后的 `default` 分支能兜住所有未来新增的码。最后，「对外安全提示」与「对内详细日志」必须分开：响应体会被客户端、网关、CDN、第三方 SDK 记录，SQL 文本、内网地址、堆栈路径一旦返回就收不回，还把内部结构递给了攻击者；可排查又离不开这些细节，所以它们只进日志并关联 `trace_id`（呼应第 55 讲）。
+调用位置只在错误产生处记一次，是因为 `runtime.Callers` 有成本，每层都包栈会让同一故障在日志里刷出十几行，反而淹没根因；其余层用 `%w` 附上下文就够了。映射收敛到边界一处（`statusOf`），是因为散落在各 handler 里必然出现「新加的 handler 忘了映射，把 `err.Error()` 原样返回」或「未知类别漏出 200」；集中后的 `default` 分支能兜住所有未来新增的码。最后，「对外安全提示」与「对内详细日志」必须分开：响应体会被客户端、网关、CDN、第三方 SDK 记录，SQL 文本、内网地址、堆栈路径一旦返回就收不回，还把内部结构递给了攻击者；可排查又离不开这些细节，所以它们只进日志并关联 `trace_id`（呼应第 055 讲）。
 
 | 做法 | 客户端能判定吗 | 线上能定位吗 | 对外安全吗 | 代价 |
 | --- | --- | --- | --- | --- |
@@ -317,7 +317,7 @@ As 第二参数传非指针: errors: target must be a non-nil pointer
 
 **边界与失效条件**：`errors.Is` 对 `Unwrap` 链没有显式环检测，自定义错误若让 `Unwrap` 指回自身会死循环（`fmt.wrapError` 的单向包装不会成环）；当前错误若实现了 `Is(error) bool`，该自定义判定优先于 `==` 比较；链只沿 `Unwrap` 单向向下、不回溯，也不检查「错误是否真的被上层读取过」。`fmt.wrapError` 是未导出类型，不能自己构造，只能靠 `%w` 生成——所以错误链的正确性完全系于包装时那一个动词。机制能证明「链可判定」，证明不了「错误分类是否合理」，后者仍是码表设计的事。
 
-**版本前提**：`%w` 与 `errors.Is/As` 自 Go 1.13 起可用，`errors.Join`（`Unwrap() []error`）自 Go 1.20 起才有，版本差异会直接改变判定行为，CI 才要锁 Go 版本；本实验在 Go 1.23.8（darwin/arm64）实测。第 20 讲展开错误链的基础用法，本讲补的是它为什么成立。
+**版本前提**：`%w` 与 `errors.Is/As` 自 Go 1.13 起可用，`errors.Join`（`Unwrap() []error`）自 Go 1.20 起才有，版本差异会直接改变判定行为，CI 才要锁 Go 版本；本实验在 Go 1.23.8（darwin/arm64）实测。第 020 讲展开错误链的基础用法，本讲补的是它为什么成立。
 
 ### 一个 `%w` 还是两个：`wrapError` / `wrapErrors` / `joinError` 与自定义 `Is` 的优先级
 
@@ -452,7 +452,7 @@ panic: test timed out after 2s
 
 **边界与失效条件**：`errors.As` 的第二参数仍必须是非 nil 指针且指向实现 `error` 的类型（第二版实验里已证 panic），多 `%w` 不改变这条；`isComparable := reflectlite.TypeOf(target).Comparable()` 为 false 时（target 是含 slice / map / func 的类型），`==` 那一轮被跳过，只能靠自定义 `Is`，这类 target 直接传给 `errors.Is` 容易判不出来；`errors.Join` 会过滤 nil 子错误，全 nil 时返回 nil；`fmt.Errorf` 的多 `%w` 是 Go 1.20 起的行为，1.13–1.19 只支持单个。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；单个 `%w` / `errors.Is/As` 自 Go 1.13 起，多个 `%w` 与 `errors.Join`（`Unwrap() []error`）自 Go 1.20 起，`fmt.wrapErrors`、`errors.joinError` 的结构与 `is()` 无环检测的循环在 1.20–1.23 间稳定。第 20 讲展开错误链基础，本讲上一节补了 `%w`/`%v` 的结构差异，这里补的是「多个 `%w` 让链变树」、自定义 `Is` 的判定顺序与成环的终止条件；第 55 讲日志里的 `error` 字段、第 80 讲的错误标记都依赖同一份可被 `As` 提取的码表。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；单个 `%w` / `errors.Is/As` 自 Go 1.13 起，多个 `%w` 与 `errors.Join`（`Unwrap() []error`）自 Go 1.20 起，`fmt.wrapErrors`、`errors.joinError` 的结构与 `is()` 无环检测的循环在 1.20–1.23 间稳定。第 020 讲展开错误链基础，本讲上一节补了 `%w`/`%v` 的结构差异，这里补的是「多个 `%w` 让链变树」、自定义 `Is` 的判定顺序与成环的终止条件；第 055 讲日志里的 `error` 字段、第 080 讲的错误标记都依赖同一份可被 `As` 提取的码表。
 
 ### 三条最常见的误解
 
@@ -509,7 +509,7 @@ gRPC 侧同理：内部错误码映射到 `codes.NotFound`、`codes.InvalidArgum
 
 ### 与 L10 实战工程结构的呼应
 
-错误契约在 L10 是从第一讲就定下的：`/projects/kv-1-memory` 定义 `ErrNotFound` 之类的哨兵错误，`/projects/kv-2-network` 的协议帧错误、`/projects/net-shortlink` 的短链过期与不存在，都要在边界映射成不同状态；`/projects/micro-ecommerce` 的 gRPC 服务把业务码映射到 `codes.NotFound` / `codes.Internal`（呼应第 74 讲 gRPC 状态码）。再往前，第 55 讲日志里的 `error` 字段、第 80 讲链路追踪里的错误标记，都依赖同一份码表；第 56 讲的配置校验失败之所以能在启动期拦下，也是因为它把非法值当成了一个有类别的错误，而不是一句打印。
+错误契约在 L10 是从第一讲就定下的：`/projects/kv-1-memory` 定义 `ErrNotFound` 之类的哨兵错误，`/projects/kv-2-network` 的协议帧错误、`/projects/net-shortlink` 的短链过期与不存在，都要在边界映射成不同状态；`/projects/micro-ecommerce` 的 gRPC 服务把业务码映射到 `codes.NotFound` / `codes.Internal`（呼应第 074 讲 gRPC 状态码）。再往前，第 055 讲日志里的 `error` 字段、第 080 讲链路追踪里的错误标记，都依赖同一份码表；第 056 讲的配置校验失败之所以能在启动期拦下，也是因为它把非法值当成了一个有类别的错误，而不是一句打印。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -523,9 +523,9 @@ gRPC 侧同理：内部错误码映射到 `codes.NotFound`、`codes.InvalidArgum
 
 ## 随堂检测
 
-<Quiz no="57-1" q="关于 errors.As 与错误码，哪项做法最稳妥？" :options='["用 err.Error() 的字符串判断类别","用稳定的整数码并靠 errors.As 提取","每个包各自定义一套码","把码拼进 message 让前端解析"]' answer="1" explain="整数码稳定、可判定；errors.As 能沿 %w 错误链找到自定义类型，不受文案改动影响。" />
+<Quiz no="057-1" q="关于 errors.As 与错误码，哪项做法最稳妥？" :options='["用 err.Error() 的字符串判断类别","用稳定的整数码并靠 errors.As 提取","每个包各自定义一套码","把码拼进 message 让前端解析"]' answer="1" explain="整数码稳定、可判定；errors.As 能沿 %w 错误链找到自定义类型，不受文案改动影响。" />
 
-<Predict no="57-2" q="CodeNotFound 经 statusOf 映射后，writeErr 写出的 HTTP 状态码是？" :options='["200","400","404","500"]' answer="2" output="404" explain="CodeNotFound 命中 switch 的第一个分支，返回 http.StatusNotFound，即 404。" />
+<Predict no="057-2" q="CodeNotFound 经 statusOf 映射后，writeErr 写出的 HTTP 状态码是？" :options='["200","400","404","500"]' answer="2" output="404" explain="CodeNotFound 命中 switch 的第一个分支，返回 http.StatusNotFound，即 404。" />
 
 ## 一页纸速记
 

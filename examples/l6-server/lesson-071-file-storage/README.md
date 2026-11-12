@@ -1,9 +1,9 @@
-# 第 71 讲 · 文件、对象存储与断点续传
+# 第 071 讲 · 文件、对象存储与断点续传
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：处理大文件上传与存储可靠性
 - **知识点**：io.Reader/Writer / 分块与秒传 / 对象存储直传 / 校验与重试 / 临时文件清理
-- **教程正文**：[第 71 讲 · 文件、对象存储与断点续传](/server/file-storage)
+- **教程正文**：[第 071 讲 · 文件、对象存储与断点续传](/server/file-storage)
 - **GitHub 目录**：[l6-server/lesson-071-file-storage](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-071-file-storage)
 
 ## 运行

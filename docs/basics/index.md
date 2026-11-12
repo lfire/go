@@ -17,23 +17,23 @@ description: 用 Go 写出结构完整、能处理错误的小程序
 
 ## 讲次安排
 
-本阶段共 **13 讲**（第 13–25 讲），合计约 470 分钟，难度 1–4 级。
+本阶段共 **13 讲**（第 013–025 讲），合计约 470 分钟，难度 1–4 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 13 | [数组与切片：定义与操作](/basics/arrays-slices) | ★★☆☆☆ | 35 分钟 | 数组是值 · 切片创建与 make · len/cap |
-| 14 | [控制流：if / for / switch / goto](/basics/control-flow) | ★☆☆☆☆ | 30 分钟 | if 初始化语句 · 唯一的 for · switch 自动 break 与 fallthrough |
-| 15 | [for range 与闭包捕获陷阱](/basics/range-pitfalls) | ★★★☆☆ | 30 分钟 | range 的副本语义 · 循环变量捕获 · Go 1.22 的变化 |
-| 16 | [map：哈希、遍历与 Set 技巧](/basics/maps) | ★★☆☆☆ | 30 分钟 | 创建与 CRUD · comma-ok · 遍历无序 |
-| 17 | [结构体、标签与内存对齐](/basics/structs) | ★★☆☆☆ | 35 分钟 | 定义与字面量 · 匿名字段与嵌入 · json tag |
-| 18 | [方法与接收者：值还是指针](/basics/methods) | ★★☆☆☆ | 30 分钟 | 方法定义 · 值/指针接收者差别 · 方法集与接口实现 |
-| 19 | [接口：隐式实现与组合](/basics/interfaces) | ★★★☆☆ | 40 分钟 | 隐式实现 · 小接口原则 · 接口组合 |
-| 20 | [错误处理：error、包装与错误链](/basics/errors) | ★★★☆☆ | 40 分钟 | error 是值 · fmt.Errorf %w · errors.Is/As |
-| 21 | [defer / panic / recover](/basics/defer-panic) | ★★★☆☆ | 35 分钟 | defer LIFO 与参数求值 · 返回值陷阱 · panic 传播 |
-| 22 | [泛型：类型参数与约束](/basics/generics) | ★★★☆☆ | 40 分钟 | 类型参数语法 · constraints 与 comparable · 泛型函数与类型 |
-| 23 | [反射 reflect 与 go generate](/basics/reflect) | ★★★★☆ | 40 分钟 | Type 与 Value · 可设置性与 CanSet · 标签读取 |
-| 24 | [JSON、序列化与常见坑](/basics/json) | ★★☆☆☆ | 35 分钟 | encoding/json 编解码 · tag 与 omitempty · 时间/数字精度 |
-| 25 | [阶段综合：内存版 KV 存储](/basics/capstone) | ★★★☆☆ | 50 分钟 | 接口抽象 Storage · CRUD 与错误设计 · 并发保护 |
+| 013 | [数组与切片：定义与操作](/basics/arrays-slices) | ★★☆☆☆ | 35 分钟 | 数组是值 · 切片创建与 make · len/cap |
+| 014 | [控制流：if / for / switch / goto](/basics/control-flow) | ★☆☆☆☆ | 30 分钟 | if 初始化语句 · 唯一的 for · switch 自动 break 与 fallthrough |
+| 015 | [for range 与闭包捕获陷阱](/basics/range-pitfalls) | ★★★☆☆ | 30 分钟 | range 的副本语义 · 循环变量捕获 · Go 1.22 的变化 |
+| 016 | [map：哈希、遍历与 Set 技巧](/basics/maps) | ★★☆☆☆ | 30 分钟 | 创建与 CRUD · comma-ok · 遍历无序 |
+| 017 | [结构体、标签与内存对齐](/basics/structs) | ★★☆☆☆ | 35 分钟 | 定义与字面量 · 匿名字段与嵌入 · json tag |
+| 018 | [方法与接收者：值还是指针](/basics/methods) | ★★☆☆☆ | 30 分钟 | 方法定义 · 值/指针接收者差别 · 方法集与接口实现 |
+| 019 | [接口：隐式实现与组合](/basics/interfaces) | ★★★☆☆ | 40 分钟 | 隐式实现 · 小接口原则 · 接口组合 |
+| 020 | [错误处理：error、包装与错误链](/basics/errors) | ★★★☆☆ | 40 分钟 | error 是值 · fmt.Errorf %w · errors.Is/As |
+| 021 | [defer / panic / recover](/basics/defer-panic) | ★★★☆☆ | 35 分钟 | defer LIFO 与参数求值 · 返回值陷阱 · panic 传播 |
+| 022 | [泛型：类型参数与约束](/basics/generics) | ★★★☆☆ | 40 分钟 | 类型参数语法 · constraints 与 comparable · 泛型函数与类型 |
+| 023 | [反射 reflect 与 go generate](/basics/reflect) | ★★★★☆ | 40 分钟 | Type 与 Value · 可设置性与 CanSet · 标签读取 |
+| 024 | [JSON、序列化与常见坑](/basics/json) | ★★☆☆☆ | 35 分钟 | encoding/json 编解码 · tag 与 omitempty · 时间/数字精度 |
+| 025 | [阶段综合：内存版 KV 存储](/basics/capstone) | ★★★☆☆ | 50 分钟 | 接口抽象 Storage · CRUD 与错误设计 · 并发保护 |
 
 ## 怎么学这一阶段
 
@@ -49,4 +49,4 @@ description: 用 Go 写出结构完整、能处理错误的小程序
 
 <ProgressTracker />
 
-[← 上一阶段：阶段一 · 编程地基](/foundation/) · [第 13 讲开始 →](/basics/arrays-slices) · [下一阶段：阶段三 · 核心机制](/core/)
+[← 上一阶段：阶段一 · 编程地基](/foundation/) · [第 013 讲开始 →](/basics/arrays-slices) · [下一阶段：阶段三 · 核心机制](/core/)

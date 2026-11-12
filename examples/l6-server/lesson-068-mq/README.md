@@ -1,9 +1,9 @@
-# 第 68 讲 · 消息队列：Kafka / NATS / 可靠投递
+# 第 068 讲 · 消息队列：Kafka / NATS / 可靠投递
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：用消息解耦并保证不丢不重
 - **知识点**：队列与发布订阅 / 分区与顺序 / 确认与重试 / 幂等消费 / 事务消息 / 选型对比
-- **教程正文**：[第 68 讲 · 消息队列：Kafka / NATS / 可靠投递](/server/mq)
+- **教程正文**：[第 068 讲 · 消息队列：Kafka / NATS / 可靠投递](/server/mq)
 - **GitHub 目录**：[l6-server/lesson-068-mq](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-068-mq)
 
 ## 运行

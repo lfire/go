@@ -1,13 +1,13 @@
 ---
-title: 第 97 讲 · channel / mutex 源码与锁竞争
+title: 第 097 讲 · channel / mutex 源码与锁竞争
 description: 沿 chansend/chanrecv/selectgo 与 Mutex 状态机，解释高并发下的性能拐点与定位手段
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="解释高并发下的性能拐点" prereq="第 43 讲 · channel 底层 hchan / 第 45 讲 · sync 原语" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="解释高并发下的性能拐点" prereq="第 043 讲 · channel 底层 hchan / 第 045 讲 · sync 原语" />
 
-# 第 97 讲 · channel / mutex 源码与锁竞争
+# 第 097 讲 · channel / mutex 源码与锁竞争
 
-> 第 43 讲拆过 hchan 的结构，第 45 讲介绍过 sync 原语的用法。本讲把两者接回源码：看 chansend 与 chanrecv 怎样用两个等待队列直接配对，selectgo 怎样随机选就绪的 case，以及 Mutex 的 state 状态机怎样在普通模式、自旋与饥饿模式之间切换。理解了这些，才能解释「为什么并发一上来吞吐突然掉下去」，并知道该用哪种 profile 去定位。源码以 Go 1.23.8 为准。
+> 第 043 讲拆过 hchan 的结构，第 045 讲介绍过 sync 原语的用法。本讲把两者接回源码：看 chansend 与 chanrecv 怎样用两个等待队列直接配对，selectgo 怎样随机选就绪的 case，以及 Mutex 的 state 状态机怎样在普通模式、自旋与饥饿模式之间切换。理解了这些，才能解释「为什么并发一上来吞吐突然掉下去」，并知道该用哪种 profile 去定位。源码以 Go 1.23.8 为准。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-97" title="本讲目标" :items='["说出 hchan 的关键字段与 chansend 的快速路径", "解释 Mutex 状态机、自旋与 1ms 饥饿阈值", "用 mutex profile 与量化对比定位锁竞争拐点"]' />
@@ -282,8 +282,8 @@ go tool pprof -top mutex.prof
 <Exercise title="用 mutex profile 找到最热的锁" task="给第三段程序开启 mutexprofilefraction，用 pprof 看哪一行 Lock 的 contentions 最高，再改成 atomic 版本对比。" :hints='["采样 rate 设为 1 才能抓到全部竞争", "关注 contentions 与 delay 两列"]' solution="GODEBUG=mutexprofilefraction=1\nmu.Lock()\ncounter = counter + 1\nmu.Unlock()\natomic.AddInt64(ptr, 1)" explain="竞争会集中到临界区那一行；改成 atomic 后热点消失。完整代码见第三段。" />
 
 ## 随堂检测
-<Quiz no="97-1" q="chansend 在有等待接收者时会怎么做？" :options='["把值拷进 buf 环形队列", "直接把值交给 recvq 队首的 sudog", "先复制到堆再唤醒接收者", "返回 false 让调用方重试"]' answer="1" explain="chansend 加锁后先查 recvq，非空则直接交接，值不进缓冲区。" />
-<Predict no="97-2" q="一个等待者超过 1ms 仍没拿到 Mutex，会发生什么？" :options='["继续自旋直到成功", "切换为饥饿模式，锁直接交给队首", "直接 panic", "把 GOMAXPROCS 加一"]' answer="1" output="切换为饥饿模式，锁直接交给队首" explain="starvationThresholdNs 为 1ms；超时后置 mutexStarving，所有权由 Unlock 直接移交队首，新来者不再自旋。" />
+<Quiz no="097-1" q="chansend 在有等待接收者时会怎么做？" :options='["把值拷进 buf 环形队列", "直接把值交给 recvq 队首的 sudog", "先复制到堆再唤醒接收者", "返回 false 让调用方重试"]' answer="1" explain="chansend 加锁后先查 recvq，非空则直接交接，值不进缓冲区。" />
+<Predict no="097-2" q="一个等待者超过 1ms 仍没拿到 Mutex，会发生什么？" :options='["继续自旋直到成功", "切换为饥饿模式，锁直接交给队首", "直接 panic", "把 GOMAXPROCS 加一"]' answer="1" output="切换为饥饿模式，锁直接交给队首" explain="starvationThresholdNs 为 1ms；超时后置 mutexStarving，所有权由 Unlock 直接移交队首，新来者不再自旋。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["hchan 用 recvq/sendq 直接配对，buf 只兜底", "selectgo 随机 pollorder 查就绪，lockorder 按地址加锁", "Mutex 超过 1ms 等待切饥饿模式"]' :pitfalls='["临界区里做 I/O：把竞争放大", "单核场景指望自旋：会被直接跳过", "不看 profile 就换无锁结构"]' summary="性能拐点往往不在算法，而在共享状态的配对与排队方式上。" />

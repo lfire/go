@@ -1,11 +1,11 @@
 ---
-title: 第 52 讲 · 单元测试与表驱动测试
+title: 第 052 讲 · 单元测试与表驱动测试
 description: 用 testing 包写出稳定可读的表驱动测试，掌握 t.Run 子测试、t.Helper、断言库取舍与可测试性设计
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="写出稳定、可读、可维护的测试" prereq="第 51 讲 · 代码规范、gofmt、vet 与 golangci-lint" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="写出稳定、可读、可维护的测试" prereq="第 051 讲 · 代码规范、gofmt、vet 与 golangci-lint" />
 
-# 第 52 讲 · 单元测试与表驱动测试
+# 第 052 讲 · 单元测试与表驱动测试
 
 > 写测试最容易掉进两个坑：一是每个分支复制一整段断言，改一处要改十处；二是函数里偷偷读时间、连数据库，测试只能靠碰运气。Go 的标准库 `testing` 很朴素，但配合表驱动和一点设计上的克制，就能得到既快又稳的反馈。这一讲的重点不是记住多少断言函数，而是让代码本身变得可测。
 
@@ -177,7 +177,7 @@ example.com/shop/price/price.go:20:	Discounted	100.0%
 total:					(statements)	87.5%
 ```
 
-逐字段看第一条命令的输出：`ok` 表示通过，紧接着是包路径、耗时、`coverage: 83.3% of statements` 表示被执行到的语句占比；`-race` 会让耗时明显变长，因为它给每次内存访问加了检测。`go tool cover -func` 则按函数展开，每行的四段依次是「文件:行号」「函数名」「该函数语句覆盖率」，最后的 `total` 是整包口径。两个开关各有不可替代的作用：`-count=1` 禁用测试结果缓存，否则只改了被测实现、测试文件没变时，`go test` 可能直接复用上次的 `ok`，让回归悄悄溜过；`-race` 把并发用例里的数据竞争在测试期就报出来，而不是留到线上偶发（呼应第 49 讲）。覆盖率数字只用来找「一行都没跑过的盲区」，不能当成质量分数——原因见下一节的误解。
+逐字段看第一条命令的输出：`ok` 表示通过，紧接着是包路径、耗时、`coverage: 83.3% of statements` 表示被执行到的语句占比；`-race` 会让耗时明显变长，因为它给每次内存访问加了检测。`go tool cover -func` 则按函数展开，每行的四段依次是「文件:行号」「函数名」「该函数语句覆盖率」，最后的 `total` 是整包口径。两个开关各有不可替代的作用：`-count=1` 禁用测试结果缓存，否则只改了被测实现、测试文件没变时，`go test` 可能直接复用上次的 `ok`，让回归悄悄溜过；`-race` 把并发用例里的数据竞争在测试期就报出来，而不是留到线上偶发（呼应第 049 讲）。覆盖率数字只用来找「一行都没跑过的盲区」，不能当成质量分数——原因见下一节的误解。
 
 ## 3. 深入一步
 
@@ -243,9 +243,9 @@ func main() {
 }
 ```
 
-逐字段看：首行 `Code generated ... DO NOT EDIT` 说明它是工具生成的临时源码，不入库、也不该手改；`package main` 证明测试二进制就是一个独立可执行程序；`_test "example.com/tm"` 是被测包的别名导入，同包测试被合并进这个包，外部测试包则是另一个导入项；`var tests` 是核心注册表，`TestAdd` 这个名字与函数值成对存放，`-run` 正是在这张表上过滤；`benchmarks` / `fuzzTargets` / `examples` 是另外三张表，分别对应 `-bench`、`-fuzz` 与 `Example`（呼应第 54 讲）；`testdeps.ImportPath` 让 `testing` 知道当前包路径，用于覆盖率与输出；最后 `testing.MainStart(...)` 把四张表交给 `M`，`os.Exit(m.Run())` 启动调度。整个过程没有解释器、没有反射查找测试函数，全靠编译期生成的静态表——这就是「测试是同包普通 Go 代码」的底层依据。
+逐字段看：首行 `Code generated ... DO NOT EDIT` 说明它是工具生成的临时源码，不入库、也不该手改；`package main` 证明测试二进制就是一个独立可执行程序；`_test "example.com/tm"` 是被测包的别名导入，同包测试被合并进这个包，外部测试包则是另一个导入项；`var tests` 是核心注册表，`TestAdd` 这个名字与函数值成对存放，`-run` 正是在这张表上过滤；`benchmarks` / `fuzzTargets` / `examples` 是另外三张表，分别对应 `-bench`、`-fuzz` 与 `Example`（呼应第 054 讲）；`testdeps.ImportPath` 让 `testing` 知道当前包路径，用于覆盖率与输出；最后 `testing.MainStart(...)` 把四张表交给 `M`，`os.Exit(m.Run())` 启动调度。整个过程没有解释器、没有反射查找测试函数，全靠编译期生成的静态表——这就是「测试是同包普通 Go 代码」的底层依据。
 
-**边界与失效条件**：`_testmain.go` 每次构建的 WORK 路径都不同（`go test -work` 才保留），不能当源码引用；它只登记函数，不登记子测试，所以 `-run 'TestA/子用例'` 的匹配发生在 `t.Run` 运行时；注册表是编译期快照，测试文件里通过 `init` 动态注册的函数不会出现。`go test -c` 产出的 `pkg.test` 不含覆盖率插桩，除非同时给 `-cover`（插桩由 `cmd/cover` 改写源码，见第 54 讲）。机制能证明「测试被正确编译与登记」，证明不了断言是否正确——那是覆盖率与误解一节要澄清的。
+**边界与失效条件**：`_testmain.go` 每次构建的 WORK 路径都不同（`go test -work` 才保留），不能当源码引用；它只登记函数，不登记子测试，所以 `-run 'TestA/子用例'` 的匹配发生在 `t.Run` 运行时；注册表是编译期快照，测试文件里通过 `init` 动态注册的函数不会出现。`go test -c` 产出的 `pkg.test` 不含覆盖率插桩，除非同时给 `-cover`（插桩由 `cmd/cover` 改写源码，见第 054 讲）。机制能证明「测试被正确编译与登记」，证明不了断言是否正确——那是覆盖率与误解一节要澄清的。
 
 **版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测。`testing.MainStart` 的签名随版本演进——`examples` 参数自 Go 1.7 起加入、`fuzzTargets` 自 Go 1.18（fuzz 落地）起加入——所以不同 Go 版本生成的 `_testmain.go` 字段数不同；`go test -work`、`-c`、`-run` 的行为长期稳定。
 
@@ -304,15 +304,15 @@ B  func TestMain(m *testing.M){ os.Exit(0) }        → ok …（无 coverage �
 C  func TestMain(m *testing.M){ m.Run() }           → ok … coverage: 50.0%   cov.out total 50.0%
 ```
 
-逐字段：B 跳过 `m.Run()`，测试一个都没跑，但 `go test` 仍打印 `ok`、退出码 0——**这个 `ok` 是假象**，没有任何用例执行；`-coverprofile` 只剩表头、覆盖率为 0.0%，若 CI 只拿「`go test` 退出码」当门禁，这次空跑会被当成通过。C 证明写盘发生在 `m.Run()` 内部而非 `os.Exit` 之后，所以「不取返回码」不影响覆盖率；A、C 都拿到 50.0%，是 `Add` 那块置位、`Sub` 那块为 0 的正确结果。判断标准因此很具体：覆盖率数据由 `m.Run()` 收尾写出，`TestMain` 只要不调用 `m.Run()`，profile 就是空表；把 CI 门禁写成「检查 `coverage:` 行或 `go tool cover -func` 的 total 是否达标」，比只看退出码更能挡住这类空跑。这也解释了为什么 `go test -c` 编出的 `pkg.test` 不带 `-cover` 时没有计数器（计数器是编译期插桩，见第 54 讲）。
+逐字段：B 跳过 `m.Run()`，测试一个都没跑，但 `go test` 仍打印 `ok`、退出码 0——**这个 `ok` 是假象**，没有任何用例执行；`-coverprofile` 只剩表头、覆盖率为 0.0%，若 CI 只拿「`go test` 退出码」当门禁，这次空跑会被当成通过。C 证明写盘发生在 `m.Run()` 内部而非 `os.Exit` 之后，所以「不取返回码」不影响覆盖率；A、C 都拿到 50.0%，是 `Add` 那块置位、`Sub` 那块为 0 的正确结果。判断标准因此很具体：覆盖率数据由 `m.Run()` 收尾写出，`TestMain` 只要不调用 `m.Run()`，profile 就是空表；把 CI 门禁写成「检查 `coverage:` 行或 `go tool cover -func` 的 total 是否达标」，比只看退出码更能挡住这类空跑。这也解释了为什么 `go test -c` 编出的 `pkg.test` 不带 `-cover` 时没有计数器（计数器是编译期插桩，见第 054 讲）。
 
 **边界与失效条件**：`-parallel` 默认 `GOMAXPROCS`，CI 的 CPU 核数与本地不同会直接改变并行批次与时序，「本地稳定、CI 偶发」有时正是它，而不是代码有竞态；`close(t.barrier)` 是一次性放行，父测试体里若还有依赖子测试结果的逻辑，那部分在 `PAUSE` 之后、子测试 `CONT` 之前执行会读到未完成状态；上面公式假设每个子测试耗时相近且彼此独立，某个用例特别慢或持锁时，`release` 精确唤醒一个等待者会让后续批次被它拖住，实际总时长退化为接近最慢用例之和。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；`testContext` 的 `running / numWaiting / startParallel` 实现、`t.Parallel` 的三段时序（`signal`、`barrier`、`waitParallel`）自 Go 1.7 引入子测试以来结构稳定，`t.Setenv` 的自 Go 1.17 起；`t.Parallel` 在 fuzz 目标里无效（1451 行 `t.parent.barrier == nil` 时直接返回），这是第 54 讲 fuzz 每个 input 单进程独占的同一个原因。第 52 讲前面 `_testmain.go` 讲「测试被编译成什么」，这里补的是「`m.Run()` 拿到注册表之后怎么按信号量调度」。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；`testContext` 的 `running / numWaiting / startParallel` 实现、`t.Parallel` 的三段时序（`signal`、`barrier`、`waitParallel`）自 Go 1.7 引入子测试以来结构稳定，`t.Setenv` 的自 Go 1.17 起；`t.Parallel` 在 fuzz 目标里无效（1451 行 `t.parent.barrier == nil` 时直接返回），这是第 054 讲 fuzz 每个 input 单进程独占的同一个原因。第 052 讲前面 `_testmain.go` 讲「测试被编译成什么」，这里补的是「`m.Run()` 拿到注册表之后怎么按信号量调度」。
 
 ### 三条最常见的误解
 
-**误解一：覆盖率 100% 就等于没有 bug。** 反例：函数 `func Div(a, b int) int { return a / b }` 用一组 `Div(4, 2)` 就能拿到 100% 的行覆盖，但 `b = 0` 会直接 panic；更隐蔽的是断言写成 `if got != want { t.Log(...) }`——忘了 `Fail`，覆盖率照样满分，测试却永远不会红。覆盖率只度量「语句是否被执行过」，不度量输入组合、不度量断言是否正确、也不度量错误路径的返回值有没有被检查。正确用法是把它当盲区探测器：`go tool cover -func` 里哪个函数是 0.0%，就先补那一块，边界值再交给第 54 讲的 fuzz 去穷举。
+**误解一：覆盖率 100% 就等于没有 bug。** 反例：函数 `func Div(a, b int) int { return a / b }` 用一组 `Div(4, 2)` 就能拿到 100% 的行覆盖，但 `b = 0` 会直接 panic；更隐蔽的是断言写成 `if got != want { t.Log(...) }`——忘了 `Fail`，覆盖率照样满分，测试却永远不会红。覆盖率只度量「语句是否被执行过」，不度量输入组合、不度量断言是否正确、也不度量错误路径的返回值有没有被检查。正确用法是把它当盲区探测器：`go tool cover -func` 里哪个函数是 0.0%，就先补那一块，边界值再交给第 054 讲的 fuzz 去穷举。
 
 **误解二：`t.Parallel` 加得越多越快，表驱动里无脑加就行。** 反例：几个子测试共写一个临时文件、改同一个包级变量，或复用同一个 `httptest` server，加了并行之后开始偶发失败，而且因为调度交错每次挂的用例都不同，极难复现；Go 1.21 及更早版本还有循环变量捕获问题，所有子测试可能都跑最后一组数据。正确做法：只有用例之间完全独立才并行；共享状态的用例子测试保持串行，稳定性比省下的几毫秒重要得多。
 
@@ -342,7 +342,7 @@ C  func TestMain(m *testing.M){ m.Run() }           → ok … coverage: 50.0%  
 
 修复分两步：把共享状态收进每个用例自己构造的局部结构体，让替身与计数器随用例生灭；确需复位的包级资源用 `t.Cleanup` 注册清理，而不是靠人记得在用例末尾写。`t.Cleanup` 为什么存在：它把清理动作绑定到该测试（含子测试）的生命周期末尾，即便中途 `t.Fatal` 提前返回也会执行，比散落在各处的 `defer` 更不容易漏，且子测试结束时立即触发，不会拖到整个父测试结束。
 
-替代做法与代价也清楚了：用 `time.Sleep` 等异步结果，把不确定性直接写进测试，CI 越忙越容易挂；连真库跑，反馈慢且要准备外部状态；用全局状态但强制串行，看似稳定，实则把并发 bug 一起藏了起来。参数化时间与依赖（本讲第二块代码）是唯一同时拿到「快、稳、可复现」的做法，也是第 53 讲 mock 能成立的前提。
+替代做法与代价也清楚了：用 `time.Sleep` 等异步结果，把不确定性直接写进测试，CI 越忙越容易挂；连真库跑，反馈慢且要准备外部状态；用全局状态但强制串行，看似稳定，实则把并发 bug 一起藏了起来。参数化时间与依赖（本讲第二块代码）是唯一同时拿到「快、稳、可复现」的做法，也是第 053 讲 mock 能成立的前提。
 
 ### 把测试接进 CI
 
@@ -366,11 +366,11 @@ jobs:
         run: go tool cover -func=cover.out | tail -1
 ```
 
-版本锁定是这里的重点：`go-version-file: go.mod` 让 CI 用 `go.mod` 声明的 Go 版本，而不是浮动的 `latest`。Go 1.22 起循环变量每轮新建，直接影响本讲第三块代码里「表驱动 + t.Parallel」要不要写 `c := c`；本地 1.22、CI 1.21 时，同一份测试会在 CI 上跑出完全不同的结果，且很难联想到是工具链版本。`-count=1` 禁用结果缓存，`cache: true` 只缓存依赖下载而不缓存测试结论，`actions/checkout@v4` 与 `setup-go@v5` 钉住大版本，都是为了避免「今天绿明天红」这类与代码无关的漂移（第 60 讲会展开）。
+版本锁定是这里的重点：`go-version-file: go.mod` 让 CI 用 `go.mod` 声明的 Go 版本，而不是浮动的 `latest`。Go 1.22 起循环变量每轮新建，直接影响本讲第三块代码里「表驱动 + t.Parallel」要不要写 `c := c`；本地 1.22、CI 1.21 时，同一份测试会在 CI 上跑出完全不同的结果，且很难联想到是工具链版本。`-count=1` 禁用结果缓存，`cache: true` 只缓存依赖下载而不缓存测试结论，`actions/checkout@v4` 与 `setup-go@v5` 钉住大版本，都是为了避免「今天绿明天红」这类与代码无关的漂移（第 060 讲会展开）。
 
 ### 与 L10 实战工程结构的呼应
 
-L10 的贯穿线从第一讲就靠这套测试守着：`/projects/kv-1-memory` 为 `Storage` 接口写表驱动用例，`/projects/kv-2-network`、`/projects/kv-3-async` 加网络帧与 WAL 后，用 `-race` 挡住并发回归；`/projects/cli-todo` 的命令解析用一张用例表覆盖参数组合；第 54 讲 fuzz 找到的崩溃输入会回填成表里新的一行，第 53 讲提供的边界替身则让这些用例不必连真库。测试金字塔的底座不是一次性搭完的，而是每加一层能力就补一行用例——这也是为什么第 50 讲的可替换结构值得先花力气做对。
+L10 的贯穿线从第一讲就靠这套测试守着：`/projects/kv-1-memory` 为 `Storage` 接口写表驱动用例，`/projects/kv-2-network`、`/projects/kv-3-async` 加网络帧与 WAL 后，用 `-race` 挡住并发回归；`/projects/cli-todo` 的命令解析用一张用例表覆盖参数组合；第 054 讲 fuzz 找到的崩溃输入会回填成表里新的一行，第 053 讲提供的边界替身则让这些用例不必连真库。测试金字塔的底座不是一次性搭完的，而是每加一层能力就补一行用例——这也是为什么第 050 讲的可替换结构值得先花力气做对。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -384,9 +384,9 @@ L10 的贯穿线从第一讲就靠这套测试守着：`/projects/kv-1-memory` �
 
 ## 随堂检测
 
-<Quiz no="52-1" q="在断言辅助函数里调用 t.Helper() 的主要作用是什么？" :options='["让测试并行执行","让失败信息指向调用辅助函数的那一行","自动重试失败的用例","把用例标记为跳过"]' answer="1" explain="t.Helper 把自身从失败堆栈里隐藏，报告定位到真正出错的调用处，排查成本大幅下降。" />
+<Quiz no="052-1" q="在断言辅助函数里调用 t.Helper() 的主要作用是什么？" :options='["让测试并行执行","让失败信息指向调用辅助函数的那一行","自动重试失败的用例","把用例标记为跳过"]' answer="1" explain="t.Helper 把自身从失败堆栈里隐藏，报告定位到真正出错的调用处，排查成本大幅下降。" />
 
-<Predict no="52-2" q="执行 go test -run TestTotal/会员 -v 时，哪些用例会被执行？" :options='["三个子测试全部执行","只执行 TestTotal/会员九折","只执行普通用户无折扣","一个都不执行，因为 -run 不支持斜杠"]' answer="1" output="=== RUN   TestTotal\n=== RUN   TestTotal/会员九折\n--- PASS: TestTotal (0.00s)\n    --- PASS: TestTotal/会员九折 (0.00s)" explain="-run 的斜杠用来匹配子测试名，父测试仍会运行，但只进入名字匹配的子测试。" />
+<Predict no="052-2" q="执行 go test -run TestTotal/会员 -v 时，哪些用例会被执行？" :options='["三个子测试全部执行","只执行 TestTotal/会员九折","只执行普通用户无折扣","一个都不执行，因为 -run 不支持斜杠"]' answer="1" output="=== RUN   TestTotal\n=== RUN   TestTotal/会员九折\n--- PASS: TestTotal (0.00s)\n    --- PASS: TestTotal/会员九折 (0.00s)" explain="-run 的斜杠用来匹配子测试名，父测试仍会运行，但只进入名字匹配的子测试。" />
 
 ## 一页纸速记
 

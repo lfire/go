@@ -1,9 +1,9 @@
-# 第 44 讲 · select、超时与多路复用
+# 第 044 讲 · select、超时与多路复用
 
 - **阶段**：L4 · 并发编程
 - **目标**：写出不会卡死的并发控制
 - **知识点**：select 随机选择 / default 非阻塞 / time.After 与 timer 泄漏 / done channel / 优先级技巧
-- **教程正文**：[第 44 讲 · select、超时与多路复用](/concurrency/select)
+- **教程正文**：[第 044 讲 · select、超时与多路复用](/concurrency/select)
 - **GitHub 目录**：[l4-concurrency/lesson-044-select](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-044-select)
 
 ## 运行

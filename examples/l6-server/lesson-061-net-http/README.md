@@ -1,9 +1,9 @@
-# 第 61 讲 · net/http 深入：Handler、ServeMux 与中间件链
+# 第 061 讲 · net/http 深入：Handler、ServeMux 与中间件链
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：不依赖框架也能写清楚 HTTP 服务
 - **知识点**：Handler 接口 / ServeMux 路由 / Request/ResponseWriter / 中间件洋葱模型 / 超时与优雅退出
-- **教程正文**：[第 61 讲 · net/http 深入：Handler、ServeMux 与中间件链](/server/net-http)
+- **教程正文**：[第 061 讲 · net/http 深入：Handler、ServeMux 与中间件链](/server/net-http)
 - **GitHub 目录**：[l6-server/lesson-061-net-http](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-061-net-http)
 
 ## 运行

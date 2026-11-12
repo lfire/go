@@ -1,9 +1,9 @@
-# 第 51 讲 · 代码规范、gofmt、vet 与 golangci-lint
+# 第 051 讲 · 代码规范、gofmt、vet 与 golangci-lint
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：让代码风格由工具保证
 - **知识点**：Effective Go 要点 / 命名与注释 / gofmt/goimports / go vet / lint 规则集与 CI 接入
-- **教程正文**：[第 51 讲 · 代码规范、gofmt、vet 与 golangci-lint](/engineering/code-style)
+- **教程正文**：[第 051 讲 · 代码规范、gofmt、vet 与 golangci-lint](/engineering/code-style)
 - **GitHub 目录**：[l5-engineering/lesson-051-code-style](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-051-code-style)
 
 ## 运行

@@ -1,11 +1,11 @@
 ---
-title: 第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
+title: 第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
 description: 讲清 Cache-Aside 模式、穿透击穿雪崩三大问题的成因与对策、TTL 抖动、双写一致与分布式锁初探，把缓存用对而不是用多
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="把缓存用对而不是用多" prereq="第 66 讲 · ORM 与迁移" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="把缓存用对而不是用多" prereq="第 066 讲 · ORM 与迁移" />
 
-# 第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
+# 第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
 
 > 加缓存看起来是稳赚的优化：内存比磁盘快几个数量级。但缓存是**副本**，只要引入副本，就必然引入「副本与主数据不一致」以及「副本失效时流量全部砸回主库」两个新问题。线上很多缓存事故不是没加缓存，而是加错了：给写多读少的接口加、给不能容忍任何不一致的余额加、所有 key 设同一个 TTL 导致整点集体失效。这一讲把三大经典问题和一致性方案逐个拆开，并给出可运行的对策代码。
 
@@ -117,7 +117,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 <LineByLine code="val, err := rdb.Get(ctx, key).Result()\nif err == nil {\nreturn val\n}\nrow := queryDB(id)\nrdb.Set(ctx, key, row, ttl)\nreturn row" :notes='["先查缓存，Get 在键不存在时返回 redis.Nil","err 为 nil 才是真正命中","命中直接返回，不碰数据库","未命中才回源；这一步最慢，应加超时与限流","回填时设置带抖动的 TTL，别用永不过期","把结果返回给调用方，下次同类读即命中"]' title="Cache-Aside 读路径逐行看" />
 
-第二段代码用零依赖的纯 Go 演示**单飞重建**：热点 key 失效瞬间，只放一个请求回源，其余等待后直接读缓存；同时加上 TTL 抖动。生产里应当用第 48 讲介绍的 `singleflight.Group` 按 key 分组，这里用一把互斥锁把原理展示清楚。
+第二段代码用零依赖的纯 Go 演示**单飞重建**：热点 key 失效瞬间，只放一个请求回源，其余等待后直接读缓存；同时加上 TTL 抖动。生产里应当用第 048 讲介绍的 `singleflight.Group` 按 key 分组，这里用一把互斥锁把原理展示清楚。
 
 ```go
 package main
@@ -292,7 +292,7 @@ func main() {
 }
 ```
 
-锁的三要素缺一不可：**唯一 token**（防止 A 的锁被 B 释放）、**TTL 租约**（持有者崩溃也能自动解锁）、**Lua 原子比对删除**。这里只是初探，完整的看门狗续期、Redlock 争议会在第 84 讲展开。
+锁的三要素缺一不可：**唯一 token**（防止 A 的锁被 B 释放）、**TTL 租约**（持有者崩溃也能自动解锁）、**Lua 原子比对删除**。这里只是初探，完整的看门狗续期、Redlock 争议会在第 084 讲展开。
 
 ### 协议与契约：过期、淘汰与一致性的推导
 
@@ -308,7 +308,7 @@ func main() {
 | B 先更库再删缓存 | Cache-Aside 标准写路径 | 短暂不一致，最终一致 | 简单可靠，默认推荐 |
 | C 延迟双删 / CDC | 删、更、延迟再删，或订阅 binlog 异步删 | 更接近最终一致 | 多一次删或一套 CDC 链路 |
 
-**分布式锁的三要素也是推导出来的。** 只有 `SETNX` 不带 token 时：A 拿锁后超时、锁自动过期，B 拿到锁，A 恢复后执行 `DEL` 会把 **B 的锁**删掉。所以必须有唯一 token（删之前比对）、TTL 租约（持有者崩溃也能自动解锁）、以及 Lua 脚本把「比对加删除」做成原子（否则比对与删除之间仍可能被插入）。三者缺一不可，这也是第 84 讲 Redlock 争议的起点。
+**分布式锁的三要素也是推导出来的。** 只有 `SETNX` 不带 token 时：A 拿锁后超时、锁自动过期，B 拿到锁，A 恢复后执行 `DEL` 会把 **B 的锁**删掉。所以必须有唯一 token（删之前比对）、TTL 租约（持有者崩溃也能自动解锁）、以及 Lua 脚本把「比对加删除」做成原子（否则比对与删除之间仍可能被插入）。三者缺一不可，这也是第 084 讲 Redlock 争议的起点。
 
 ### 设计取舍与替代方案
 
@@ -405,7 +405,7 @@ go test -race -run TestDelayedDoubleDeleteWindow -v ./...
 
 <OutputBox title="go test -race 预期输出" output="=== RUN   TestDelayedDoubleDeleteWindow\ndb = new cache = old 一致 = false\n--- PASS: TestDelayedDoubleDeleteWindow (0.00s)\nPASS" note="库已是新值、缓存仍是旧值，且 race 检测无告警" />
 
-逐字段解释：`db = new` 说明写事务确实提交了；`cache = old` 是读线程在「缓存已删、库未更」的窗口里回填的旧值，此后没人再删它，于是缓存长期与库不一致；`一致 = false` 把失败矩阵第一行变成可复现的事实；`-race` 无 `WARNING: DATA RACE`，因为三个 channel 建立了 happens-before，替代了裸共享变量。对照实验：把写线程改成「先 `dbv = "new"` 再 `cachev = ""`」重跑，`一致` 会变成 `true`——两组输出直接解释了 Cache-Aside 为什么选「先更库、再删缓存」。把这段改成 `_test.go` 跑 `go test -race`，也是第 49 讲内存模型的现成练习。
+逐字段解释：`db = new` 说明写事务确实提交了；`cache = old` 是读线程在「缓存已删、库未更」的窗口里回填的旧值，此后没人再删它，于是缓存长期与库不一致；`一致 = false` 把失败矩阵第一行变成可复现的事实；`-race` 无 `WARNING: DATA RACE`，因为三个 channel 建立了 happens-before，替代了裸共享变量。对照实验：把写线程改成「先 `dbv = "new"` 再 `cachev = ""`」重跑，`一致` 会变成 `true`——两组输出直接解释了 Cache-Aside 为什么选「先更库、再删缓存」。把这段改成 `_test.go` 跑 `go test -race`，也是第 049 讲内存模型的现成练习。
 
 <Predict q="redis-cli 对某个 key 执行 TTL 返回 -1，说明什么？" :options='["key 已过期不存在","key 存在但永不过期","还剩 -1 秒过期","命令执行出错"]' answer="1" output="key 存在但没有设置过期时间，TTL 返回 -1；返回 -2 才是 key 不存在" explain="-2 与 -1 只差一个数字，含义却相反：前者是查无此键，后者是长驻键。排查「内存不降」时把 -1 误当成已过期，会完全找错方向。" />
 
@@ -441,9 +441,9 @@ go test -race -run TestDelayedDoubleDeleteWindow -v ./...
 
 ## 随堂检测
 
-<Quiz no="67-1" q="某热点 key 过期瞬间，上千并发请求同时回源查同一条数据，这属于哪个问题？" :options='["缓存穿透","缓存击穿","缓存雪崩","双写不一致"]' answer="1" explain="单个热点 key 失效导致并发回源是击穿；穿透是查不存在的数据，雪崩是一批 key 或整个 Redis 层失效。" />
+<Quiz no="067-1" q="某热点 key 过期瞬间，上千并发请求同时回源查同一条数据，这属于哪个问题？" :options='["缓存穿透","缓存击穿","缓存雪崩","双写不一致"]' answer="1" explain="单个热点 key 失效导致并发回源是击穿；穿透是查不存在的数据，雪崩是一批 key 或整个 Redis 层失效。" />
 
-<Predict no="67-2" q="所有缓存 key 都设置为「创建后 5 分钟过期」，服务在整批预热后运行，最可能发生什么？" :options='["命中率稳定，没有异常","约 5 分钟后大量 key 同时失效，数据库流量骤增","Redis 内存持续增长直至 OOM","部分 key 永不过期"]' answer="1" output="预热后约 5 分钟出现集中的失效尖峰，回源 QPS 瞬间抬升" explain="同一时刻批量写入 + 固定 TTL = 集体过期，这是最典型的雪崩成因；解法是给 TTL 加随机抖动。" />
+<Predict no="067-2" q="所有缓存 key 都设置为「创建后 5 分钟过期」，服务在整批预热后运行，最可能发生什么？" :options='["命中率稳定，没有异常","约 5 分钟后大量 key 同时失效，数据库流量骤增","Redis 内存持续增长直至 OOM","部分 key 永不过期"]' answer="1" output="预热后约 5 分钟出现集中的失效尖峰，回源 QPS 瞬间抬升" explain="同一时刻批量写入 + 固定 TTL = 集体过期，这是最典型的雪崩成因；解法是给 TTL 加随机抖动。" />
 
 ## 一页纸速记
 

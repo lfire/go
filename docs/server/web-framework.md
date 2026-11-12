@@ -1,11 +1,11 @@
 ---
-title: 第 62 讲 · 路由与框架：Gin / Echo / Chi
+title: 第 062 讲 · 路由与框架：Gin / Echo / Chi
 description: 拆解路由树与分组、绑定与校验、中间件生态，对比 Gin / Echo / Chi 的设计取向，学会按场景选框架而不是凭习惯
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="40 分钟" goal="按场景选框架而不是凭习惯" prereq="第 61 讲 · net/http" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="40 分钟" goal="按场景选框架而不是凭习惯" prereq="第 061 讲 · net/http" />
 
-# 第 62 讲 · 路由与框架：Gin / Echo / Chi
+# 第 062 讲 · 路由与框架：Gin / Echo / Chi
 
 > 上一讲我们用标准库写清了 Handler 与中间件。既然如此，为什么还需要框架？因为真实项目里，「把 URL 分到函数」「把 JSON 绑到结构体并校验」「统一记日志和恢复 panic」这些事会重复几百次。框架把这些重复劳动收成三件套：路由树、绑定校验、中间件生态。这一讲我们不止会用 API，还要看穿它替我们做了什么，最后给出可落地的选型依据。
 
@@ -386,7 +386,7 @@ go test -run '^$' -bench . -benchmem ./...
 
 **误解一：框架路由的 benchmark 高，换成它就等价于接口变快。** 错。榜单测的是「纯路由匹配加返回短字符串」，而真实接口耗时由数据库、缓存、序列化主导；上面 benchmark 显示路由开销占比不到千分之一。为一个每秒几十次请求的内部系统挑「最快」框架，却牺牲团队熟悉度与标准库生态，是典型的优化错焦点。正确顺序是先用真实链路压测定位瓶颈，再决定要不要动框架。
 
-**误解二：用了框架就和 `net/http` 生态绝缘，所有中间件都得重写。** 错。这只在 Gin / Echo 这类自有 `Context` 的框架里成立；Chi 的路由器本身实现 `http.Handler`，中间件签名就是标准 `func(http.Handler) http.Handler`，第 61 讲手写的 `logging`、`recoverPanic` 可以原样挂进去，`httptest.NewServer` 也直接可用。误以为「框架等于隔离」，会让人在可以渐进改造的项目里做了一次性重写。
+**误解二：用了框架就和 `net/http` 生态绝缘，所有中间件都得重写。** 错。这只在 Gin / Echo 这类自有 `Context` 的框架里成立；Chi 的路由器本身实现 `http.Handler`，中间件签名就是标准 `func(http.Handler) http.Handler`，第 061 讲手写的 `logging`、`recoverPanic` 可以原样挂进去，`httptest.NewServer` 也直接可用。误以为「框架等于隔离」，会让人在可以渐进改造的项目里做了一次性重写。
 
 ### 与后续阶段的呼应
 
@@ -414,9 +414,9 @@ go test -run '^$' -bench . -benchmem ./...
 
 ## 随堂检测
 
-<Quiz no="62-1" q="关于 Chi 与 Gin 的取舍，下列说法正确的是？" :options='["Gin 的路由器天然兼容所有 net/http 中间件","Chi 的路由器本身实现 http.Handler，可直接复用标准库生态","Echo 完全不支持中间件","三者的绑定校验都必须手写"]' answer="1" explain="Chi 坚持标准库接口，中间件也是 func(Handler) Handler；Gin/Echo 使用自有 Context，需要适配层。" />
+<Quiz no="062-1" q="关于 Chi 与 Gin 的取舍，下列说法正确的是？" :options='["Gin 的路由器天然兼容所有 net/http 中间件","Chi 的路由器本身实现 http.Handler，可直接复用标准库生态","Echo 完全不支持中间件","三者的绑定校验都必须手写"]' answer="1" explain="Chi 坚持标准库接口，中间件也是 func(Handler) Handler；Gin/Echo 使用自有 Context，需要适配层。" />
 
-<Predict no="62-2" q="Gin 中间件里写了 c.Next()，其后的 log.Printf 会在什么时候执行？" :options='["在业务 handler 之前","在业务 handler 返回之后","永远不会执行","在每次请求开始和结束各执行一次"]' answer="1" output="先执行业务 handler 并写出响应，再打印 cost 日志" explain="c.Next() 会先把控制权交给后续中间件与业务 handler，返回后才继续执行本中间件剩余语句，这正是洋葱模型的后置部分。" />
+<Predict no="062-2" q="Gin 中间件里写了 c.Next()，其后的 log.Printf 会在什么时候执行？" :options='["在业务 handler 之前","在业务 handler 返回之后","永远不会执行","在每次请求开始和结束各执行一次"]' answer="1" output="先执行业务 handler 并写出响应，再打印 cost 日志" explain="c.Next() 会先把控制权交给后续中间件与业务 handler，返回后才继续执行本中间件剩余语句，这正是洋葱模型的后置部分。" />
 
 ## 一页纸速记
 

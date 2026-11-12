@@ -1,9 +1,9 @@
-# 第 49 讲 · 数据竞争、内存模型与 race detector
+# 第 049 讲 · 数据竞争、内存模型与 race detector
 
 - **阶段**：L4 · 并发编程
 - **目标**：能发现并修复隐蔽的并发 bug
 - **知识点**：happens-before / 竞态典型样例 / -race 原理与开销 / 误报与漏报 / 修复策略对比
-- **教程正文**：[第 49 讲 · 数据竞争、内存模型与 race detector](/concurrency/race)
+- **教程正文**：[第 049 讲 · 数据竞争、内存模型与 race detector](/concurrency/race)
 - **GitHub 目录**：[l4-concurrency/lesson-049-race](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-049-race)
 
 ## 运行

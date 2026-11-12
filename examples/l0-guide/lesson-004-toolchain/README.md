@@ -1,9 +1,9 @@
-# 第 04 讲 · 工具链全景：build / test / fmt / vet / mod
+# 第 004 讲 · 工具链全景：build / test / fmt / vet / mod
 
 - **阶段**：L0 · 导学与学习路线
 - **目标**：掌握日常开发最常用的命令与排查手段
 - **知识点**：常用命令地图 / gofmt 与 goimports / go vet 与静态检查 / go mod tidy / go generate 与交叉编译
-- **教程正文**：[第 04 讲 · 工具链全景：build / test / fmt / vet / mod](/guide/toolchain)
+- **教程正文**：[第 004 讲 · 工具链全景：build / test / fmt / vet / mod](/guide/toolchain)
 - **GitHub 目录**：[l0-guide/lesson-004-toolchain](https://github.com/lfire/go/tree/main/examples/l0-guide/lesson-004-toolchain)
 
 ## 运行

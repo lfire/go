@@ -1,9 +1,9 @@
-# 第 09 讲 · 栈、堆、值语义与指针
+# 第 009 讲 · 栈、堆、值语义与指针
 
 - **阶段**：L1 · 编程地基
 - **目标**：建立内存模型直觉，知道变量住在哪里
 - **知识点**：栈帧与堆 / 值传递 / 指针与取址 / nil / 什么时候该用指针
-- **教程正文**：[第 09 讲 · 栈、堆、值语义与指针](/foundation/memory)
+- **教程正文**：[第 009 讲 · 栈、堆、值语义与指针](/foundation/memory)
 - **GitHub 目录**：[l1-foundation/lesson-009-memory](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-009-memory)
 
 ## 运行

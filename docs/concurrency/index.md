@@ -17,22 +17,22 @@ description: 掌握 CSP 与 GMP，能写出正确、可诊断的并发程序
 
 ## 讲次安排
 
-本阶段共 **12 讲**（第 38–49 讲），合计约 510 分钟，难度 2–5 级。
+本阶段共 **12 讲**（第 038–049 讲），合计约 510 分钟，难度 2–5 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 38 | [并发与并行：CSP 思想](/concurrency/concurrency-intro) | ★★☆☆☆ | 30 分钟 | 并发≠并行 · CSP 与共享内存 · Go 的取舍 |
-| 39 | [goroutine：创建、栈与生命周期](/concurrency/goroutine) | ★★☆☆☆ | 35 分钟 | go 关键字 · 初始栈与增长 · 调度单位 |
-| 40 | [GMP 调度模型全景](/concurrency/gmp) | ★★★★☆ | 50 分钟 | G/M/P 各自职责 · 全局与本地队列 · P 的数量 |
-| 41 | [调度循环：抢占、窃取与 handoff](/concurrency/scheduler) | ★★★★★ | 50 分钟 | schedule 循环 · work stealing · 系统调用与 handoff |
-| 42 | [channel：语义、缓冲与关闭](/concurrency/channel) | ★★★☆☆ | 40 分钟 | 无缓冲/缓冲 · 发送接收阻塞规则 · 关闭与遍历 |
-| 43 | [channel 底层 hchan 与收发队列](/concurrency/hchan) | ★★★★★ | 45 分钟 | hchan 结构 · sendq/recvq · 缓冲区环形队列 |
-| 44 | [select、超时与多路复用](/concurrency/select) | ★★★☆☆ | 40 分钟 | select 随机选择 · default 非阻塞 · time.After 与 timer 泄漏 |
-| 45 | [sync：Mutex / RWMutex / WaitGroup / Once / Cond](/concurrency/sync-primitives) | ★★★☆☆ | 45 分钟 | 互斥锁与互斥粒度 · 读写锁 · WaitGroup |
-| 46 | [atomic 与 sync.Pool](/concurrency/atomic-pool) | ★★★★☆ | 40 分钟 | 原子操作与 CAS · atomic.Value · sync.Pool 生命周期 |
-| 47 | [context：取消、超时、值传递](/concurrency/context) | ★★★☆☆ | 40 分钟 | Context 接口 · WithCancel/Timeout/Deadline · 取消传播 |
-| 48 | [并发模式：pipeline / fan-out / worker pool](/concurrency/patterns) | ★★★★☆ | 50 分钟 | 管道与阶段 · 扇出扇入 · worker pool |
-| 49 | [数据竞争、内存模型与 race detector](/concurrency/race) | ★★★★☆ | 45 分钟 | happens-before · 竞态典型样例 · -race 原理与开销 |
+| 038 | [并发与并行：CSP 思想](/concurrency/concurrency-intro) | ★★☆☆☆ | 30 分钟 | 并发≠并行 · CSP 与共享内存 · Go 的取舍 |
+| 039 | [goroutine：创建、栈与生命周期](/concurrency/goroutine) | ★★☆☆☆ | 35 分钟 | go 关键字 · 初始栈与增长 · 调度单位 |
+| 040 | [GMP 调度模型全景](/concurrency/gmp) | ★★★★☆ | 50 分钟 | G/M/P 各自职责 · 全局与本地队列 · P 的数量 |
+| 041 | [调度循环：抢占、窃取与 handoff](/concurrency/scheduler) | ★★★★★ | 50 分钟 | schedule 循环 · work stealing · 系统调用与 handoff |
+| 042 | [channel：语义、缓冲与关闭](/concurrency/channel) | ★★★☆☆ | 40 分钟 | 无缓冲/缓冲 · 发送接收阻塞规则 · 关闭与遍历 |
+| 043 | [channel 底层 hchan 与收发队列](/concurrency/hchan) | ★★★★★ | 45 分钟 | hchan 结构 · sendq/recvq · 缓冲区环形队列 |
+| 044 | [select、超时与多路复用](/concurrency/select) | ★★★☆☆ | 40 分钟 | select 随机选择 · default 非阻塞 · time.After 与 timer 泄漏 |
+| 045 | [sync：Mutex / RWMutex / WaitGroup / Once / Cond](/concurrency/sync-primitives) | ★★★☆☆ | 45 分钟 | 互斥锁与互斥粒度 · 读写锁 · WaitGroup |
+| 046 | [atomic 与 sync.Pool](/concurrency/atomic-pool) | ★★★★☆ | 40 分钟 | 原子操作与 CAS · atomic.Value · sync.Pool 生命周期 |
+| 047 | [context：取消、超时、值传递](/concurrency/context) | ★★★☆☆ | 40 分钟 | Context 接口 · WithCancel/Timeout/Deadline · 取消传播 |
+| 048 | [并发模式：pipeline / fan-out / worker pool](/concurrency/patterns) | ★★★★☆ | 50 分钟 | 管道与阶段 · 扇出扇入 · worker pool |
+| 049 | [数据竞争、内存模型与 race detector](/concurrency/race) | ★★★★☆ | 45 分钟 | happens-before · 竞态典型样例 · -race 原理与开销 |
 
 ## 怎么学这一阶段
 
@@ -48,4 +48,4 @@ description: 掌握 CSP 与 GMP，能写出正确、可诊断的并发程序
 
 <ProgressTracker />
 
-[← 上一阶段：阶段三 · 核心机制](/core/) · [第 38 讲开始 →](/concurrency/concurrency-intro) · [下一阶段：阶段五 · 工程化与质量](/engineering/)
+[← 上一阶段：阶段三 · 核心机制](/core/) · [第 038 讲开始 →](/concurrency/concurrency-intro) · [下一阶段：阶段五 · 工程化与质量](/engineering/)

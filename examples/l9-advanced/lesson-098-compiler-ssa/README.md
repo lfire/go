@@ -1,9 +1,9 @@
-# 第 98 讲 · 编译器源码：SSA、逃逸与内联
+# 第 098 讲 · 编译器源码：SSA、逃逸与内联
 
 - **阶段**：L9 · 资深进阶与源码
 - **目标**：理解优化器替你做了什么
 - **知识点**：编译前端与 IR / SSA 构造与优化 pass / 内联预算 / 逃逸分析实现 / 查看与验证
-- **教程正文**：[第 98 讲 · 编译器源码：SSA、逃逸与内联](/advanced/compiler-ssa)
+- **教程正文**：[第 098 讲 · 编译器源码：SSA、逃逸与内联](/advanced/compiler-ssa)
 - **GitHub 目录**：[l9-advanced/lesson-098-compiler-ssa](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-098-compiler-ssa)
 
 ## 运行

@@ -1,11 +1,11 @@
 ---
-title: 第 41 讲 · 调度循环：抢占、窃取与 handoff
-description: 第 41 讲 · 调度循环：抢占、窃取与 handoff —— schedule 循环、work stealing、系统调用与 handoff、异步抢占、sysmon 职责
+title: 第 041 讲 · 调度循环：抢占、窃取与 handoff
+description: 第 041 讲 · 调度循环：抢占、窃取与 handoff —— schedule 循环、work stealing、系统调用与 handoff、异步抢占、sysmon 职责
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★★" time="50 分钟" goal="理解调度器如何保持 CPU 忙碌" prereq="第 40 讲 · GMP 调度模型全景" />
+<StageHeader stage="L4 · 并发编程" level="★★★★★" time="50 分钟" goal="理解调度器如何保持 CPU 忙碌" prereq="第 040 讲 · GMP 调度模型全景" />
 
-# 第 41 讲 · 调度循环：抢占、窃取与 handoff
+# 第 041 讲 · 调度循环：抢占、窃取与 handoff
 
 > 上一讲把 GMP 画成了一张静态结构图：G 排队、P 发牌、M 干活。这一讲让这张图动起来。调度器每一轮只有一个朴素目标——**别让任何 P 闲着**。为了做到这点，它要在多条队列之间按固定顺序找活、在 P 之间搬活、把陷入系统调用的 P 及时抢回来，还要能打断一个霸占 CPU 不放的死循环。理解这些动作，你才能解释「为什么 Go 能用少量线程扛住大量并发 I/O」，以及「为什么某段死循环会把 GC 拖住」。
 
@@ -192,7 +192,7 @@ func main() {
 
 <SequenceDiagram title="阻塞系统调用的 handoff 时序" caption="sysmon 把 P 夺回并转交给新 M，队列里的 G 继续跑，原 G 返回后重新入队" :actors='["G1","M1","P","sysmon","M2","G2"]' :steps='[{"from":"G1","to":"M1","label":"发起 wait4","note":"进入 _Gsyscall","kind":"call"},{"from":"M1","to":"M1","label":"陷入内核","note":"M 与 G 一起卡住","kind":"self"},{"from":"sysmon","to":"P","label":"检测 Psyscall","note":"超过阈值","kind":"call"},{"from":"P","to":"M2","label":"handoff 转交","note":"P 交给新 M","kind":"call"},{"from":"M2","to":"G2","label":"执行计算","note":"本地队列不卡死","kind":"call"},{"from":"G2","to":"M2","label":"计算完成","note":"让出 P","kind":"return"},{"from":"G1","to":"M1","label":"系统调用返回","note":"M1 被唤醒","kind":"return"},{"from":"M1","to":"P","label":"尝试取回","note":"原 P 已被占用","kind":"call"},{"from":"G1","to":"M1","label":"入全局队列","note":"拿不到原 P","kind":"call"},{"from":"P","to":"G1","label":"重新调度","note":"最终被某个 P 执行","kind":"return"}]' />
 
-`-race` 在这里的能抓与不能抓要分清：它能抓「紧密循环与另一个 G 共享变量且无同步」的 `WARNING: DATA RACE`；但**抓不到抢占本身**（那是运行时行为，不是一次内存访问）、**抓不到线程数上涨**（性能退化，不是冲突读写）、**抓不到 handoff 的时序对错**（逻辑竞态）。把下面的命令跑一遍就会看到：`go test -race` 对抢占与 handoff 的示例代码全程全绿，而 `GODEBUG=schedtrace` 才暴露 `threads` 的膨胀。这正是「-race 全绿不等于系统没有并发问题」的又一类证据。所谓「误报」多半是「这次恰好跑对但代码仍含竞争」，真正的漏报来自未执行到的分支、cgo 与汇编访问——这两点在讲第 49 讲会展开。
+`-race` 在这里的能抓与不能抓要分清：它能抓「紧密循环与另一个 G 共享变量且无同步」的 `WARNING: DATA RACE`；但**抓不到抢占本身**（那是运行时行为，不是一次内存访问）、**抓不到线程数上涨**（性能退化，不是冲突读写）、**抓不到 handoff 的时序对错**（逻辑竞态）。把下面的命令跑一遍就会看到：`go test -race` 对抢占与 handoff 的示例代码全程全绿，而 `GODEBUG=schedtrace` 才暴露 `threads` 的膨胀。这正是「-race 全绿不等于系统没有并发问题」的又一类证据。所谓「误报」多半是「这次恰好跑对但代码仍含竞争」，真正的漏报来自未执行到的分支、cgo 与汇编访问——这两点在讲第 049 讲会展开。
 
 ```go
 package main
@@ -356,9 +356,9 @@ SCHED 1000ms: gomaxprocs=8 idleprocs=2 threads=14 spinningthreads=1 idlethreads=
 
 ## 随堂检测
 
-<Quiz no="41-1" q="Go 1.14 引入异步抢占，主要是为了解决什么问题？" :options='["让 channel 的发送变得更快","没有函数调用的紧密循环缺少安全点，会霸占 P 并拖住调度与 GC","减少 goroutine 的初始栈大小","让 GOMAXPROCS 可以超过 CPU 核数"]' answer="1" explain="协作式抢占依赖函数调用处的栈检查，紧密循环里没有安全点。1.14 起由 sysmon 在超过约 10ms 后发信号强制打断，使调度与 GC 不再被单个 G 卡住。" />
+<Quiz no="041-1" q="Go 1.14 引入异步抢占，主要是为了解决什么问题？" :options='["让 channel 的发送变得更快","没有函数调用的紧密循环缺少安全点，会霸占 P 并拖住调度与 GC","减少 goroutine 的初始栈大小","让 GOMAXPROCS 可以超过 CPU 核数"]' answer="1" explain="协作式抢占依赖函数调用处的栈检查，紧密循环里没有安全点。1.14 起由 sysmon 在超过约 10ms 后发信号强制打断，使调度与 GC 不再被单个 G 卡住。" />
 
-<Predict no="41-2" q="GOMAXPROCS=1，一个 G 阻塞在等待子进程（约 300ms 的 wait4），另一个纯计算 G 大约何时完成？" :options='["约 300ms，必须等系统调用返回","远早于 300ms，几十毫秒内就完成","永远不会完成，会死锁","立刻完成，因为 P 有两个"]' answer="1" output="G2 在 58ms 处完成\n全部结束，共 304ms" explain="先确认 G1 已经卡在 wait4，再启动纯计算的 G2：sysmon 会把 P 夺回并 handoff 给新的 M，G2 因此照常运行。阻塞的是 M，不是 P——这正是 GMP 能用少量线程扛住大量阻塞 I/O 的原因。" />
+<Predict no="041-2" q="GOMAXPROCS=1，一个 G 阻塞在等待子进程（约 300ms 的 wait4），另一个纯计算 G 大约何时完成？" :options='["约 300ms，必须等系统调用返回","远早于 300ms，几十毫秒内就完成","永远不会完成，会死锁","立刻完成，因为 P 有两个"]' answer="1" output="G2 在 58ms 处完成\n全部结束，共 304ms" explain="先确认 G1 已经卡在 wait4，再启动纯计算的 G2：sysmon 会把 P 夺回并 handoff 给新的 M，G2 因此照常运行。阻塞的是 M，不是 P——这正是 GMP 能用少量线程扛住大量阻塞 I/O 的原因。" />
 
 ## 一页纸速记
 

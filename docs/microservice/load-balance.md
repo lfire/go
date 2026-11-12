@@ -1,11 +1,11 @@
 ---
-title: 第 76 讲 · 负载均衡与 resolver 源码
+title: 第 076 讲 · 负载均衡与 resolver 源码
 description: 拆开 gRPC 的 resolver 与 balancer 两个扩展点，自建轮询、加权与一致性哈希
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="理解并定制 gRPC 的负载均衡" prereq="第 75 讲 服务注册发现与健康检查" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="理解并定制 gRPC 的负载均衡" prereq="第 075 讲 服务注册发现与健康检查" />
 
-# 第 76 讲 · 负载均衡与 resolver 源码
+# 第 076 讲 · 负载均衡与 resolver 源码
 
 > 上一讲解决了「有哪些实例」，这一讲解决「这次请求打给哪一个」。在 gRPC 里这件事被干净地拆成两个可扩展的螺丝口：**resolver** 负责把一个目标名字解析成地址列表并推送变更，**balancer** 负责从这份列表里为每次 RPC 挑一个连接。默认策略 `pick_first` 只认第一个地址，生产里往往要换成 `round_robin` 甚至一致性哈希。本讲用标准库把这两个接口和几种策略各实现一遍，再对照 gRPC 源码里的 Builder、Resolver、Picker、SubConn 分层，目标是你能自己写插件，而不是只会抄一段 service config。
 
@@ -369,9 +369,9 @@ hit 10.0.0.3:9003
 <Exercise title="给 roundRobin 加上排除不健康节点的能力" task="扩展 2.1 的 Balancer，让 Pick 只从健康地址里选；用一张 map 记录不可用地址，模拟一个节点被标记后，观察连续 6 次选择如何绕开它。" :hints='["Balancer 接口不变，给 roundRobin 增加一个 unhealthy 集合","Pick 前先过滤出可用子集，再对子集取模","可用子集为空时要有兜底，例如返回空串让上层报错"]' solution="要点一：roundRobin 增加 unhealthy map[string]bool 与 MarkDown 方法。\n要点二：Pick 先遍历 addrs 过滤掉被标记的地址，得到 candidates，再对 candidates 取模。\n要点三：candidates 为空时返回空串或明确错误，上层据此触发服务不可用，而不是悄悄打到故障节点。" explain="把健康状态接进 Picker，负载均衡才不会把请求持续送到已故障的实例；这也是 gRPC SubConn 状态机驱动的思路。" />
 
 ## 随堂检测
-<Quiz no="76-1" q="在 gRPC 的分层里，resolver 与 balancer 的职责分别是什么？" :options='["resolver 选连接，balancer 解析地址","resolver 把目标名解析成地址列表，balancer 从列表里为每次 RPC 选一条连接","两者都负责消息序列化","balancer 负责心跳续约，resolver 负责重试"]' answer="1" explain="resolver 对接注册中心、产出并更新地址集合；balancer 消费这份集合，用 Picker 为每次调用挑 SubConn。地址从哪来与这一单给谁，是两个正交问题。" />
+<Quiz no="076-1" q="在 gRPC 的分层里，resolver 与 balancer 的职责分别是什么？" :options='["resolver 选连接，balancer 解析地址","resolver 把目标名解析成地址列表，balancer 从列表里为每次 RPC 选一条连接","两者都负责消息序列化","balancer 负责心跳续约，resolver 负责重试"]' answer="1" explain="resolver 对接注册中心、产出并更新地址集合；balancer 消费这份集合，用 Picker 为每次调用挑 SubConn。地址从哪来与这一单给谁，是两个正交问题。" />
 
-<Predict no="76-2" q="代码 2.1 里 addrs 有三个地址，循环调用 6 次 roundRobin.Pick，选中的序列是？" :options='["始终是第一个地址","按 1、2、3、1、2、3 循环","完全随机不可预测","按 3、2、1、3、2、1 循环"]' answer="1" output="10.0.0.1:9000, 10.0.0.2:9000, 10.0.0.3:9000, 10.0.0.1:9000, 10.0.0.2:9000, 10.0.0.3:9000" explain="原子计数每次加一后对地址数取模，Add(1)-1 让首次落在下标 0，6 次调用正好把三个地址各命中两轮。" />
+<Predict no="076-2" q="代码 2.1 里 addrs 有三个地址，循环调用 6 次 roundRobin.Pick，选中的序列是？" :options='["始终是第一个地址","按 1、2、3、1、2、3 循环","完全随机不可预测","按 3、2、1、3、2、1 循环"]' answer="1" output="10.0.0.1:9000, 10.0.0.2:9000, 10.0.0.3:9000, 10.0.0.1:9000, 10.0.0.2:9000, 10.0.0.3:9000" explain="原子计数每次加一后对地址数取模，Add(1)-1 让首次落在下标 0，6 次调用正好把三个地址各命中两轮。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["resolver 产出并更新地址列表，balancer 的 Picker 为每次 RPC 挑一条 SubConn，两层正交可扩展","pick_first 只认首地址，round_robin 用原子计数取模，平滑加权轮询按当前权重选最大者","一致性哈希把节点与 key 映射到同一环上，虚拟节点打散分布，扩容只迁移相邻一小段","自定义扩展点靠 Register 按 scheme 或策略名注册，UpdateState 推地址、Pick 选连接"]' :pitfalls='["只在建连时选一次节点，让 round_robin 退化成 pick_first","一致性哈希虚拟节点太少导致倾斜，或热点 key 打爆单个实例","Picker 不接收健康状态，轮询持续把流量送到已 503 的节点"]' summary="一句话记住：resolver 决定有哪些候选，balancer 决定这一单给谁，选错层就换不掉策略。" />

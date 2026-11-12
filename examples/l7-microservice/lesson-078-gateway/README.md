@@ -1,9 +1,9 @@
-# 第 78 讲 · API 网关、鉴权与限流
+# 第 078 讲 · API 网关、鉴权与限流
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：设计统一入口并守住边界
 - **知识点**：网关职责 / 路由与协议转换 / 统一鉴权 / 限流算法 / Kong/APISIX 对比 / 自研轻量网关
-- **教程正文**：[第 78 讲 · API 网关、鉴权与限流](/microservice/gateway)
+- **教程正文**：[第 078 讲 · API 网关、鉴权与限流](/microservice/gateway)
 - **GitHub 目录**：[l7-microservice/lesson-078-gateway](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-078-gateway)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 63 讲 · REST API 设计、校验与 OpenAPI
+# 第 063 讲 · REST API 设计、校验与 OpenAPI
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：设计出稳定、可演进的接口
 - **知识点**：资源与状态码 / 幂等性 / 分页与过滤 / 参数校验 / OpenAPI 与文档生成 / 版本策略
-- **教程正文**：[第 63 讲 · REST API 设计、校验与 OpenAPI](/server/rest-api)
+- **教程正文**：[第 063 讲 · REST API 设计、校验与 OpenAPI](/server/rest-api)
 - **GitHub 目录**：[l6-server/lesson-063-rest-api](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-063-rest-api)
 
 ## 运行

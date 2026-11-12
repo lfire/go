@@ -1,9 +1,9 @@
-# 第 66 讲 · GORM / sqlx / sqlc 与迁移
+# 第 066 讲 · GORM / sqlx / sqlc 与迁移
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：在 ORM 与原生 SQL 之间做理性选择
 - **知识点**：三者对比 / 模型与关联 / 预加载与 N+1 / 迁移工具 / SQL 可观测性
-- **教程正文**：[第 66 讲 · GORM / sqlx / sqlc 与迁移](/server/orm)
+- **教程正文**：[第 066 讲 · GORM / sqlx / sqlc 与迁移](/server/orm)
 - **GitHub 目录**：[l6-server/lesson-066-orm](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-066-orm)
 
 ## 运行

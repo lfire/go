@@ -1,11 +1,11 @@
 ---
-title: 第 73 讲 · Protobuf 与 gRPC 四种流
+title: 第 073 讲 · Protobuf 与 gRPC 四种流
 description: 用 proto 定义契约，理解字段号与默认值，掌握一元与三种流，写出可演进的服务接口
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="写出契约优先的服务接口" prereq="第 72 讲 RPC 原理与自研最小 RPC" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="写出契约优先的服务接口" prereq="第 072 讲 RPC 原理与自研最小 RPC" />
 
-# 第 73 讲 · Protobuf 与 gRPC 四种流
+# 第 073 讲 · Protobuf 与 gRPC 四种流
 
 > 上一讲我们自己造了一份协议：Method 字段、ID 字段、JSON 报文，都能跑，但全靠口头约定。只要客户端和服务端不是同一天发布，字段含义、类型、增删就会立刻失控。工业界的解法是「契约优先」：把消息长什么样、服务有哪些方法，先写进一份中立的接口描述语言（IDL），再由工具生成各语言代码。Protobuf 就是这份 IDL 加它的二进制编码，gRPC 则是跑在这份契约上的 RPC 通道。本讲把契约、字段号、默认值、代码生成和四种调用流一次讲透，并说明为什么「字段号」是整条兼容性设计里最不能动的一根钉子。
 
@@ -421,9 +421,9 @@ grpcurl -plaintext -d '{"name":"go","age":150}' localhost:50051 demo.v1.Greeter/
 <Exercise title="给 Greeter 增加一个服务端流方法并保持兼容" task="在 proto 里新增 rpc StreamHello(HelloRequest) returns (stream HelloReply)，说明要改哪几处；再用本讲 channel 版 serverStream 的思路，写出它对客户端 range 的结束语义。" :hints='["新增 rpc 不改变任何已有字段号与已有方法签名","生成的接口会多一个以 Server 结尾的流式入参，业务嵌入 Unimplemented 即可兼容","服务端用 Send 连续写，写完由框架关闭流，客户端 range 或 Recv 读直到 io.EOF"]' solution="要点一：只在 service 里追加一行 rpc，HelloRequest 与 HelloReply 的字段号保持原样。\n要点二：重新 protoc 生成，客户端得到返回 stream 的方法，服务端接口多一个 StreamHello(req, stream) 方法；业务实现嵌入 UnimplementedGreeterServer 就不会被新增方法打断。\n要点三：服务端循环中多次 Send，返回 nil 后框架关流；客户端 for 循环 Recv 直到 io.EOF 结束，等价于 channel 被 close。" explain="新增方法与新增字段是 proto 里最安全的两类变更，前提是绝不碰已有字段号，并用 Unimplemented 兜住生成接口的演进。" />
 
 ## 随堂检测
-<Quiz no="73-1" q="proto3 中把某字段的字段号从 2 改成 3，但保持字段名不变，会发生什么？" :options='["完全兼容，字段名没变就行","线上只认字段号，老数据里的该字段会被当成未知字段丢弃","protoc 会自动做数据迁移","只影响 gRPC，不影响 protobuf 编码"]' answer="1" explain="wire 上定位字段靠号码不靠名字。改号等于把老字段判了死刑：老报文里号码 2 的数据新程序不认识，号码 3 又读不到值，于是静默丢失。" />
+<Quiz no="073-1" q="proto3 中把某字段的字段号从 2 改成 3，但保持字段名不变，会发生什么？" :options='["完全兼容，字段名没变就行","线上只认字段号，老数据里的该字段会被当成未知字段丢弃","protoc 会自动做数据迁移","只影响 gRPC，不影响 protobuf 编码"]' answer="1" explain="wire 上定位字段靠号码不靠名字。改号等于把老字段判了死刑：老报文里号码 2 的数据新程序不认识，号码 3 又读不到值，于是静默丢失。" />
 
-<Predict no="73-2" q="代码 2.3 里 serverStream 推了 go-hello 与 go-world 两条消息后 defer close(ch)。客户端用 for range 读这个 channel，会打印几条？" :options='["只打印第 1 条，range 遇到 close 立即退出","打印 2 条后随 channel 关闭自然结束","一直阻塞，因为没人关闭 channel","打印 3 条，多出一条零值"]' answer="1" output="server-stream: go-hello go-world " explain="服务端推完 defer close 关流，range 会把在途消息全部读完，再随 channel 关闭自然退出；这正是服务端流「一个请求、一串响应、服务端关流」的结束语义。" />
+<Predict no="073-2" q="代码 2.3 里 serverStream 推了 go-hello 与 go-world 两条消息后 defer close(ch)。客户端用 for range 读这个 channel，会打印几条？" :options='["只打印第 1 条，range 遇到 close 立即退出","打印 2 条后随 channel 关闭自然结束","一直阻塞，因为没人关闭 channel","打印 3 条，多出一条零值"]' answer="1" output="server-stream: go-hello go-world " explain="服务端推完 defer close 关流，range 会把在途消息全部读完，再随 channel 关闭自然退出；这正是服务端流「一个请求、一串响应、服务端关流」的结束语义。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["契约优先：一份 proto 是唯一事实来源，protoc 生成消息、客户端桩与服务端接口","字段号终身不变，线上只认号码；proto3 标量缺省取零值且无法区分未传与零值","四种流按请求数、响应数、谁先关流区分：Unary 一对一，服务端流一对多，客户端流多对一，双向流多对多","业务实现嵌入 UnimplementedXxxServer，proto 新增方法时不被编译打断"]' :pitfalls='["复用或改动已用过的字段号，导致老数据静默错乱","删除字段不写 reserved，日后被误复用","为了炫技滥用双向流，让超时、重试与错误处理复杂度翻倍"]' summary="一句话记住：proto 是契约，字段号是钉子，四种流只是同一通道上不同的收发节奏。" />

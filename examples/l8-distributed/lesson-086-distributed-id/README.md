@@ -1,9 +1,9 @@
-# 第 86 讲 · 分布式 ID、时钟与雪花算法
+# 第 086 讲 · 分布式 ID、时钟与雪花算法
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：生成全局唯一且有序的 ID
 - **知识点**：UUID 与自增局限 / Snowflake 结构 / 时钟回拨 / 号段与 Leaf / 趋势递增与索引
-- **教程正文**：[第 86 讲 · 分布式 ID、时钟与雪花算法](/distributed/distributed-id)
+- **教程正文**：[第 086 讲 · 分布式 ID、时钟与雪花算法](/distributed/distributed-id)
 - **GitHub 目录**：[l8-distributed/lesson-086-distributed-id](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-086-distributed-id)
 
 ## 运行

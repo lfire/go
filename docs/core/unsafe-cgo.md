@@ -1,11 +1,11 @@
 ---
-title: 第 37 讲 · unsafe、cgo 与跨边界成本
+title: 第 037 讲 · unsafe、cgo 与跨边界成本
 description: 在必要时安全使用底层能力：unsafe.Pointer 规则、uintptr 陷阱、cgo 开销与内存所有权
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★★" time="45 分钟" goal="在必要时安全地使用底层能力" prereq="第 36 讲 · 编译、链接、SSA 与内联" />
+<StageHeader stage="L3 · 核心机制" level="★★★★★" time="45 分钟" goal="在必要时安全地使用底层能力" prereq="第 036 讲 · 编译、链接、SSA 与内联" />
 
-# 第 37 讲 · unsafe、cgo 与跨边界成本
+# 第 037 讲 · unsafe、cgo 与跨边界成本
 
 > 到这里我们已经能看懂编译器和运行时替我们做了什么。但总有些场景要越过类型系统：与操作系统或硬件交互、复用 C 生态、榨干一次零拷贝。`unsafe` 与 cgo 就是那两道门。这一讲把门的规则、最典型的 `uintptr` 事故、以及跨语言的调用成本讲清楚，并反复强调：能力越大，责任边界越要明确。
 
@@ -324,7 +324,7 @@ sed -n '40,80p' "$(go env GOROOT)/src/runtime/cgocall.go"
 
 <OutputBox title="C→Go 反向边界的栈与符号（Go 1.23.8 / darwin arm64 / CGO_ENABLED=1）" output="--- GOTRACEBACK=system 栈节选 ---\nmain.GoPanic(...)\n_cgoexp_efded9cec1da_GoPanic(...)   _cgo_gotypes.go:53\nruntime.cgocallbackg1(...)          cgocall.go:439\nruntime.cgocallbackg(...)           cgocall.go:350\nruntime.cgocallback(...)\nruntime.cgocall(...)                cgocall.go:185\n--- go tool nm ---\n100076100 T _crosscall2\n10006d9b0 T runtime.cgocallback.abi0\n100004ba0 T runtime.cgocallbackg\n100004d80 T runtime.cgocallbackg1\n--- objdump cgocallbackg ---\nCALL runtime.exitsyscall(SB)\nCALL runtime.cgocallbackg1(SB)\nCALL runtime.unlockOSThread(SB)\nCALL runtime.reentersyscall(SB)" note="一份栈里同时出现 cgocall（Go→C）与 cgocallback（C→Go）两组帧，正好镜像。" />
 
-逐字段解释：栈从 `main.GoPanic` 往上依次是 `_cgoexp_..._GoPanic`（cgo 生成的解包包装）、`runtime.cgocallbackg1`（`cgocall.go:439`，调回调本体）、`runtime.cgocallbackg`（`cgocall.go:350`）、`runtime.cgocallback`（汇编切栈），再往下才是 `runtime.cgocall`（`cgocall.go:185`，最初 Go 调 C 的那一层）——**一次嵌套调用把两个方向串在同一条栈上**，这是「反向边界」最直观的证据。`go tool nm` 里 `runtime.cgocallback.abi0` 带 `.abi0` 后缀，说明汇编写成的入口走栈式 ABI（回看第 26 讲），`_crosscall2` 是 gcc ABI 适配层，`cgocallbackg`/`cgocallbackg1` 是纯 Go 的两个阶段。反汇编里四条 `CALL` 按 `exitsyscall → cgocallbackg1 → unlockOSThread → reentersyscall` 排开，与上面状态迁移链逐条对应；`sed -n '40,80p'` 给出的正是这段流程的源码注释原文。
+逐字段解释：栈从 `main.GoPanic` 往上依次是 `_cgoexp_..._GoPanic`（cgo 生成的解包包装）、`runtime.cgocallbackg1`（`cgocall.go:439`，调回调本体）、`runtime.cgocallbackg`（`cgocall.go:350`）、`runtime.cgocallback`（汇编切栈），再往下才是 `runtime.cgocall`（`cgocall.go:185`，最初 Go 调 C 的那一层）——**一次嵌套调用把两个方向串在同一条栈上**，这是「反向边界」最直观的证据。`go tool nm` 里 `runtime.cgocallback.abi0` 带 `.abi0` 后缀，说明汇编写成的入口走栈式 ABI（回看第 026 讲），`_crosscall2` 是 gcc ABI 适配层，`cgocallbackg`/`cgocallbackg1` 是纯 Go 的两个阶段。反汇编里四条 `CALL` 按 `exitsyscall → cgocallbackg1 → unlockOSThread → reentersyscall` 排开，与上面状态迁移链逐条对应；`sed -n '40,80p'` 给出的正是这段流程的源码注释原文。
 
 边界：路径以 Go 1.23.8 / darwin / arm64 为准，`crosscall2`、`_cgoexp_<hash>_<name>` 的命名随 Go 版本与构建哈希变化；`GOTRACEBACK=system` 会打印 runtime 帧，`grep` 关键字要按本机符号调整；`lockOSThread` 使回调期间 M 被占用，深度嵌套回调会放大调度代价；panic 不能跨 C 边界传播（这条铁律不变），回调里的 panic 只能由 Go 侧自己兜住；`//export` 要求被导出的函数在同一文件里有对应的 C 声明，头里 `static` 函数与动态库符号的查找成本不同。
 
@@ -419,7 +419,7 @@ GOEXPERIMENT=cgocheck2 go test -bench=. -benchtime=2000x -run=^$ .
 
 逐字段解释：两个构建跑同一个 `PtrStores(1024)`，每次迭代做 1024 次 `buf[i].Next = prev` 堆指针写；默认 2016 ns/op，打开 `cgocheck2` 后 7253 ns/op，差约 5237 ns、摊到每次写约 5 ns——量级正好是「一次函数调用加两次 `cgoIsGoPointer` 归类」。代入 `writebarrier.go` 的插桩条件可知差距与 Go 侧逻辑无关，纯 Go 包也躲不掉；这就是 `cgocheck2` 「更严更慢」的量化口径。工程结论因此很直接：它适合在 CI 或预发做一次正确性扫描，不该默认开在线上；检查 cgo 指针传递用默认的 `cgocheck=1` 已能覆盖 `cgoCheckPointer`/`cgoCheckArg` 的参数递归。
 
-边界：`GOEXPERIMENT=cgocheck2` 是构建期开关，必须与 `go build`/`go test` 一起给，运行时 `GODEBUG` 改不了；`GODEBUG=cgocheck=2` 在 Go 1.23 已抛错，更早版本可用，跨版本先 `go version`；`cgoCheckPtrWrite` 的短路条件（`mainStarted`、`isPinned`、`inPersistentAlloc` 等）决定了大多数写入只是空转一次，别把基准差值当成「每次都在做完整堆扫描」；`go test -bench` 的绝对值随机器、`GOMAXPROCS` 与内联波动，只比同一台机器上的相对倍数；`go tool nm`/`objdump` 的符号名带构建哈希与 `.abi0` 后缀，随版本变化。这条链与第 28 讲（写屏障辅助搬移）、第 99 讲（GC 根与可达性）共同解释「为什么把 Go 指针长期放进 C 内存是禁区」。
+边界：`GOEXPERIMENT=cgocheck2` 是构建期开关，必须与 `go build`/`go test` 一起给，运行时 `GODEBUG` 改不了；`GODEBUG=cgocheck=2` 在 Go 1.23 已抛错，更早版本可用，跨版本先 `go version`；`cgoCheckPtrWrite` 的短路条件（`mainStarted`、`isPinned`、`inPersistentAlloc` 等）决定了大多数写入只是空转一次，别把基准差值当成「每次都在做完整堆扫描」；`go test -bench` 的绝对值随机器、`GOMAXPROCS` 与内联波动，只比同一台机器上的相对倍数；`go tool nm`/`objdump` 的符号名带构建哈希与 `.abi0` 后缀，随版本变化。这条链与第 028 讲（写屏障辅助搬移）、第 099 讲（GC 根与可达性）共同解释「为什么把 Go 指针长期放进 C 内存是禁区」。
 
 ### 边界、常见误解与前后联系
 
@@ -431,7 +431,7 @@ GOEXPERIMENT=cgocheck2 go test -bench=. -benchtime=2000x -run=^$ .
 
 边界要点：`uintptr` 宽度随平台字长（32 位 4 字节、64 位 8 字节），跨平台偏移常量要重算；`unsafe.Add` 的偏移溢出行为未定义；`go vet` 的 unsafeptr 只抓「整数转 Pointer」的静态模式、抓不到语义错误，`-race` 与 checkptr 有运行时开销且只覆盖被插桩的代码；`C.CString` 在 C 堆、`C.GoString` 复制回 Go 堆，两本账不能混；C 侧不得长期持有 Go 指针（Go 1.21+ 可用 `runtime.Pinner` 固定并在用完后 `Unpin`）；`GOEXPERIMENT=cgocheck2` 更严但更慢；panic 不能跨 C 边界；启用 cgo 后 `CGO_ENABLED=0` 交叉编译失败、二进制可能动态依赖 libc；`plugin` 包要求同版本 Go 且 Windows 不支持。并发场景下 `unsafe` 共享内存没有任何 happens-before 保证，比普通数据竞争更难排查。
 
-前后联系：第 31 讲（字符串零拷贝）与第 28 讲（`reflect.SliceHeader` 的 uintptr 陷阱）是 unsafe 规则的具体前例；第 98 讲（编译器源码：SSA、逃逸与内联）会讲 `checkptr` 插桩与 `unsafe` 相关的编译期检查如何生成，第 99 讲（Go 内存模型与 happens-before）从「GC 根与可达性」严格定义为什么 `uintptr` 不构成根、以及并发下这类共享为何无保证，第 100 讲（极致性能优化）把「跨边界批量化、收敛入口」列为典型优化。
+前后联系：第 031 讲（字符串零拷贝）与第 028 讲（`reflect.SliceHeader` 的 uintptr 陷阱）是 unsafe 规则的具体前例；第 098 讲（编译器源码：SSA、逃逸与内联）会讲 `checkptr` 插桩与 `unsafe` 相关的编译期检查如何生成，第 099 讲（Go 内存模型与 happens-before）从「GC 根与可达性」严格定义为什么 `uintptr` 不构成根、以及并发下这类共享为何无保证，第 100 讲（极致性能优化）把「跨边界批量化、收敛入口」列为典型优化。
 
 ## 4. 工程实践
 
@@ -494,8 +494,8 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="37-1" q="把地址存成 uintptr 暂存，最根本的危险是什么？" :options='["uintptr 不能做加法","GC 不把整数当作根，对象可能被提前回收","uintptr 占内存太大","编译器不允许这种转换"]' answer="1" explain="uintptr 是整数不是指针，GC 不会因它保持对象存活；一旦中间发生 GC 或栈搬迁，还原出的地址就可能悬垂。" />
-<Predict no="37-2" q="C.CString 分配的内存由谁释放？" :options='["Go 的 GC 自动回收","必须显式调用 C.free","进程退出时统一回收即可，无需处理","由 cgo 生成的包装函数代劳"]' answer="1" output="必须显式 C.free，否则持续泄漏" explain="C.CString 在 C 堆用 malloc 分配，Go 的 GC 完全管不到；谁分配谁释放是跨边界的铁律。" />
+<Quiz no="037-1" q="把地址存成 uintptr 暂存，最根本的危险是什么？" :options='["uintptr 不能做加法","GC 不把整数当作根，对象可能被提前回收","uintptr 占内存太大","编译器不允许这种转换"]' answer="1" explain="uintptr 是整数不是指针，GC 不会因它保持对象存活；一旦中间发生 GC 或栈搬迁，还原出的地址就可能悬垂。" />
+<Predict no="037-2" q="C.CString 分配的内存由谁释放？" :options='["Go 的 GC 自动回收","必须显式调用 C.free","进程退出时统一回收即可，无需处理","由 cgo 生成的包装函数代劳"]' answer="1" output="必须显式 C.free，否则持续泄漏" explain="C.CString 在 C 堆用 malloc 分配，Go 的 GC 完全管不到；谁分配谁释放是跨边界的铁律。" />
 
 ## 一页纸速记
 

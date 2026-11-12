@@ -1,11 +1,11 @@
 ---
-title: 第 75 讲 · 服务注册发现与健康检查
+title: 第 075 讲 · 服务注册发现与健康检查
 description: 自建注册表、心跳续约与健康检查，让服务实例上下线对调用方彻底透明
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="让服务实例变化对调用方透明" prereq="第 74 讲 gRPC 拦截器、metadata、错误与超时" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="让服务实例变化对调用方透明" prereq="第 074 讲 gRPC 拦截器、metadata、错误与超时" />
 
-# 第 75 讲 · 服务注册发现与健康检查
+# 第 075 讲 · 服务注册发现与健康检查
 
 > 前面几讲的 RPC 都假设「对端地址已知」。可一旦服务多副本、弹性扩缩容、容器随时被调度重启，写死 IP 就立刻失效：新实例没人知道，宕机的实例还在被反复调用。服务注册发现要解决的就是这件事——把「谁在哪、还活着吗」从每个调用方的配置文件里，收进一个可动态变化的组件。本讲不只介绍 Consul、etcd、Nacos 怎么用，而是用标准库把注册表、心跳续约、故障摘除、健康检查和变更推送各写一遍，再对照工业方案的取舍。只有亲手实现过，才会明白 TTL 该设多大、为什么优雅退出要先反注册、以及客户端缓存为什么必须容错。
 
@@ -399,7 +399,7 @@ curl -s 'http://localhost:8500/v1/health/service/order?passing' | jq '.[].Servic
 
 ### 4.4 与后续阶段的呼应
 
-本讲反复出现的「租约、watch、CP 侧重」在 L8 会落到具体原理：[/distributed/raft](/distributed/raft) 讲 etcd 的 Leader 选举、日志复制与 watch 机制，正是强一致注册中心的底座；[/distributed/cap-base](/distributed/cap-base) 把 CP 与 AP 的取舍放进 CAP 框架重新审视，能解释为什么分区时有的系统拒绝注册、有的返回旧地址；[/distributed/high-availability](/distributed/high-availability) 的多活与故障域设计，则把「注册中心自己挂了」升级为整体容灾问题。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 秒杀前临时扩容的实例要靠注册发现对调用方透明，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的服务清单则由第 76 讲的 resolver 接着消费。
+本讲反复出现的「租约、watch、CP 侧重」在 L8 会落到具体原理：[/distributed/raft](/distributed/raft) 讲 etcd 的 Leader 选举、日志复制与 watch 机制，正是强一致注册中心的底座；[/distributed/cap-base](/distributed/cap-base) 把 CP 与 AP 的取舍放进 CAP 框架重新审视，能解释为什么分区时有的系统拒绝注册、有的返回旧地址；[/distributed/high-availability](/distributed/high-availability) 的多活与故障域设计，则把「注册中心自己挂了」升级为整体容灾问题。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 秒杀前临时扩容的实例要靠注册发现对调用方透明，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的服务清单则由第 076 讲的 resolver 接着消费。
 
 <Quiz q="注册中心发生网络分区时，CP 系统（如 etcd）相比 AP 系统最典型的表现是什么？" :options='["继续返回可能过期的地址","分区期间可能拒绝写入，新实例注册不上","自动把流量切到另一个机房","直接清空所有实例"]' answer="1" explain="CP 优先保证一致，分区时少数派一侧可能拒绝写入，于是新实例注册不上但已注册地址可信；AP 优先可用，会继续返回可能过期的地址。选哪个取决于业务更怕注册不上还是怕调到旧地址。" />
 
@@ -409,9 +409,9 @@ curl -s 'http://localhost:8500/v1/health/service/order?passing' | jq '.[].Servic
 <Exercise title="给注册表加上主动摘除与连续失败阈值" task="扩展 2.1 的 Registry：健康检查连续失败 3 次才把实例标记为不健康，而非一次超时就删；再实现 Deregister 的优雅退出路径，并在 Watch 断线时返回最后一份缓存。" :hints='["给 Instance 增加一个 failures 计数，成功心跳时清零","sweep 里用计数判断，达到阈值才 delete，避免抖动误摘","客户端把上一次 Resolve 的结果存在本地，注册中心出错时返回它"]' solution="要点一：Instance 增加 failures 字段，Beat 或 probe 成功时清零，失败时自增。\n要点二：sweep 中仅当 failures 达到 3 才 delete，单有一次超时只标记、不摘除。\n要点三：优雅退出先调 Deregister 再关闭监听；客户端缓存最后一次 Snapshot，请求注册中心报错时回退使用它。" explain="连续失败阈值过滤掉瞬时抖动，本地缓存让调用方在注册中心短暂失联时仍能工作，二者是发现系统可用性的两道保险。" />
 
 ## 随堂检测
-<Quiz no="75-1" q="实例进程崩溃、来不及反注册，注册中心靠什么把它的地址从列表里清掉？" :options='["客户端报错后主动删除","心跳超过 TTL 未续约，被巡检判定失效并摘除","DNS 缓存自然过期","负载均衡器重试把它拉黑"]' answer="1" explain="心跳是实例自证存活的唯一手段；超过 TTL 没续约，巡检 goroutine 就会把该实例从表里摘除，调用方随后经 watch 拿到新列表。" />
+<Quiz no="075-1" q="实例进程崩溃、来不及反注册，注册中心靠什么把它的地址从列表里清掉？" :options='["客户端报错后主动删除","心跳超过 TTL 未续约，被巡检判定失效并摘除","DNS 缓存自然过期","负载均衡器重试把它拉黑"]' answer="1" explain="心跳是实例自证存活的唯一手段；超过 TTL 没续约，巡检 goroutine 就会把该实例从表里摘除，调用方随后经 watch 拿到新列表。" />
 
-<Predict no="75-2" q="代码 2.1 里 u1 持续心跳、u2 静默，ttl 300 毫秒、巡检 100 毫秒，700 毫秒后 Resolve 返回什么？" :options='["两个地址都在","只剩 u1 的地址","只剩 u2 的地址","返回空列表"]' answer="1" output="巡检后: [10.0.0.1:9000]" explain="u2 超过 TTL 未续约被 sweep 摘除；u1 每 100 毫秒续约一次始终健康，列表经 sort 后稳定输出，只剩那一个地址。" />
+<Predict no="075-2" q="代码 2.1 里 u1 持续心跳、u2 静默，ttl 300 毫秒、巡检 100 毫秒，700 毫秒后 Resolve 返回什么？" :options='["两个地址都在","只剩 u1 的地址","只剩 u2 的地址","返回空列表"]' answer="1" output="巡检后: [10.0.0.1:9000]" explain="u2 超过 TTL 未续约被 sweep 摘除；u1 每 100 毫秒续约一次始终健康，列表经 sort 后稳定输出，只剩那一个地址。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["注册表 = 按服务名分组的实例表加读写锁；注册、续约、巡检摘除、发现是四个基本动作","心跳是实例自证存活，主动探测判断业务可用，租约把存活绑在带 TTL 的 key 上","客户端发现由调用方查表选节点，服务端发现由网关或 LB 代劳，二者在跳数与治理集中度上取舍","watch 推送让调用方拿到实时列表，本地缓存让注册中心短暂失联时仍能继续工作"]' :pitfalls='["TTL 设得太短，一次 GC 或网络抖动就误摘健康实例","进程直接退出不反注册，摘除窗口内流量仍打到已停服地址","watch 断线不重连且不回退缓存，注册中心一抖全站失去下游"]' summary="一句话记住：注册中心把「谁在哪、还活着吗」变成可订阅的动态数据，其余都是可靠性补丁。" />

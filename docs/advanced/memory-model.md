@@ -1,13 +1,13 @@
 ---
-title: 第 99 讲 · Go 内存模型与 happens-before 精解
+title: 第 099 讲 · Go 内存模型与 happens-before 精解
 description: 用严格术语解释 sequenced-before、synchronized-before、happens-before 与 DRF-SC，给并发正确性一个可依据的判据
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="50 分钟" goal="对并发正确性给出严格依据" prereq="第 49 讲 · 数据竞争、内存模型与 race detector" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="50 分钟" goal="对并发正确性给出严格依据" prereq="第 049 讲 · 数据竞争、内存模型与 race detector" />
 
-# 第 99 讲 · Go 内存模型与 happens-before 精解
+# 第 099 讲 · Go 内存模型与 happens-before 精解
 
-> 第 49 讲用 race detector 抓过竞态，但「为什么这样写算错」「凭什么加了 channel 就一定对」需要更严格的回答。Go 官方内存模型给出的答案是 happens-before 关系：它不描述 CPU 怎么乱序，而是规定一个读必须能看到哪个写。本讲用规范术语拆解三个关系、数据竞争的形式化定义与 DRF-SC 保证，再用可运行程序和 `-race` 把每条结论坐实。规范文本见 GOROOT 的 `doc/go_mem.html`，源码以 Go 1.23.8 为准。
+> 第 049 讲用 race detector 抓过竞态，但「为什么这样写算错」「凭什么加了 channel 就一定对」需要更严格的回答。Go 官方内存模型给出的答案是 happens-before 关系：它不描述 CPU 怎么乱序，而是规定一个读必须能看到哪个写。本讲用规范术语拆解三个关系、数据竞争的形式化定义与 DRF-SC 保证，再用可运行程序和 `-race` 把每条结论坐实。规范文本见 GOROOT 的 `doc/go_mem.html`，源码以 Go 1.23.8 为准。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-99" title="本讲目标" :items='["区分 sequenced-before、synchronized-before 与 happens-before", "用规范定义判断一段代码是否存在数据竞争", "说出 channel/Mutex/Once/atomic 各自建立的同步保证"]' />
@@ -277,8 +277,8 @@ go test -race ./...
 <Exercise title="用 -race 抓一次数据竞争" task="把第二段程序用 go run -race 运行，记录报告里的两个访问位置；再改成第一段写法，确认报告消失。" :hints='["报告会同时给出写与读的栈", "关注 WARNING: DATA RACE 与 Found 1 data race"]' solution="var data int\nvar ready int32\ngo writer()\nfor atomic.LoadInt32(ptr) == 0 {\n    runtime.Gosched()\n}\nprintln(data)" explain="普通 bool 版本被报告竞争；换成 atomic 后同步边成立、报告消失。完整代码见第一段。" />
 
 ## 随堂检测
-<Quiz no="99-1" q="按 Go 官方内存模型，happens-before 是如何定义的？" :options='["所有 goroutine 的真实执行时间顺序", "CPU 保证的指令先后", "sequenced-before 与 synchronized-before 之并的传递闭包", "GC 停顿点之间的顺序"]' answer="2" explain="doc/go_mem.html 明确定义 happens before 为 sequenced before 与 synchronized before 并集的传递闭包。" />
-<Predict no="99-2" q="第二段程序（普通 bool 标志）在 -race 下运行，结果最准确的描述是？" :options='["必定打印 42", "必定打印 0", "报告数据竞争，结果不可依据"]' answer="2" output="报告数据竞争，结果不可依据" explain="写 data 与读 data 之间没有 synchronized-before 边，构成数据竞争；DRF-SC 不适用，不能对输出作任何保证。" />
+<Quiz no="099-1" q="按 Go 官方内存模型，happens-before 是如何定义的？" :options='["所有 goroutine 的真实执行时间顺序", "CPU 保证的指令先后", "sequenced-before 与 synchronized-before 之并的传递闭包", "GC 停顿点之间的顺序"]' answer="2" explain="doc/go_mem.html 明确定义 happens before 为 sequenced before 与 synchronized before 并集的传递闭包。" />
+<Predict no="099-2" q="第二段程序（普通 bool 标志）在 -race 下运行，结果最准确的描述是？" :options='["必定打印 42", "必定打印 0", "报告数据竞争，结果不可依据"]' answer="2" output="报告数据竞争，结果不可依据" explain="写 data 与读 data 之间没有 synchronized-before 边，构成数据竞争；DRF-SC 不适用，不能对输出作任何保证。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["happens-before 是两个关系并集的传递闭包", "DRF-SC：无竞争程序表现为顺序一致", "同步边来自 channel、Mutex、Once、WaitGroup、atomic"]' :pitfalls='["用普通变量做 ready 标志", "靠 Sleep 代替同步", "把 -race 没报当成没竞争"]' summary="并发正确性靠 happens-before 推导，不靠运行次数或物理先后。" />

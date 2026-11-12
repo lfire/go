@@ -1,9 +1,9 @@
-# 第 29 讲 · map 底层：hmap、桶与渐进扩容
+# 第 029 讲 · map 底层：hmap、桶与渐进扩容
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：理解哈希表的实现与性能特征
 - **知识点**：hmap/bmap 结构 / 哈希与桶定位 / 溢出桶 / 等量/翻倍扩容 / 迁移与遍历
-- **教程正文**：[第 29 讲 · map 底层：hmap、桶与渐进扩容](/core/map-internals)
+- **教程正文**：[第 029 讲 · map 底层：hmap、桶与渐进扩容](/core/map-internals)
 - **GitHub 目录**：[l3-core/lesson-029-map-internals](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-029-map-internals)
 
 ## 运行

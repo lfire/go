@@ -2,7 +2,7 @@ package kv
 
 import "errors"
 
-// LegacyStore 是第 25 讲定义的「按操作拆方法、值为 string」的存储形状。
+// LegacyStore 是第 025 讲定义的「按操作拆方法、值为 string」的存储形状。
 type LegacyStore interface {
 	Put(key, value string) error
 	Get(key string) (string, error)
@@ -12,7 +12,7 @@ type LegacyStore interface {
 
 var _ Storage = (*legacyAdapter)(nil)
 
-// WrapLegacy 把第 25 讲风格的实现适配成本讲的 Storage。
+// WrapLegacy 把第 025 讲风格的实现适配成本讲的 Storage。
 // notFound 由调用方传入旧包的哨兵错误，适配器用 errors.Is 翻译，
 // 让错误链在新旧两层都可判定，旧实现一行都不用改。
 func WrapLegacy(l LegacyStore, notFound error) Storage {

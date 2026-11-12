@@ -1,11 +1,11 @@
 ---
-title: 第 40 讲 · GMP 调度模型全景
-description: 第 40 讲 · GMP 调度模型全景 —— G/M/P 各自职责、全局与本地队列、P 的数量、调度上下文、一张图记住模型
+title: 第 040 讲 · GMP 调度模型全景
+description: 第 040 讲 · GMP 调度模型全景 —— G/M/P 各自职责、全局与本地队列、P 的数量、调度上下文、一张图记住模型
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="50 分钟" goal="画出 G、M、P 的关系图" prereq="第 39 讲 · goroutine：创建、栈与生命周期" />
+<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="50 分钟" goal="画出 G、M、P 的关系图" prereq="第 039 讲 · goroutine：创建、栈与生命周期" />
 
-# 第 40 讲 · GMP 调度模型全景
+# 第 040 讲 · GMP 调度模型全景
 
 > 上一讲我们把 goroutine 拆成了 G：一段栈、一组寄存器现场、一个状态。但 G 自己不会跑，它得被谁挑起来、排在哪条队里、由哪条线程执行，这些问题都属于调度模型。GMP 是理解 Go 并发的分水岭：在这之前你只是「会用 go」，在这之后你才能解释「为什么这样设计」「为什么高并发下它不塌」。这一讲只画结构与职责，把抢占、窃取与交接留给下一讲。
 
@@ -268,7 +268,7 @@ GODEBUG=schedtrace=1000,scheddetail=1 go run main.go           # 逐字段看各
 
 <Compare title="P 数是并行度，不是并发容量" :panels='[{"label":"错误：按连接数设 P","code":"runtime.GOMAXPROCS(5000)\n// 以为要服务 5000 个并发就得有 5000 个 P","note":"更多 P 意味着更多 mcache、更多 GC 辅助线程与更频繁切换，纯计算通常反而变慢。"},{"label":"正确：保持默认","code":"// 不设置，用运行时默认值\n// 等待中的 G 不占 P\n// 压测或 schedtrace 确认瓶颈后再按 CPU 限额调","note":"少量 P 就能服务大量 I/O；P 只限制同一时刻并行执行 Go 代码的名额。"}]' note="先分清瓶颈是 CPU 不够还是等待没重叠，后者与 P 数量基本无关。" />
 
-第 41 讲会把「锁与阻塞的性能画像」展开：`go tool pprof -mutex` 看争用热点、`-block` 看阻塞时长，它们与 `schedtrace` 一样只给性能线索，不判正确性。
+第 041 讲会把「锁与阻塞的性能画像」展开：`go tool pprof -mutex` 看争用热点、`-block` 看阻塞时长，它们与 `schedtrace` 一样只给性能线索，不判正确性。
 
 这些结论在实战里有直接对应。第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 把服务跑在容器里，若默认值没识别出 cgroup 的 CPU 限额就会按宿主机核数起太多 P，洪峰下上下文切换与 GC 开销被放大（Go 1.25 起运行时已会参考容器限额）；第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Fetcher worker 数远大于 CPU 核数却仍能高吞吐，靠的正是「等待中的 G 不占 P」；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 里执行槽与机器核数的关系，也要用「P 限并行、不限 G 数量」来推。
 
@@ -300,9 +300,9 @@ GODEBUG=schedtrace=1000 go run main.go
 
 ## 随堂检测
 
-<Quiz no="40-1" q="一个 M 想要执行 Go 代码，必须先具备下列哪个条件？" :options='["先拿到一个可用的 G","先绑定一个 P","先获得全局队列的锁","先向 netpoller 注册"]' answer="1" explain="M 是操作系统线程，但只有持有 P 才拥有本地队列、mcache 等调度资源，才能进入调度循环取 G 执行。G 是它要取的对象，不是前提条件。" />
+<Quiz no="040-1" q="一个 M 想要执行 Go 代码，必须先具备下列哪个条件？" :options='["先拿到一个可用的 G","先绑定一个 P","先获得全局队列的锁","先向 netpoller 注册"]' answer="1" explain="M 是操作系统线程，但只有持有 P 才拥有本地队列、mcache 等调度资源，才能进入调度循环取 G 执行。G 是它要取的对象，不是前提条件。" />
 
-<Predict no="40-2" q="把 GOMAXPROCS 设为 1，启动 5 个各自只做 time.Sleep(20ms) 的 goroutine，它们能全部跑完吗？" :options='["能，总耗时约等于一次等待的时间","不能，只有一个 P 会死锁","只会跑完 1 个，其余 4 个被丢弃","必须把 GOMAXPROCS 设成 5 才能跑完"]' answer="0" output="5 个 G 全部完成，而 P 始终只有 1 个" explain="等待中的 G 会挂起并让出 P，M 立刻拿这个 P 去跑别的就绪 G。P 是「同时干活的名额」，不是「排队的座位」，所以一个 P 就能服务大量 I/O 型并发。" />
+<Predict no="040-2" q="把 GOMAXPROCS 设为 1，启动 5 个各自只做 time.Sleep(20ms) 的 goroutine，它们能全部跑完吗？" :options='["能，总耗时约等于一次等待的时间","不能，只有一个 P 会死锁","只会跑完 1 个，其余 4 个被丢弃","必须把 GOMAXPROCS 设成 5 才能跑完"]' answer="0" output="5 个 G 全部完成，而 P 始终只有 1 个" explain="等待中的 G 会挂起并让出 P，M 立刻拿这个 P 去跑别的就绪 G。P 是「同时干活的名额」，不是「排队的座位」，所以一个 P 就能服务大量 I/O 型并发。" />
 
 ## 一页纸速记
 

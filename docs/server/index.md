@@ -17,21 +17,21 @@ description: 独立交付一个生产可用的后端服务与数据访问层
 
 ## 讲次安排
 
-本阶段共 **11 讲**（第 61–71 讲），合计约 505 分钟，难度 3–4 级。
+本阶段共 **11 讲**（第 061–071 讲），合计约 505 分钟，难度 3–4 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 61 | [net/http 深入：Handler、ServeMux 与中间件链](/server/net-http) | ★★★☆☆ | 45 分钟 | Handler 接口 · ServeMux 路由 · Request/ResponseWriter |
-| 62 | [路由与框架：Gin / Echo / Chi](/server/web-framework) | ★★★☆☆ | 40 分钟 | 路由树与分组 · 绑定与校验 · 中间件生态 |
-| 63 | [REST API 设计、校验与 OpenAPI](/server/rest-api) | ★★★☆☆ | 45 分钟 | 资源与状态码 · 幂等性 · 分页与过滤 |
-| 64 | [WebSocket / SSE 与实时推送](/server/websocket) | ★★★★☆ | 45 分钟 | 协议握手 · gorilla/websocket · 心跳与断线重连 |
-| 65 | [database/sql、连接池与事务](/server/database-sql) | ★★★☆☆ | 45 分钟 | 驱动与 DSN · 连接池参数 · Query/Exec 选择 |
-| 66 | [GORM / sqlx / sqlc 与迁移](/server/orm) | ★★★☆☆ | 45 分钟 | 三者对比 · 模型与关联 · 预加载与 N+1 |
-| 67 | [Redis 缓存：穿透 / 击穿 / 雪崩与一致性](/server/redis) | ★★★★☆ | 50 分钟 | 缓存模式 · 三大经典问题 · TTL 抖动 |
-| 68 | [消息队列：Kafka / NATS / 可靠投递](/server/mq) | ★★★★☆ | 50 分钟 | 队列与发布订阅 · 分区与顺序 · 确认与重试 |
-| 69 | [Elasticsearch 与倒排索引](/server/search) | ★★★★☆ | 45 分钟 | 倒排索引 · 分词与 mapping · 查询 DSL |
-| 70 | [认证授权：Session / JWT / OAuth2 / RBAC](/server/auth) | ★★★★☆ | 50 分钟 | 认证与授权分离 · Session 与 JWT · 令牌刷新与吊销 |
-| 71 | [文件、对象存储与断点续传](/server/file-storage) | ★★★☆☆ | 45 分钟 | io.Reader/Writer · 分块与秒传 · 对象存储直传 |
+| 061 | [net/http 深入：Handler、ServeMux 与中间件链](/server/net-http) | ★★★☆☆ | 45 分钟 | Handler 接口 · ServeMux 路由 · Request/ResponseWriter |
+| 062 | [路由与框架：Gin / Echo / Chi](/server/web-framework) | ★★★☆☆ | 40 分钟 | 路由树与分组 · 绑定与校验 · 中间件生态 |
+| 063 | [REST API 设计、校验与 OpenAPI](/server/rest-api) | ★★★☆☆ | 45 分钟 | 资源与状态码 · 幂等性 · 分页与过滤 |
+| 064 | [WebSocket / SSE 与实时推送](/server/websocket) | ★★★★☆ | 45 分钟 | 协议握手 · gorilla/websocket · 心跳与断线重连 |
+| 065 | [database/sql、连接池与事务](/server/database-sql) | ★★★☆☆ | 45 分钟 | 驱动与 DSN · 连接池参数 · Query/Exec 选择 |
+| 066 | [GORM / sqlx / sqlc 与迁移](/server/orm) | ★★★☆☆ | 45 分钟 | 三者对比 · 模型与关联 · 预加载与 N+1 |
+| 067 | [Redis 缓存：穿透 / 击穿 / 雪崩与一致性](/server/redis) | ★★★★☆ | 50 分钟 | 缓存模式 · 三大经典问题 · TTL 抖动 |
+| 068 | [消息队列：Kafka / NATS / 可靠投递](/server/mq) | ★★★★☆ | 50 分钟 | 队列与发布订阅 · 分区与顺序 · 确认与重试 |
+| 069 | [Elasticsearch 与倒排索引](/server/search) | ★★★★☆ | 45 分钟 | 倒排索引 · 分词与 mapping · 查询 DSL |
+| 070 | [认证授权：Session / JWT / OAuth2 / RBAC](/server/auth) | ★★★★☆ | 50 分钟 | 认证与授权分离 · Session 与 JWT · 令牌刷新与吊销 |
+| 071 | [文件、对象存储与断点续传](/server/file-storage) | ★★★☆☆ | 45 分钟 | io.Reader/Writer · 分块与秒传 · 对象存储直传 |
 
 ## 怎么学这一阶段
 
@@ -47,4 +47,4 @@ description: 独立交付一个生产可用的后端服务与数据访问层
 
 <ProgressTracker />
 
-[← 上一阶段：阶段五 · 工程化与质量](/engineering/) · [第 61 讲开始 →](/server/net-http) · [下一阶段：阶段七 · RPC 与微服务](/microservice/)
+[← 上一阶段：阶段五 · 工程化与质量](/engineering/) · [第 061 讲开始 →](/server/net-http) · [下一阶段：阶段七 · RPC 与微服务](/microservice/)

@@ -36,7 +36,7 @@ func (s *MemStore) Put(key, value string) error {
 		return ErrEmptyKey
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock() // 第 21 讲：解锁一定执行
+	defer s.mu.Unlock() // 第 021 讲：解锁一定执行
 	s.data[key] = value
 	return nil
 }
@@ -44,7 +44,7 @@ func (s *MemStore) Put(key, value string) error {
 func (s *MemStore) Get(key string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	v, ok := s.data[key] // 第 16 讲：comma-ok
+	v, ok := s.data[key] // 第 016 讲：comma-ok
 	if !ok {
 		return "", ErrNotFound
 	}

@@ -1,11 +1,11 @@
 ---
-title: 第 30 讲 · interface 底层：iface / eface 与 nil 陷阱
+title: 第 030 讲 · interface 底层：iface / eface 与 nil 陷阱
 description: 解释接口为何有成本以及经典 nil 问题：iface / eface、itab 与方法表、动态派发成本、typed nil、断言与反射
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="解释接口为何有成本以及经典 nil 问题" prereq="第 19 讲 · 接口：隐式实现与组合" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="解释接口为何有成本以及经典 nil 问题" prereq="第 019 讲 · 接口：隐式实现与组合" />
 
-# 第 30 讲 · interface 底层：iface / eface 与 nil 陷阱
+# 第 030 讲 · interface 底层：iface / eface 与 nil 陷阱
 
 > 接口是 Go 抽象的基石，但「`err != nil` 明明该为假却为真」这类 bug 几乎每个团队都踩过。原因不在业务逻辑，而在接口值的内存布局：它不是一个指针，而是**两个字**。这一讲把这两个字拆开，顺便解释接口调用为什么有成本、断言和反射为什么能工作。
 
@@ -249,7 +249,7 @@ go build -gcflags=-m=2 -o /dev/null box.go 2>&1 | grep -E 'convT64|escapes to he
 
 **反直觉结论的证伪**：「任何值装进 `any` 都会发生一次堆分配」是错的——0 到 255 的整数零分配，这也解释了为什么日志里打印小整数有时看不到额外的 `allocs/op`。反过来「装箱都免费」同样错：256 起、字符串、切片、结构体都要分配，且 `-m=2` 里能看到对应的 `escapes to heap`。把这条结论和第 3 节的基准放在一起才完整：接口调用的**派发**成本由 `itab` 与去虚拟化决定，装箱的**分配**成本由 `convT*` 的分支决定，两者是独立的，别把「接口调用差距不显著」误读成「装箱也没有代价」。
 
-边界：`staticuint64s` 的长度 256 是 Go 1.23 的实现细节，跨版本可能调整；`//go:noinline` 是本实验前提，否则编译器可能把常量装箱静态折叠、连 `convT64` 都不调用；`AllocsPerRun` 只计堆分配，静态数组常驻内存属固定开销；逃逸分析（第 27 讲）与内联（第 36 讲）会改写一次具体调用是否真的装箱；32 位平台 `int` 为 32 位走 `convT32`，但 256 这个边界不变；`unsafe` 强转接口头读字段仍不是稳定契约。
+边界：`staticuint64s` 的长度 256 是 Go 1.23 的实现细节，跨版本可能调整；`//go:noinline` 是本实验前提，否则编译器可能把常量装箱静态折叠、连 `convT64` 都不调用；`AllocsPerRun` 只计堆分配，静态数组常驻内存属固定开销；逃逸分析（第 027 讲）与内联（第 036 讲）会改写一次具体调用是否真的装箱；32 位平台 `int` 为 32 位走 `convT32`，但 256 这个边界不变；`unsafe` 强转接口头读字段仍不是稳定契约。
 
 ### `itabTable` 的哈希布局：一次 `getitab` 到底查了几次
 
@@ -366,7 +366,7 @@ sed -n '107,150p' "$(go env GOROOT)/src/runtime/iface.go"
 
 逐字段解释：`concrete` 只剩一条 `CALL main.Impl.Add(SB)`，目标是链接期已知符号，编译器可继续把它内联；`dynamic` 多出 `MOVD 24(R0), R4`——R0 是接口的 `tab` 字，`24` 正是 `itab` 头 `inter(8)+_type(8)+hash(4)+pad(4)` 之后 `fun[0]` 的偏移，取出的地址再由 `CALL (R4)` 间接跳转。于是「动态派发成本」可以量化成：**一次额外的 `itab+24` 载入 + 一次不可内联的间接调用**，而不是含糊的「慢一点」。`go:itab.*errors.errorString,error` 这类 `R`（只读数据）符号则证明静态可知的类型对确实在链接期就备好了 itab，运行时无需为它们跑 `getitab` 的哈希探测。`sed` 两行给出 `itabInitSize`、`itabHashFunc`、`find` 的二次探测与 `itabAdd` 的 75% 分支原文，把上面的算式与源码对上。
 
-边界：`itabInitSize=512`、75% 阈值、`(2+2*size)*PtrSize` 的分配公式都是 Go 1.23 的实现细节，跨版本先对照 `runtime/iface.go`；`itabHashFunc` 用的是类型描述符里的编译期哈希，模拟里用任意常数代入只为演示探测步长，不代表真实类型哈希；`find` 的三角形序列在 `size` 为 2 的幂时才覆盖全表；`go tool objdump` 的寄存器名随 GOARCH 变化（amd64 下是 `MOVQ 24(AX), CX` 加 `CALL CX`），只比指令语义；`//go:noinline` 是本实验前提，否则 `concrete` 与 `dynamic` 都可能被整体优化掉；`itab.fun[0]` 的 24 字节偏移依赖字段顺序，属非稳定契约。这条链在第 53 讲（mock 与 itab 布局约束）、第 98 讲（去虚拟化与 PGO）会再出现。
+边界：`itabInitSize=512`、75% 阈值、`(2+2*size)*PtrSize` 的分配公式都是 Go 1.23 的实现细节，跨版本先对照 `runtime/iface.go`；`itabHashFunc` 用的是类型描述符里的编译期哈希，模拟里用任意常数代入只为演示探测步长，不代表真实类型哈希；`find` 的三角形序列在 `size` 为 2 的幂时才覆盖全表；`go tool objdump` 的寄存器名随 GOARCH 变化（amd64 下是 `MOVQ 24(AX), CX` 加 `CALL CX`），只比指令语义；`//go:noinline` 是本实验前提，否则 `concrete` 与 `dynamic` 都可能被整体优化掉；`itab.fun[0]` 的 24 字节偏移依赖字段顺序，属非稳定契约。这条链在第 053 讲（mock 与 itab 布局约束）、第 098 讲（去虚拟化与 PGO）会再出现。
 
 ### 边界、常见误解与前后联系
 
@@ -376,9 +376,9 @@ sed -n '107,150p' "$(go env GOROOT)/src/runtime/iface.go"
 | 接口调用一定比直接调用慢很多 | 类型可静态确定时去虚拟化把差距抹平，只有真动态派发才走 `itab.fun` 间接跳转 | 第 3 节的 `testing.Benchmark` 对比 |
 | 两个接口值用 `==` 比较永远安全 | 动态类型不可比较（slice、map、func）时运行时 panic，且相等性按该类型定义 | 装一个切片进 `any` 再比较 |
 
-边界要点：32 位下接口头为 8 字节；接口赋值是**两个字的非原子写入**，多 goroutine 无同步读写同一接口变量是数据竞争（第 49 讲）；`nil` 具体指针装箱后不等于 nil；`reflect.ValueOf(nil)` 得到零值 `Value`、`Kind()` 为 Invalid；去虚拟化只在编译器能推断具体类型时生效，跨包返回接口或切片里混放类型会退化；`any` 装箱常伴随一次堆分配（`-m` 可见 `escapes to heap`）；`unsafe` 镜像读头部字段不是稳定契约；Go 1.18 起泛型让一部分原本要装箱的场景改用类型参数，进一步改变开销结论。
+边界要点：32 位下接口头为 8 字节；接口赋值是**两个字的非原子写入**，多 goroutine 无同步读写同一接口变量是数据竞争（第 049 讲）；`nil` 具体指针装箱后不等于 nil；`reflect.ValueOf(nil)` 得到零值 `Value`、`Kind()` 为 Invalid；去虚拟化只在编译器能推断具体类型时生效，跨包返回接口或切片里混放类型会退化；`any` 装箱常伴随一次堆分配（`-m` 可见 `escapes to heap`）；`unsafe` 镜像读头部字段不是稳定契约；Go 1.18 起泛型让一部分原本要装箱的场景改用类型参数，进一步改变开销结论。
 
-前后联系：第 19 讲（接口的使用）与第 26 讲（描述符）在这里落到两字结构；第 98 讲（编译器源码：SSA、逃逸与内联）会看 `convT`/`assert` 这类运行时调用在 SSA 阶段如何被生成与消除，第 99 讲（Go 内存模型与 happens-before）解释「两字非原子写入」为何必须靠同步保护，第 100 讲（极致性能优化）把「热路径避免高频装箱」列为常规手段。
+前后联系：第 019 讲（接口的使用）与第 026 讲（描述符）在这里落到两字结构；第 098 讲（编译器源码：SSA、逃逸与内联）会看 `convT`/`assert` 这类运行时调用在 SSA 阶段如何被生成与消除，第 099 讲（Go 内存模型与 happens-before）解释「两字非原子写入」为何必须靠同步保护，第 100 讲（极致性能优化）把「热路径避免高频装箱」列为常规手段。
 
 ## 4. 工程实践
 
@@ -414,7 +414,7 @@ func main() {
 
 <Compare :panels='[{"label":"反例：包着 nil 指针","code":"var p *MyErr; return p","note":"返回后 err 不等于 nil，调用方误判为出错"},{"label":"正例：显式返回 nil","code":"if p == nil { return nil }","note":"返回真正的 nil 接口，两个字段都为空"}]' title="error 返回的两种写法" />
 
-工程清单：返回 `error` 时永远写无类型的 `nil`，不要返回具体指针变量；判定具体错误用 `errors.Is` / `errors.As`（第 20 讲）而非拿具体指针和 `nil` 比较；热路径尽量避免高频把值装箱进 `any`，能传具体类型或泛型就别传接口；接口遵循「在使用处定义、尽量小」的原则（第 19 讲）。和上一讲一样，用 `unsafe` 去强转接口头读字段只适合教学，运行时布局不是稳定契约。
+工程清单：返回 `error` 时永远写无类型的 `nil`，不要返回具体指针变量；判定具体错误用 `errors.Is` / `errors.As`（第 020 讲）而非拿具体指针和 `nil` 比较；热路径尽量避免高频把值装箱进 `any`，能传具体类型或泛型就别传接口；接口遵循「在使用处定义、尽量小」的原则（第 019 讲）。和上一讲一样，用 `unsafe` 去强转接口头读字段只适合教学，运行时布局不是稳定契约。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -428,11 +428,11 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="30-1" q="var p *MyErr = nil; var e error = p，此时 e == nil 的结果是？" :options='["true","false","编译错误","取决于 MyErr 是否实现 Error"]' answer="1" explain="把 p 装箱成接口后，类型字记下 *MyErr、数据字为空，接口整体不等于 nil。这就是 typed nil 陷阱。" />
+<Quiz no="030-1" q="var p *MyErr = nil; var e error = p，此时 e == nil 的结果是？" :options='["true","false","编译错误","取决于 MyErr 是否实现 Error"]' answer="1" explain="把 p 装箱成接口后，类型字记下 *MyErr、数据字为空，接口整体不等于 nil。这就是 typed nil 陷阱。" />
 
-<Predict no="30-2" q="func bad() error { var p *MyErr; return p }，调用方判断 bad() != nil 结果如何？" :options='["false，一切正常","true，明明没出错却走进错误分支","panic","编译错误"]' answer="1" output="true：err 不等于 nil 成立，但里面其实是个 nil 指针" explain="返回值被装箱成非 nil 接口，调用方误判。正确做法是在函数里显式 return nil。" />
+<Predict no="030-2" q="func bad() error { var p *MyErr; return p }，调用方判断 bad() != nil 结果如何？" :options='["false，一切正常","true，明明没出错却走进错误分支","panic","编译错误"]' answer="1" output="true：err 不等于 nil 成立，但里面其实是个 nil 指针" explain="返回值被装箱成非 nil 接口，调用方误判。正确做法是在函数里显式 return nil。" />
 
-<FillBlank no="30-3" tpl="非空接口的头由 ___ 和数据指针两个字组成，前者保存接口类型、动态类型与方法表；空接口 any 的头则由动态类型字与 ___ 字组成。" :answers='["itab","数据"]' hint="填一个结构名与一个字段名" explain="iface 用 itab 承载方法表；eface 只记录动态类型与数据。两者都是两个字、16 字节。" :explains='["非空接口带方法集，首个字须指向 itab，缓存接口类型、动态类型与方法地址，才能完成方法动态分派；空接口无方法便省掉它。","空接口不承诺任何方法，两个字分别是动态类型与指向实际值的数据指针，第二字直接定位值本身，无需再经方法表。"]' />
+<FillBlank no="030-3" tpl="非空接口的头由 ___ 和数据指针两个字组成，前者保存接口类型、动态类型与方法表；空接口 any 的头则由动态类型字与 ___ 字组成。" :answers='["itab","数据"]' hint="填一个结构名与一个字段名" explain="iface 用 itab 承载方法表；eface 只记录动态类型与数据。两者都是两个字、16 字节。" :explains='["非空接口带方法集，首个字须指向 itab，缓存接口类型、动态类型与方法地址，才能完成方法动态分派；空接口无方法便省掉它。","空接口不承诺任何方法，两个字分别是动态类型与指向实际值的数据指针，第二字直接定位值本身，无需再经方法表。"]' />
 
 ## 一页纸速记
 

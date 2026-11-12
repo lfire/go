@@ -1,9 +1,9 @@
-# 第 80 讲 · OpenTelemetry 链路追踪
+# 第 080 讲 · OpenTelemetry 链路追踪
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：把一次请求跨服务完整串起来
 - **知识点**：Trace/Span/Context / 注入与提取 / 采样策略 / gRPC/HTTP 集成 / 与日志关联
-- **教程正文**：[第 80 讲 · OpenTelemetry 链路追踪](/microservice/tracing)
+- **教程正文**：[第 080 讲 · OpenTelemetry 链路追踪](/microservice/tracing)
 - **GitHub 目录**：[l7-microservice/lesson-080-tracing](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-080-tracing)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 37 讲 · unsafe、cgo 与跨边界成本
+# 第 037 讲 · unsafe、cgo 与跨边界成本
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：在必要时安全地使用底层能力
 - **知识点**：unsafe.Pointer 规则 / uintptr 陷阱 / cgo 调用开销 / 内存所有权 / WASM/插件替代方案
-- **教程正文**：[第 37 讲 · unsafe、cgo 与跨边界成本](/core/unsafe-cgo)
+- **教程正文**：[第 037 讲 · unsafe、cgo 与跨边界成本](/core/unsafe-cgo)
 - **GitHub 目录**：[l3-core/lesson-037-unsafe-cgo](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-037-unsafe-cgo)
 
 ## 运行

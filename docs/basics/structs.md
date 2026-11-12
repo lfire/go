@@ -1,11 +1,11 @@
 ---
-title: 第 17 讲 · 结构体、标签与内存对齐
+title: 第 017 讲 · 结构体、标签与内存对齐
 description: 用结构体组织数据，理解字面量、嵌入、json tag、内存对齐与空结构体
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="设计合理的数据模型" prereq="第 16 讲 · map：哈希、遍历与 Set 技巧" />
+<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="设计合理的数据模型" prereq="第 016 讲 · map：哈希、遍历与 Set 技巧" />
 
-# 第 17 讲 · 结构体、标签与内存对齐
+# 第 017 讲 · 结构体、标签与内存对齐
 
 > 前面用 map 存「键到值」，用切片存「一串同类数据」。可一个用户往往同时有 ID、姓名、年龄、注册时间，这些字段类型不同、却属于同一个东西。把它们塞进几个平行切片或 `map[string]any` 很快就会失控。结构体就是给「一组相关字段」起个名字，让编译器替你记住每个字段的类型与位置。学完本讲，你能定义数据模型、读懂标签、并知道字段顺序为什么会改变内存占用。
 
@@ -298,7 +298,7 @@ func main() {
 
 <Compare title="浅拷贝与深拷贝" :panels='[{"label":"错误：以为引用字段也隔离","code":"u2 := u1\nu2.Tags[0] = \"zig\"\n// 以为 u1.Tags 不变","note":"切片字段只拷描述符，改元素会回写"},{"label":"正确：对引用字段显式拷贝","code":"u2 := u1\nu2.Tags = append([]string(nil), u1.Tags...)\nu2.Tags[0] = \"zig\"","note":"深拷贝切片后才互不影响"}]' />
 
-这与第 13 讲「子切片共享底层数组」是同一条规则：切片、map、指针字段本身都是描述符，要彻底隔离得逐个深拷贝。
+这与第 013 讲「子切片共享底层数组」是同一条规则：切片、map、指针字段本身都是描述符，要彻底隔离得逐个深拷贝。
 
 ### 可验证实验：命令、输出与逐字段解释
 
@@ -384,7 +384,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 26 讲](/core/value-semantics) 会把「结构体拷贝一层、引用字段共享」量化成成本，[第 28 讲](/core/slice-internals) 展开切片字段为何共享底层数组，[第 37 讲](/core/unsafe-cgo) 讲对齐与 cgo 布局的交互。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Command` 与 `Storage` 都是靠字段顺序清晰、可演化的结构体，[第 106 讲](/projects/net-image-server) 处理含 `[]byte` 字段的结构体时要留意浅拷贝，[第 117 讲](/projects/cloud-operator) 的 CRD 类型定义则把 `json` 标签当成对外契约。
+[第 026 讲](/core/value-semantics) 会把「结构体拷贝一层、引用字段共享」量化成成本，[第 028 讲](/core/slice-internals) 展开切片字段为何共享底层数组，[第 037 讲](/core/unsafe-cgo) 讲对齐与 cgo 布局的交互。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Command` 与 `Storage` 都是靠字段顺序清晰、可演化的结构体，[第 106 讲](/projects/net-image-server) 处理含 `[]byte` 字段的结构体时要留意浅拷贝，[第 117 讲](/projects/cloud-operator) 的 CRD 类型定义则把 `json` 标签当成对外契约。
 
 ## 动手练一练
 
@@ -392,9 +392,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="17-1" q="关于结构体，正确的是？" :options='["嵌入就是继承","位置字面量可只写部分字段","未导出字段对包外不可见","含切片字段的结构体可比较"]' answer="2" explain="嵌入是组合；位置字面量须写全；含不可比较字段时不可比较。" />
+<Quiz no="017-1" q="关于结构体，正确的是？" :options='["嵌入就是继承","位置字面量可只写部分字段","未导出字段对包外不可见","含切片字段的结构体可比较"]' answer="2" explain="嵌入是组合；位置字面量须写全；含不可比较字段时不可比较。" />
 
-<Predict no="17-2" q="64 位平台上，struct{ bool; int64; bool } 的 unsafe.Sizeof 结果是？" :options='["16","24","10","17"]' answer="1" output="24" explain="int64 需 8 字节对齐，前后各补 7 字节，合计 24。" />
+<Predict no="017-2" q="64 位平台上，struct{ bool; int64; bool } 的 unsafe.Sizeof 结果是？" :options='["16","24","10","17"]' answer="1" output="24" explain="int64 需 8 字节对齐，前后各补 7 字节，合计 24。" />
 
 ## 一页纸速记
 

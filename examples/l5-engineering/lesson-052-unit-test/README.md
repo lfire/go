@@ -1,9 +1,9 @@
-# 第 52 讲 · 单元测试与表驱动测试
+# 第 052 讲 · 单元测试与表驱动测试
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：写出稳定、可读、可维护的测试
 - **知识点**：testing 基础 / 表驱动 / t.Run 子测试 / t.Helper / 断言库取舍 / 可测试性设计
-- **教程正文**：[第 52 讲 · 单元测试与表驱动测试](/engineering/unit-test)
+- **教程正文**：[第 052 讲 · 单元测试与表驱动测试](/engineering/unit-test)
 - **GitHub 目录**：[l5-engineering/lesson-052-unit-test](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-052-unit-test)
 
 ## 运行

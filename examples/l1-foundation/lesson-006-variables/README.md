@@ -1,9 +1,9 @@
-# 第 06 讲 · 变量、常量、iota 与作用域
+# 第 006 讲 · 变量、常量、iota 与作用域
 
 - **阶段**：L1 · 编程地基
 - **目标**：写对声明、推断、常量与可见性
 - **知识点**：var 与 := / 零值 / const 与 iota 枚举 / 包级/函数级作用域 / 导出与命名
-- **教程正文**：[第 06 讲 · 变量、常量、iota 与作用域](/foundation/variables)
+- **教程正文**：[第 006 讲 · 变量、常量、iota 与作用域](/foundation/variables)
 - **GitHub 目录**：[l1-foundation/lesson-006-variables](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-006-variables)
 
 ## 运行

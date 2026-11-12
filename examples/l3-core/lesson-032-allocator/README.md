@@ -1,9 +1,9 @@
-# 第 32 讲 · 内存分配器：mcache / mcentral / mheap
+# 第 032 讲 · 内存分配器：mcache / mcentral / mheap
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：建立 Go 内存分配全景
 - **知识点**：size class / span 与 object / 三级缓存 / tiny allocator / 大对象路径
-- **教程正文**：[第 32 讲 · 内存分配器：mcache / mcentral / mheap](/core/allocator)
+- **教程正文**：[第 032 讲 · 内存分配器：mcache / mcentral / mheap](/core/allocator)
 - **GitHub 目录**：[l3-core/lesson-032-allocator](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-032-allocator)
 
 ## 运行

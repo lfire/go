@@ -1,11 +1,11 @@
 ---
-title: 第 44 讲 · select、超时与多路复用
+title: 第 044 讲 · select、超时与多路复用
 description: 用 select 同时监听多个 channel，掌握随机选择、default 非阻塞、超时控制与 done channel
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="写出不会卡死的并发控制" prereq="第 43 讲 · channel 底层 hchan 与收发队列" />
+<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="写出不会卡死的并发控制" prereq="第 043 讲 · channel 底层 hchan 与收发队列" />
 
-# 第 44 讲 · select、超时与多路复用
+# 第 044 讲 · select、超时与多路复用
 
 > 一个 goroutine 往往要同时收数据、等超时、能被随时叫停；写成顺序接收，任何一路没数据都会卡死。select 就是「同时等待多路事件」的标准答案：像总机接线员，哪路先来接哪路，没人来时走 default 或按时离开。学完你能写出灵敏、不泄漏、不卡死的并发控制。
 
@@ -149,7 +149,7 @@ func main() {
 
 ### 再深一层：select 为什么随机、timer 为什么会堆积
 
-判断一段 select 会不会出事，要落到运行时依据，而不是凭「看起来能跑」。编译器把 select 语句翻译成 `runtime.selectgo`：所有 case 的 channel 先被收进 `scases` 数组，运行时按 channel 地址排序生成 `lockorder`（固定加锁顺序，避免一次锁多个 channel 时死锁），再用 `fastrand` 打乱出 `pollorder`。所谓「伪随机选择」就来自 `pollorder`——它逐个探测就绪的 case，碰到第一个可通信的便执行，打乱是为了让各路长期公平、不被书写顺序饿死。没有任何 case 就绪时，当前 G 会为每个 channel 造一个 `sudog` 挂进 `sendq`/`recvq`（结构见第 43 讲 hchan），随后 `gopark` 挂起；任一 channel 有数据或被关闭时把它 `goready` 唤醒。由此得到两条正确性依据：被选中的那次收发与后续语句之间建立 happens-before；`close(done)` 与所有对 done 的接收之间同样建立 happens-before。所以「关闭一个 done 广播叫停一批 goroutine」在内存模型上是可靠的，而「用共享 bool 当停止标志、main 写 worker 读」没有同步，是真正的数据竞争——这一区别用 `go test -race` 一跑便知。
+判断一段 select 会不会出事，要落到运行时依据，而不是凭「看起来能跑」。编译器把 select 语句翻译成 `runtime.selectgo`：所有 case 的 channel 先被收进 `scases` 数组，运行时按 channel 地址排序生成 `lockorder`（固定加锁顺序，避免一次锁多个 channel 时死锁），再用 `fastrand` 打乱出 `pollorder`。所谓「伪随机选择」就来自 `pollorder`——它逐个探测就绪的 case，碰到第一个可通信的便执行，打乱是为了让各路长期公平、不被书写顺序饿死。没有任何 case 就绪时，当前 G 会为每个 channel 造一个 `sudog` 挂进 `sendq`/`recvq`（结构见第 043 讲 hchan），随后 `gopark` 挂起；任一 channel 有数据或被关闭时把它 `goready` 唤醒。由此得到两条正确性依据：被选中的那次收发与后续语句之间建立 happens-before；`close(done)` 与所有对 done 的接收之间同样建立 happens-before。所以「关闭一个 done 广播叫停一批 goroutine」在内存模型上是可靠的，而「用共享 bool 当停止标志、main 写 worker 读」没有同步，是真正的数据竞争——这一区别用 `go test -race` 一跑便知。
 
 高频事故出在 timer 堆。`time.After(d)` 本质就是 `NewTimer(d).C`，每次调用都向运行时的 timer 堆插入一个 `runtimeTimer`（关键字段 `when` 到期纳秒、`period` 周期、`f` 回调、`arg` 参数、`seq` 序号）；Go 1.14 起每个 P 维护一棵四叉小顶堆 `timers`，到期检查由调度循环与 sysmon 承担。定时器只有到期或被 `Stop` 才从堆里摘除。当 for-select 循环里业务通道命中远快于 d 时，每轮 `time.After` 新建的 timer 都要一直挂到 d 到期才回收，短时间就能累出成千上万个对象：它不报错，只让 `HeapObjects` 与 GC 次数缓慢爬升，这就是「timer 泄漏」。想亲手复现，把下面的 `leak_test.go` 用 `go test -bench=. -benchmem -run=^$ ./...` 跑一遍，`-benchmem` 的 `allocs/op` 一列会显示 `BenchmarkTimeAfter` 每轮都新建 timer 与 channel，分配次数是 `BenchmarkTimerReuse` 的数倍；后者只 `NewTimer` 一次，命中后 `Stop` 再 `Reset`，每轮几乎零分配。示例把 d 压到 1ms 是为了让基准测试不堆积、安全跑完，真实服务里 d 往往是秒级，堆积更严重，但「每轮新建 timer」这一分配特征不变。生产定位用 `go tool pprof -alloc_objects` 找谁在调 `time.After`/`time.NewTimer`，结合 heap profile 的增长趋势，`GODEBUG=gctrace=1` 可直观看 GC 次数与堆大小。还有一条版本差异：Go 1.23 起 timer 的 channel 默认改为同步（无缓冲），`Stop` 后不再需要「从 C 兜底读一次」；旧代码若依赖缓冲行为可用 `GODEBUG=asynctimerchan=1` 恢复，但 `time.After` 每次新建 timer 的事实没变，泄漏根源仍在。
 
@@ -250,8 +250,8 @@ select 的「数据 + 超时 + 停止」三件套在后面的实战里几乎是�
 <Exercise title="让定时任务干净停下" task="用 time.NewTicker 每 10ms 打印一次，累计 3 次后退出并释放定时器，要求 defer 释放、用 for range 接收。" :hints='["ticker.C 可用 for range 接收","defer ticker.Stop() 不能漏","用计数变量达到 3 就 return"]' solution="计数器 := 0\nticker := time.NewTicker(10 * time.Millisecond)\ndefer ticker.Stop()\nfor range ticker.C {\n    计数器 = 计数器 + 1\n    fmt.Println(计数器)\n    if 计数器 == 3 {\n        return\n    }\n}" explain="Ticker.C 是只读 channel，for range 阻塞式接收；计数到 3 时 return，defer 保证 Stop 释放 runtime timer。这正是替代循环里不断 time.After 的思路。" />
 
 ## 随堂检测
-<Quiz no="44-1" q="select 有多个 case 同时就绪时，Go 会怎么做？" :options='["按书写顺序选第一个","伪随机挑一个就绪 case","选缓冲最大的那个","编译报错"]' answer="1" explain="运行时把就绪 case 收集后伪随机选一个，保证各路长期公平，避免固定顺序让某些通道饿死。" />
-<Predict no="44-2" q="两个 channel 都为空、select 带 default，结果是？" :options='["阻塞直到有数据","立刻执行 default","因全阻塞而 panic","编译失败"]' answer="1" output="立刻执行 default，select 不阻塞" explain="没有 case 就绪时 default 立即执行，这是实现非阻塞收发、避免空等的关键。" />
+<Quiz no="044-1" q="select 有多个 case 同时就绪时，Go 会怎么做？" :options='["按书写顺序选第一个","伪随机挑一个就绪 case","选缓冲最大的那个","编译报错"]' answer="1" explain="运行时把就绪 case 收集后伪随机选一个，保证各路长期公平，避免固定顺序让某些通道饿死。" />
+<Predict no="044-2" q="两个 channel 都为空、select 带 default，结果是？" :options='["阻塞直到有数据","立刻执行 default","因全阻塞而 panic","编译失败"]' answer="1" output="立刻执行 default，select 不阻塞" explain="没有 case 就绪时 default 立即执行，这是实现非阻塞收发、避免空等的关键。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["多个 case 就绪时伪随机选，不保证顺序","default 让 select 永不阻塞","超时用 time.NewTimer 加 defer Stop，别反复 time.After","close(done) 广播唤醒所有接收者","优先级靠带 default 的非阻塞探测"]' :pitfalls='["循环里 time.After 堆积 timer 泄漏","阻塞等待没配超时或停止出口","误以为 select 按书写顺序执行"]' summary="select 把多路通信、超时与停止并成一次等待：谁先就绪走谁，没人就绪走 default，到期走 timer" />

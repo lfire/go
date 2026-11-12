@@ -1,13 +1,13 @@
 ---
-title: 第 96 讲 · GC 源码与真实调优案例
+title: 第 096 讲 · GC 源码与真实调优案例
 description: 从 gcStart 到 gcMarkDone 看懂一次 GC，掌握后台标记、辅助标记、调步算法与 GOGC/MemoryLimit 实战
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="从 gcStart 到 gcMarkDone 看懂一次 GC" prereq="第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="从 gcStart 到 gcMarkDone 看懂一次 GC" prereq="第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC" />
 
-# 第 96 讲 · GC 源码与真实调优案例
+# 第 096 讲 · GC 源码与真实调优案例
 
-> 第 33 讲讲过三色标记与混合写屏障的算法，但「什么时候触发」「谁在后台标记」「为什么分配快了 GC 反而更忙」这些问题的答案都在源码里。本讲沿 gcStart 到 gcMarkDone 走一遍一次完整回收，再落到 GOGC 与 MemoryLimit 的真实调优：给出基线、改动、量化对比和验证手段。所有源码位置以 Go 1.23.8 为准，结论都能用 `GODEBUG=gctrace=1` 与 `ReadMemStats` 复现。
+> 第 033 讲讲过三色标记与混合写屏障的算法，但「什么时候触发」「谁在后台标记」「为什么分配快了 GC 反而更忙」这些问题的答案都在源码里。本讲沿 gcStart 到 gcMarkDone 走一遍一次完整回收，再落到 GOGC 与 MemoryLimit 的真实调优：给出基线、改动、量化对比和验证手段。所有源码位置以 Go 1.23.8 为准，结论都能用 `GODEBUG=gctrace=1` 与 `ReadMemStats` 复现。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-96" title="本讲目标" :items='["说出一次 GC 的触发条件与五个阶段", "解释后台标记 worker、辅助标记与调步算法的协作关系", "用 gctrace 与量化对比完成一次 GOGC/MemoryLimit 调优"]' />
@@ -256,8 +256,8 @@ GODEBUG=gctrace=1 ./aggregator 2> gc.log
 <Exercise title="用 gctrace 读一轮 GC" task="给第二段程序加上 GODEBUG=gctrace=1 运行，找出 goal 字段，说明它与 NextGC 的关系。" :hints='["gctrace 每行以 gc 编号开头", "goal 单位 MB，NextGC 单位字节"]' solution="runtime.GC()\nvar m runtime.MemStats\nruntime.ReadMemStats(&m)\nfmt.Println(m.NumGC, m.NextGC)\nfmt.Println(debug.SetGCPercent(-1))" explain="gctrace 的 goal 与 MemStats.NextGC 是同一个目标堆，只是单位不同。SetGCPercent(-1) 只查询不修改，可确认调优是否生效。" />
 
 ## 随堂检测
-<Quiz no="96-1" q="下列哪一项不是 Go 1.23 的 GC 触发条件？" :options='["堆增长到 NextGC 目标", "距上次约两分钟由 sysmon 强制触发", "显式调用 runtime.GC()", "每创建一个 goroutine 检查一次"]' answer="3" explain="gcTrigger 只区分堆增长、周期时间与显式三类，创建 goroutine 不触发 GC。" />
-<Predict no="96-2" q="把 GOGC 从 100 调到 400，同样分配压力下 GC 次数和堆占用会怎么变？" :options='["次数变多、堆变小", "次数变少、堆变大", "两者都不变"]' answer="1" output="GC 次数下降，峰值堆明显上升" explain="GOGC 调大后 NextGC 变高，GC 变少，但两次 GC 之间堆积的对象更多。" />
+<Quiz no="096-1" q="下列哪一项不是 Go 1.23 的 GC 触发条件？" :options='["堆增长到 NextGC 目标", "距上次约两分钟由 sysmon 强制触发", "显式调用 runtime.GC()", "每创建一个 goroutine 检查一次"]' answer="3" explain="gcTrigger 只区分堆增长、周期时间与显式三类，创建 goroutine 不触发 GC。" />
+<Predict no="096-2" q="把 GOGC 从 100 调到 400，同样分配压力下 GC 次数和堆占用会怎么变？" :options='["次数变多、堆变小", "次数变少、堆变大", "两者都不变"]' answer="1" output="GC 次数下降，峰值堆明显上升" explain="GOGC 调大后 NextGC 变高，GC 变少，但两次 GC 之间堆积的对象更多。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["一次 GC 走 gcStart、并发标记、辅助标记、gcMarkDone、gcSweep", "调步算法动态算 NextGC 与 worker 数量", "GOGC 调大是内存换 CPU"]' :pitfalls='["把 MemoryLimit 当硬上限", "只看平均停顿", "同时改多个变量"]' summary="GC 调优是在目标堆、标记 CPU 与停顿之间做可测量的权衡。" />

@@ -1,11 +1,11 @@
 ---
-title: 第 70 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
+title: 第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
 description: 讲清认证与授权分离、Session 与 JWT 的取舍、令牌刷新与吊销难题、OAuth2 流程与 RBAC 权限模型，并点名常见安全漏洞
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="设计安全且可演进的身份体系" prereq="第 69 讲 · Elasticsearch" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="设计安全且可演进的身份体系" prereq="第 069 讲 · Elasticsearch" />
 
-# 第 70 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
+# 第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
 
 > 前面所有接口都默认「谁来都能调」。真实服务必须先回答两个不同的问题：**你是谁**（认证，Authentication）和**你能做什么**（授权，Authorization）。把这两件事混在一层里，是权限系统腐化的起点。这一讲先用标准库写一套 Session 服务，再手写一个 JWT 把「无状态」的代价摊开看，最后直面那个绕不过去的难题——签发出去的令牌怎么吊销，以及 OAuth2 与 RBAC 各自解决哪一段问题。
 
@@ -615,9 +615,9 @@ go test -race -run 'TestPayloadIsEncodedNotEncrypted|TestAlgNoneIsRejected|TestV
 
 ## 随堂检测
 
-<Quiz no="70-1" q="用户已登录但访问了无权限的管理接口，应返回哪个状态码？" :options='["401 Unauthorized","403 Forbidden","400 Bad Request","404 Not Found"]' answer="1" explain="401 表示身份缺失或无效，403 表示身份有效但权限不足；用 404 隐藏存在性只在特定安全场景下才考虑。" />
+<Quiz no="070-1" q="用户已登录但访问了无权限的管理接口，应返回哪个状态码？" :options='["401 Unauthorized","403 Forbidden","400 Bad Request","404 Not Found"]' answer="1" explain="401 表示身份缺失或无效，403 表示身份有效但权限不足；用 404 隐藏存在性只在特定安全场景下才考虑。" />
 
-<Predict no="70-2" q="无状态 JWT 的 access 有效期设为 7 天，且没有任何黑名单，用户改密码后会发生什么？" :options='["旧令牌立即失效","旧令牌在最长 7 天内仍可正常使用","服务端自动广播吊销","令牌会自动缩短有效期"]' answer="1" output="已签发的旧令牌仍带有效签名与未过期的 exp，最长 7 天内都会被服务端接受" explain="这正是 JWT 吊销难题：服务端不存状态就无法主动作废。解法是缩短有效期、加 refresh 轮换，或引入黑名单与令牌版本号。" />
+<Predict no="070-2" q="无状态 JWT 的 access 有效期设为 7 天，且没有任何黑名单，用户改密码后会发生什么？" :options='["旧令牌立即失效","旧令牌在最长 7 天内仍可正常使用","服务端自动广播吊销","令牌会自动缩短有效期"]' answer="1" output="已签发的旧令牌仍带有效签名与未过期的 exp，最长 7 天内都会被服务端接受" explain="这正是 JWT 吊销难题：服务端不存状态就无法主动作废。解法是缩短有效期、加 refresh 轮换，或引入黑名单与令牌版本号。" />
 
 ## 一页纸速记
 

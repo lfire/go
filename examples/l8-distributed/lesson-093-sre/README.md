@@ -1,9 +1,9 @@
-# 第 93 讲 · SRE：SLO、告警、容量与稳定性治理
+# 第 093 讲 · SRE：SLO、告警、容量与稳定性治理
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：用工程方法管理线上稳定性
 - **知识点**：SLI/SLO/错误预算 / 告警降噪 / 容量规划 / 压测与预案 / On-call 与复盘文化
-- **教程正文**：[第 93 讲 · SRE：SLO、告警、容量与稳定性治理](/distributed/sre)
+- **教程正文**：[第 093 讲 · SRE：SLO、告警、容量与稳定性治理](/distributed/sre)
 - **GitHub 目录**：[l8-distributed/lesson-093-sre](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-093-sre)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 62 讲 · 路由与框架：Gin / Echo / Chi
+# 第 062 讲 · 路由与框架：Gin / Echo / Chi
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：按场景选框架而不是凭习惯
 - **知识点**：路由树与分组 / 绑定与校验 / 中间件生态 / 三者对比 / 性能不是唯一指标
-- **教程正文**：[第 62 讲 · 路由与框架：Gin / Echo / Chi](/server/web-framework)
+- **教程正文**：[第 062 讲 · 路由与框架：Gin / Echo / Chi](/server/web-framework)
 - **GitHub 目录**：[l6-server/lesson-062-web-framework](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-062-web-framework)
 
 ## 运行

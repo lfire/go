@@ -1,9 +1,9 @@
-# 第 11 讲 · 包、模块与依赖管理
+# 第 011 讲 · 包、模块与依赖管理
 
 - **阶段**：L1 · 编程地基
 - **目标**：会组织代码、会加依赖、会处理版本
 - **知识点**：package 与 import / internal 可见性 / go.mod/go.sum / 语义化版本与 replace / init 与导入副作用
-- **教程正文**：[第 11 讲 · 包、模块与依赖管理](/foundation/packages)
+- **教程正文**：[第 011 讲 · 包、模块与依赖管理](/foundation/packages)
 - **GitHub 目录**：[l1-foundation/lesson-011-packages](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-011-packages)
 
 ## 运行

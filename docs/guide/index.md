@@ -17,14 +17,14 @@ description: 先看见整张地图：Go 是什么、怎么跑起来、这套教�
 
 ## 讲次安排
 
-本阶段共 **4 讲**（第 01–04 讲），合计约 100 分钟，难度 1–2 级。
+本阶段共 **4 讲**（第 001–004 讲），合计约 100 分钟，难度 1–2 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 01 | [开篇：Go 是什么，为什么值得学](/guide/opening) | ★☆☆☆☆ | 20 分钟 | Go 的诞生与设计哲学 · 静态类型与编译型 · 适用边界与典型雇主场景 |
-| 02 | [装好环境：工具链、工作区与 Modules](/guide/setup) | ★☆☆☆☆ | 25 分钟 | 安装与版本管理 · GOPATH 到 Go Modules · go env 与代理 |
-| 03 | [第一行 Go 代码：从源码到可执行文件](/guide/hello) | ★☆☆☆☆ | 25 分钟 | package main 与 import · func main 入口 · fmt.Println |
-| 04 | [工具链全景：build / test / fmt / vet / mod](/guide/toolchain) | ★★☆☆☆ | 30 分钟 | 常用命令地图 · gofmt 与 goimports · go vet 与静态检查 |
+| 001 | [开篇：Go 是什么，为什么值得学](/guide/opening) | ★☆☆☆☆ | 20 分钟 | Go 的诞生与设计哲学 · 静态类型与编译型 · 适用边界与典型雇主场景 |
+| 002 | [装好环境：工具链、工作区与 Modules](/guide/setup) | ★☆☆☆☆ | 25 分钟 | 安装与版本管理 · GOPATH 到 Go Modules · go env 与代理 |
+| 003 | [第一行 Go 代码：从源码到可执行文件](/guide/hello) | ★☆☆☆☆ | 25 分钟 | package main 与 import · func main 入口 · fmt.Println |
+| 004 | [工具链全景：build / test / fmt / vet / mod](/guide/toolchain) | ★★☆☆☆ | 30 分钟 | 常用命令地图 · gofmt 与 goimports · go vet 与静态检查 |
 
 ## 怎么学这一阶段
 
@@ -40,7 +40,7 @@ description: 先看见整张地图：Go 是什么、怎么跑起来、这套教�
 
 <ProgressTracker />
 
-[第 01 讲开始 →](/guide/opening) · [下一阶段：阶段一 · 编程地基](/foundation/)
+[第 001 讲开始 →](/guide/opening) · [下一阶段：阶段一 · 编程地基](/foundation/)
 
 
 ## 这套教程怎么用
@@ -78,6 +78,6 @@ description: 先看见整张地图：Go 是什么、怎么跑起来、这套教�
 - **已经在写 Go**：直接从阶段三（核心机制）或阶段五（工程化）切入，用阶段前测判断哪里需要补。
 - **想做项目**：去[工程实战](/projects/)挑一个 ★ 或 ★★ 的场景先跑通，再回头补原理。
 
-<Callout type="idea" title="一条贯穿线" text="第 25 讲做出内存版 KV，第 111–114 讲会把它演进成带 WAL、分片与 Raft 的分布式存储。前后对照着看，最能体会架构是怎么被需求一步步逼出来的。" />
+<Callout type="idea" title="一条贯穿线" text="第 025 讲做出内存版 KV，第 111–114 讲会把它演进成带 WAL、分片与 Raft 的分布式存储。前后对照着看，最能体会架构是怎么被需求一步步逼出来的。" />
 
-准备好了就从[第 01 讲](/guide/opening)开始，或者先看[118 讲完整目录](/guide/curriculum)。
+准备好了就从[第 001 讲](/guide/opening)开始，或者先看[118 讲完整目录](/guide/curriculum)。

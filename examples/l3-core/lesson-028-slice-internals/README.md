@@ -1,9 +1,9 @@
-# 第 28 讲 · 切片底层：三元组、扩容与共享陷阱
+# 第 028 讲 · 切片底层：三元组、扩容与共享陷阱
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：彻底掌握 slice 的内存行为
 - **知识点**：SliceHeader / 共享底层数组 / 扩容策略与版本差异 / append 别名陷阱 / full slice expression
-- **教程正文**：[第 28 讲 · 切片底层：三元组、扩容与共享陷阱](/core/slice-internals)
+- **教程正文**：[第 028 讲 · 切片底层：三元组、扩容与共享陷阱](/core/slice-internals)
 - **GitHub 目录**：[l3-core/lesson-028-slice-internals](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-028-slice-internals)
 
 ## 运行

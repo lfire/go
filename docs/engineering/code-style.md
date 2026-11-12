@@ -1,11 +1,11 @@
 ---
-title: 第 51 讲 · 代码规范、gofmt、vet 与 golangci-lint
+title: 第 051 讲 · 代码规范、gofmt、vet 与 golangci-lint
 description: 让代码风格由工具保证而非评审争论，掌握 Effective Go 命名与注释、gofmt / goimports / go vet 与 lint 规则集并接入 CI
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★☆☆☆" time="35 分钟" goal="让代码风格由工具保证" prereq="第 50 讲 · 项目结构与分层设计" />
+<StageHeader stage="L5 · 工程化与质量" level="★★☆☆☆" time="35 分钟" goal="让代码风格由工具保证" prereq="第 050 讲 · 项目结构与分层设计" />
 
-# 第 51 讲 · 代码规范、gofmt、vet 与 golangci-lint
+# 第 051 讲 · 代码规范、gofmt、vet 与 golangci-lint
 
 > 团队里最没价值的争论，是花半小时讨论缩进该用几个空格、大括号该不该换行。Go 的解法很干脆：把能机械判定的事全部交给工具，人只讨论设计与取舍。这一讲把这套「自动关卡」搭起来，重点不是记住多少条规则，而是理解每道关卡各自负责什么、为什么必须放进 CI 才算数。
 
@@ -313,11 +313,11 @@ app/app.go:5:20: fmt.Printf format %d has arg s of wrong type string
 
 **边界与失效条件**：facts 只沿 import 边向下游单向传递，兄弟包、被依赖包的依赖不会自动可见；`VetxOnly` 包不出诊断，所以「某个依赖包有可疑代码」要显式把它列进 `go vet` 的目标才报；`-vettool` 替换的是整套分析器，不是给内置 vet 追加一条，接错版本会同时丢掉所有内置检查；gob 编码的 fact 与导出它的分析器版本绑定，工具链与分析器版本不一致时 facts 可能被判为不兼容而失效。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；`go/analysis` 接口与 `unitchecker` 协议以 `golang.org/x/tools@v0.24.0` 为准（本机模块缓存内版本，与 Go 1.23 的 vet 套件配套），`FactTypes` / `Requires` 的 horizontal / vertical 命名、`PackageVetx` / `VetxOutput` / `VetxOnly` 字段自该框架稳定以来未变；`go vet -vettool` 自 Go 1.12 起提供，`-flags` 协议同期。第 51 讲前两版分别讲了 vet 只看静态形状、`-printf.funcs` 注册，这里补的是「静态形状之外的跨包结论从哪来、以及怎么换成自己的分析器」；第 50 讲的 import 依赖图正是 `PackageVetx` 这张映射的来源。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；`go/analysis` 接口与 `unitchecker` 协议以 `golang.org/x/tools@v0.24.0` 为准（本机模块缓存内版本，与 Go 1.23 的 vet 套件配套），`FactTypes` / `Requires` 的 horizontal / vertical 命名、`PackageVetx` / `VetxOutput` / `VetxOnly` 字段自该框架稳定以来未变；`go vet -vettool` 自 Go 1.12 起提供，`-flags` 协议同期。第 051 讲前两版分别讲了 vet 只看静态形状、`-printf.funcs` 注册，这里补的是「静态形状之外的跨包结论从哪来、以及怎么换成自己的分析器」；第 050 讲的 import 依赖图正是 `PackageVetx` 这张映射的来源。
 
 ### 三条最常见的误解
 
-**误解一：gofmt 与 lint 全绿，就代表代码没有隐藏 bug。** 反例：仓库早期没开 errcheck，一段 `f, _ := os.Open(path)` 能同时通过编译、gofmt 与人工评审；当配置文件缺失时 `f` 为 nil、错误被下划线吞掉，服务拿着零值配置照常启动，把流量打到默认地址，日志里连一条 error 都没有。静态工具只覆盖「可机械判定」的维度：格式、未检查的 error、可疑写法；边界条件、并发时序、错误语义要靠第 52 讲的表驱动测试、第 49 讲的 `go test -race` 和设计评审来兜。把「门禁绿」等同于「无 bug」，等于把工具的能力边界当成了系统的正确性边界。
+**误解一：gofmt 与 lint 全绿，就代表代码没有隐藏 bug。** 反例：仓库早期没开 errcheck，一段 `f, _ := os.Open(path)` 能同时通过编译、gofmt 与人工评审；当配置文件缺失时 `f` 为 nil、错误被下划线吞掉，服务拿着零值配置照常启动，把流量打到默认地址，日志里连一条 error 都没有。静态工具只覆盖「可机械判定」的维度：格式、未检查的 error、可疑写法；边界条件、并发时序、错误语义要靠第 052 讲的表驱动测试、第 049 讲的 `go test -race` 和设计评审来兜。把「门禁绿」等同于「无 bug」，等于把工具的能力边界当成了系统的正确性边界。
 
 **误解二：`go vet` 能查出并发问题与逻辑死锁。** 反例：两个 goroutine 累加同一个全局计数器且不加锁，`go vet ./...` 一声不吭，只有 `go test -race ./...` 才会报数据竞争；vet 的 `copylocks` 只检查「把含锁的值按值拷贝」这类局部模式，查不出加锁顺序不对导致的死锁。原因是 vet 做的是不执行程序的静态启发式分析，它刻意保守、只报高置信度问题以控制误报；动态行为必须由运行时检测与测试覆盖。正确做法是把 vet 当成最低成本的兜底，而不是并发正确性的依据。
 
@@ -508,11 +508,11 @@ golangci-lint run --enable-only=errcheck ./...
 
 现象：没有人改 lint 相关文件，某个周一早上所有 PR 的格式检查同时失败。排查路径：① 看 diff，只有业务文件改动，排除代码回归；② 翻 CI 日志，发现 golangci-lint 从 v1.59.1 变成了新版本——workflow 里写的是浮动版本或 action 自动升级；③ 新版本新增或收紧了默认规则，同一份代码被判出更多问题；④ 根因是规则集合没有被锁定，门禁的结论取决于上游哪天发版；⑤ 修复是把 `version: v1.59.1` 与 `go-version-file: go.mod` 钉死，升级时先在本地跑 `golangci-lint config verify` 与 `golangci-lint run`，确认新规则影响后再改配置。
 
-这与前面「工具链版本要锁定」是同一个道理的两种表现：lint 是规则的集合，集合本身会随版本变，Go 版本又会改变 vet 与 staticcheck 的判断；不锁定，等于把「今天能不能合入」交给外部发版节奏。第 60 讲讲制品与回滚时会再遇到它——凡是影响构建结论的输入，都必须可复现。
+这与前面「工具链版本要锁定」是同一个道理的两种表现：lint 是规则的集合，集合本身会随版本变，Go 版本又会改变 vet 与 staticcheck 的判断；不锁定，等于把「今天能不能合入」交给外部发版节奏。第 060 讲讲制品与回滚时会再遇到它——凡是影响构建结论的输入，都必须可复现。
 
 ### 与 L10 实战工程结构的呼应
 
-L10 的实战工程从第一讲就把 `.golangci.yml` 与 workflow 一起提交进仓库：`/projects/kv-1-memory` 用最小规则集守住接口与错误，后面 `/projects/kv-2-network`、`/projects/kv-3-async` 逐步加并发与持久化代码时，靠的是同一套门禁防止新代码把旧约定冲掉；`/projects/cli-codegen` 生成的代码要靠 `issues.exclude-rules` 按目录精确排除，正是本讲误报分流用得上的地方。再往后，第 52 讲的表驱动测试、第 54 讲 fuzz 找到的边界、第 59 讲 pprof 定位到的热点，结论都需要落回测试与 CI 才能防止回归——工具链不是某一讲的知识，而是贯穿所有实战的地基。
+L10 的实战工程从第一讲就把 `.golangci.yml` 与 workflow 一起提交进仓库：`/projects/kv-1-memory` 用最小规则集守住接口与错误，后面 `/projects/kv-2-network`、`/projects/kv-3-async` 逐步加并发与持久化代码时，靠的是同一套门禁防止新代码把旧约定冲掉；`/projects/cli-codegen` 生成的代码要靠 `issues.exclude-rules` 按目录精确排除，正是本讲误报分流用得上的地方。再往后，第 052 讲的表驱动测试、第 054 讲 fuzz 找到的边界、第 059 讲 pprof 定位到的热点，结论都需要落回测试与 CI 才能防止回归——工具链不是某一讲的知识，而是贯穿所有实战的地基。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -526,9 +526,9 @@ L10 的实战工程从第一讲就把 `.golangci.yml` 与 workflow 一起提交�
 
 ## 随堂检测
 
-<Quiz no="51-1" q="下面哪项最适合交给 gofmt，而不是靠代码评审？" :options='["函数该不该拆分","缩进、对齐与大括号位置","命名是否达意","错误该不该包装"]' answer="1" explain="gofmt 只做机械排版且幂等；拆分、命名、错误语义属于设计判断，工具不该也不越界。" />
+<Quiz no="051-1" q="下面哪项最适合交给 gofmt，而不是靠代码评审？" :options='["函数该不该拆分","缩进、对齐与大括号位置","命名是否达意","错误该不该包装"]' answer="1" explain="gofmt 只做机械排版且幂等；拆分、命名、错误语义属于设计判断，工具不该也不越界。" />
 
-<Predict no="51-2" q="某仓库所有文件都已格式化，执行 gofmt -l . 会输出什么？" :options='["列出全部 .go 文件路径","什么都不输出","输出 gofmt 版本号","报编译错误"]' answer="1" output="（无输出，退出码为 0）" explain="gofmt -l 只列出需要重新格式化的文件；全部合规时输出为空，因此常被写成 test -z 形式的 CI 断言。" />
+<Predict no="051-2" q="某仓库所有文件都已格式化，执行 gofmt -l . 会输出什么？" :options='["列出全部 .go 文件路径","什么都不输出","输出 gofmt 版本号","报编译错误"]' answer="1" output="（无输出，退出码为 0）" explain="gofmt -l 只列出需要重新格式化的文件；全部合规时输出为空，因此常被写成 test -z 形式的 CI 断言。" />
 
 ## 一页纸速记
 

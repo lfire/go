@@ -1,9 +1,9 @@
-# 第 22 讲 · 泛型：类型参数与约束
+# 第 022 讲 · 泛型：类型参数与约束
 
 - **阶段**：L2 · 语法核心
 - **目标**：用泛型消除重复而不过度设计
 - **知识点**：类型参数语法 / constraints 与 comparable / 泛型函数与类型 / 类型推断 / 适用场景与代价
-- **教程正文**：[第 22 讲 · 泛型：类型参数与约束](/basics/generics)
+- **教程正文**：[第 022 讲 · 泛型：类型参数与约束](/basics/generics)
 - **GitHub 目录**：[l2-basics/lesson-022-generics](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-022-generics)
 
 ## 运行

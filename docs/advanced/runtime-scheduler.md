@@ -1,13 +1,13 @@
 ---
-title: 第 95 讲 · 调度器源码：schedule / findRunnable / sysmon
+title: 第 095 讲 · 调度器源码：schedule / findRunnable / sysmon
 description: 把 GMP 从概念落到代码，读懂调度主循环、取 G 顺序、工作窃取与异步抢占
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="把 GMP 从概念落到代码" prereq="第 41 讲 · 调度循环：抢占、窃取与 handoff" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="把 GMP 从概念落到代码" prereq="第 041 讲 · 调度循环：抢占、窃取与 handoff" />
 
-# 第 95 讲 · 调度器源码：schedule / findRunnable / sysmon
+# 第 095 讲 · 调度器源码：schedule / findRunnable / sysmon
 
-> 第 40 讲画过 GMP 的关系图，第 41 讲讲过抢占与窃取的思路，但那些都是模型。真正决定「下一刻哪个 goroutine 上 CPU」的，是 runtime/proc.go 里不到百行的 schedule 主循环，以及它调用的 findRunnable。本讲把模型对回代码：看签名、看字段、看取 G 的优先顺序，再用 `GODEBUG=schedtrace` 与可运行程序把结论验证一遍。源码以 Go 1.23.8 为准。
+> 第 040 讲画过 GMP 的关系图，第 041 讲讲过抢占与窃取的思路，但那些都是模型。真正决定「下一刻哪个 goroutine 上 CPU」的，是 runtime/proc.go 里不到百行的 schedule 主循环，以及它调用的 findRunnable。本讲把模型对回代码：看签名、看字段、看取 G 的优先顺序，再用 `GODEBUG=schedtrace` 与可运行程序把结论验证一遍。源码以 Go 1.23.8 为准。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-95" title="本讲目标" :items='["复述 schedule 主循环与 findRunnable 的取 G 顺序", "说清本地队列、全局队列与工作窃取各自的角色", "用 schedtrace 与紧循环程序验证 sysmon 的异步抢占"]' />
@@ -285,8 +285,8 @@ GODEBUG=schedtrace=1000,scheddetail=1 ./myserver 2> sched.log
 <Exercise title="用 schedtrace 观察队列溢出" task="把第三段程序的 n 改成 600 配合 schedtrace 运行，观察全局 runqueue 峰值；再改成 100 对比。" :hints='["用 GODEBUG=schedtrace=100 缩短采样间隔", "关注 runqueue 字段"]' solution="n := 600\nstart := make(chan struct{})\nwg.Add(n)\nfor range items {\n    go func() {\n        defer wg.Done()\n        waitOn(start)\n    }()\n}\nclose(start)\nwg.Wait()" explain="n 为 600 时大量 G 同时就绪，超过本地队列容量 256，溢出到全局队列；n 为 100 时几乎无溢出。完整代码见第三段。" />
 
 ## 随堂检测
-<Quiz no="95-1" q="findRunnable 在常规路径上的取 G 优先顺序是？" :options='["全局、本地、窃取", "本地、全局、窃取", "窃取、本地、全局", "netpoll、本地、全局"]' answer="1" explain="先无锁查本地 runqget，再取全局 globrunqget，最后跨 P 做 runqsteal，越靠前代价越低。" />
-<Predict no="95-2" q="GOMAXPROCS(1) 下，一个无函数调用的纯计算紧循环，会让 main 永远拿不到 CPU 吗？" :options='["会，必须手工 Gosched", "不会，sysmon 约 10ms 后异步抢占", "会，但只在 Go 1.13 及以前"]' answer="1" output="100ms 内 main 仍被调度：异步抢占生效" explain="Go 1.14 起 sysmon 按 forcePreemptNS 打抢占标志，asyncPreempt 把超时 G 换下。" />
+<Quiz no="095-1" q="findRunnable 在常规路径上的取 G 优先顺序是？" :options='["全局、本地、窃取", "本地、全局、窃取", "窃取、本地、全局", "netpoll、本地、全局"]' answer="1" explain="先无锁查本地 runqget，再取全局 globrunqget，最后跨 P 做 runqsteal，越靠前代价越低。" />
+<Predict no="095-2" q="GOMAXPROCS(1) 下，一个无函数调用的纯计算紧循环，会让 main 永远拿不到 CPU 吗？" :options='["会，必须手工 Gosched", "不会，sysmon 约 10ms 后异步抢占", "会，但只在 Go 1.13 及以前"]' answer="1" output="100ms 内 main 仍被调度：异步抢占生效" explain="Go 1.14 起 sysmon 按 forcePreemptNS 打抢占标志，asyncPreempt 把超时 G 换下。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["schedule 从 top 标签重新挑 G", "取 G 顺序：本地、全局、窃取", "p.runq 容量 256，超出溢出全局队列"]' :pitfalls='["GOMAXPROCS 远大于核数：只增切换开销", "死记默认 P 数：版本规则不同", "以为 sysmon 会帮忙取 G"]' summary="调度器只回答两件事：怎么最快拿到下一个 G，怎么不让任何 G 饿死。" />

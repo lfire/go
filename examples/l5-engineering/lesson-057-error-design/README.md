@@ -1,9 +1,9 @@
-# 第 57 讲 · 错误码、错误栈与统一响应
+# 第 057 讲 · 错误码、错误栈与统一响应
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：设计前后端都能用的错误契约
 - **知识点**：错误分类与错误码 / 错误栈封装 / 内部错误到 HTTP/gRPC 状态 / 不泄露细节 / 可观测性
-- **教程正文**：[第 57 讲 · 错误码、错误栈与统一响应](/engineering/error-design)
+- **教程正文**：[第 057 讲 · 错误码、错误栈与统一响应](/engineering/error-design)
 - **GitHub 目录**：[l5-engineering/lesson-057-error-design](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-057-error-design)
 
 ## 运行

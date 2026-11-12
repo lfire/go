@@ -1,11 +1,11 @@
 ---
-title: 第 69 讲 · Elasticsearch 与倒排索引
+title: 第 069 讲 · Elasticsearch 与倒排索引
 description: 从倒排索引讲清搜索为何快，覆盖分词与 mapping、查询 DSL、写入与刷新机制以及数据同步与异构，理解何时该用搜索引擎
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="理解搜索为何快以及何时该用" prereq="第 68 讲 · 消息队列" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="理解搜索为何快以及何时该用" prereq="第 068 讲 · 消息队列" />
 
-# 第 69 讲 · Elasticsearch 与倒排索引
+# 第 069 讲 · Elasticsearch 与倒排索引
 
 > 数据库的 `LIKE '%关键字%'` 为什么慢？因为它只能逐行扫描，再对每行做一次字符串匹配，索引完全用不上。搜索引擎换了个方向：不按「文档里有什么词」来存，而按「每个词出现在哪些文档里」来存。这个方向一换，查询就从「翻遍整本书」变成「查目录再取交集」。这一讲先用几十行 Go 手写一个倒排索引把原理跑通，再接上真实的查询 DSL、写入刷新机制，最后解决最容易被忽略的一环：数据怎么从主库可靠地同步过来。
 
@@ -539,9 +539,9 @@ go test -race -run TestVersionGuardRejectsOutOfOrderEvents -v ./...
 
 ## 随堂检测
 
-<Quiz no="69-1" q="关于 text 与 keyword，下列说法正确的是？" :options='["text 不分词，适合精确过滤","keyword 会分词，适合全文检索","text 分词用于全文检索，keyword 不分词用于精确匹配与聚合","两者只是命名不同，行为完全一样"]' answer="2" explain="text 经分词器切成词项建倒排，支持 match 与打分；keyword 原样入索引，适合 term 精确过滤、排序与聚合。" />
+<Quiz no="069-1" q="关于 text 与 keyword，下列说法正确的是？" :options='["text 不分词，适合精确过滤","keyword 会分词，适合全文检索","text 分词用于全文检索，keyword 不分词用于精确匹配与聚合","两者只是命名不同，行为完全一样"]' answer="2" explain="text 经分词器切成词项建倒排，支持 match 与打分；keyword 原样入索引，适合 term 精确过滤、排序与聚合。" />
 
-<Predict no="69-2" q="应用写入一条文档后立即用 ES 查询，默认配置下最可能的结果是什么？" :options='["立刻可搜到，ES 是强一致的","可能约 1 秒后才可搜到","永远搜不到，需要手动 flush","直接报写入冲突"]' answer="1" output="写入先落 translog 与内存缓冲，默认每 1 秒 refresh 生成可搜索段，因此存在约 1 秒的可见性延迟" explain="ES 是近实时系统；refresh 才让新段可搜索。测试里可用 refresh=true 强制刷新，但生产逐条刷新会严重拖慢写入。" />
+<Predict no="069-2" q="应用写入一条文档后立即用 ES 查询，默认配置下最可能的结果是什么？" :options='["立刻可搜到，ES 是强一致的","可能约 1 秒后才可搜到","永远搜不到，需要手动 flush","直接报写入冲突"]' answer="1" output="写入先落 translog 与内存缓冲，默认每 1 秒 refresh 生成可搜索段，因此存在约 1 秒的可见性延迟" explain="ES 是近实时系统；refresh 才让新段可搜索。测试里可用 refresh=true 强制刷新，但生产逐条刷新会严重拖慢写入。" />
 
 ## 一页纸速记
 

@@ -1,9 +1,9 @@
-# 第 27 讲 · 逃逸分析与编译器决策
+# 第 027 讲 · 逃逸分析与编译器决策
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：看懂 -gcflags -m 并写出少分配的代码
 - **知识点**：栈分配与逃逸 / 常见逃逸场景 / 查看逃逸分析 / 指针返回 / 减少堆分配的实践
-- **教程正文**：[第 27 讲 · 逃逸分析与编译器决策](/core/escape-analysis)
+- **教程正文**：[第 027 讲 · 逃逸分析与编译器决策](/core/escape-analysis)
 - **GitHub 目录**：[l3-core/lesson-027-escape-analysis](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-027-escape-analysis)
 
 ## 运行

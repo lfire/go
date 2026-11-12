@@ -1,9 +1,9 @@
-# 第 34 讲 · defer 实现与 open-coded 优化
+# 第 034 讲 · defer 实现与 open-coded 优化
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：知道 defer 为何从慢变快
 - **知识点**：堆分配 defer / 栈上 defer / 开放编码 / 性能对比 / 仍需注意的场景
-- **教程正文**：[第 34 讲 · defer 实现与 open-coded 优化](/core/defer-internals)
+- **教程正文**：[第 034 讲 · defer 实现与 open-coded 优化](/core/defer-internals)
 - **GitHub 目录**：[l3-core/lesson-034-defer-internals](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-034-defer-internals)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 50 讲 · 项目结构与分层设计
+# 第 050 讲 · 项目结构与分层设计
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：搭出能被团队接手的项目骨架
 - **知识点**：cmd/internal/pkg/api / 按领域还是按层 / 依赖方向 / DO/DTO/VO / 避免过度设计
-- **教程正文**：[第 50 讲 · 项目结构与分层设计](/engineering/project-layout)
+- **教程正文**：[第 050 讲 · 项目结构与分层设计](/engineering/project-layout)
 - **GitHub 目录**：[l5-engineering/lesson-050-project-layout](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-050-project-layout)
 
 ## 运行

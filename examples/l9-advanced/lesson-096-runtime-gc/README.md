@@ -1,9 +1,9 @@
-# 第 96 讲 · GC 源码与真实调优案例
+# 第 096 讲 · GC 源码与真实调优案例
 
 - **阶段**：L9 · 资深进阶与源码
 - **目标**：从 gcStart 到 gcMarkDone 看懂一次 GC
 - **知识点**：触发条件 / 后台标记 worker / 辅助标记与屏障 / 调步算法 / GOGC/MemoryLimit 实战
-- **教程正文**：[第 96 讲 · GC 源码与真实调优案例](/advanced/runtime-gc)
+- **教程正文**：[第 096 讲 · GC 源码与真实调优案例](/advanced/runtime-gc)
 - **GitHub 目录**：[l9-advanced/lesson-096-runtime-gc](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-096-runtime-gc)
 
 ## 运行

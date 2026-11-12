@@ -53,7 +53,7 @@ func TestConcurrentApply(t *testing.T) {
 	wg.Wait()
 }
 
-// tinyLegacy 复刻第 25 讲 MemStore 的方法集，并补一把锁：真实 MemStore
+// tinyLegacy 复刻第 025 讲 MemStore 的方法集，并补一把锁：真实 MemStore
 // 用 RWMutex 保护 map，测试替身也必须线程安全，因为 TTLMemory 的后台
 // 回收会从另一个 goroutine 调用 inner.Apply。
 type tinyLegacy struct {

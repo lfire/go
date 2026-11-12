@@ -1,9 +1,9 @@
-# 第 72 讲 · RPC 原理与自研最小 RPC
+# 第 072 讲 · RPC 原理与自研最小 RPC
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：从 HTTP 一步步推导出 RPC 要解决什么
 - **知识点**：远程调用的本质 / 协议与序列化 /  stub 与编解码 / 超时与错误 / 最小可用实现
-- **教程正文**：[第 72 讲 · RPC 原理与自研最小 RPC](/microservice/rpc-basics)
+- **教程正文**：[第 072 讲 · RPC 原理与自研最小 RPC](/microservice/rpc-basics)
 - **GitHub 目录**：[l7-microservice/lesson-072-rpc-basics](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-072-rpc-basics)
 
 ## 运行

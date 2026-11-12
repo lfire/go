@@ -1,11 +1,11 @@
 ---
-title: 第 35 讲 · 程序启动、init 顺序与包初始化
+title: 第 035 讲 · 程序启动、init 顺序与包初始化
 description: 搞清 main 之前发生了什么：依赖图、init 执行顺序、runtime 初始化与 inittrace 启动耗时分析
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="40 分钟" goal="搞清楚 main 之前发生了什么" prereq="第 34 讲 · defer 实现与 open-coded 优化" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="40 分钟" goal="搞清楚 main 之前发生了什么" prereq="第 034 讲 · defer 实现与 open-coded 优化" />
 
-# 第 35 讲 · 程序启动、init 顺序与包初始化
+# 第 035 讲 · 程序启动、init 顺序与包初始化
 
 > 一个 Go 程序在 `main` 的第一行执行之前，已经做完了解析参数、初始化调度器、给所有包级变量求值、跑完所有 `init`。为什么某个包一导入就变慢？为什么 init 里读配置是个坏主意？这一讲把这条隐藏的流水线拆开，并用 `GODEBUG=inittrace=1` 把耗时量出来。
 
@@ -60,7 +60,7 @@ func main() {
 
 <FlowTimeline :steps='[{"title":"rt0_go","desc":"汇编入口，设置 g0 栈与 argc、argv","tone":"gray"},{"title":"schedinit","desc":"初始化 P 数量、mheap、GC 与栈池","tone":"blue"},{"title":"newproc","desc":"创建 main goroutine，指向 runtime.main","tone":"blue"},{"title":"doInit","desc":"按 inittask 依赖图执行所有包级变量与 init","tone":"violet"},{"title":"main.main","desc":"用户入口，此时全局状态已就绪","tone":"green"}]' direction="horizontal" />
 
-runtime 侧的入口是汇编 `rt0_go`，`schedinit` 里把 P 的数量设为 GOMAXPROCS 并初始化堆、GC 与栈池，随后 `newproc` 造出 main goroutine，`mstart` 启动调度，`runtime.main` 再调用 `doInit` 跑 `..inittask` 依赖图，最后转 `main.main`。这条路径的源码精读留到第 94 讲，本讲只需建立「main 之前有一段确定次序」的认知。链接器生成的 `..inittask` 符号可用 `go tool nm ./binary | grep inittask` 查到。
+runtime 侧的入口是汇编 `rt0_go`，`schedinit` 里把 P 的数量设为 GOMAXPROCS 并初始化堆、GC 与栈池，随后 `newproc` 造出 main goroutine，`mstart` 启动调度，`runtime.main` 再调用 `doInit` 跑 `..inittask` 依赖图，最后转 `main.main`。这条路径的源码精读留到第 094 讲，本讲只需建立「main 之前有一段确定次序」的认知。链接器生成的 `..inittask` 符号可用 `go tool nm ./binary | grep inittask` 查到。
 
 init 最适合做无副作用、无 I/O 的一次性装配：注册编解码器或驱动、填只读查表、做不变量校验。标准库 `image/png` 在 init 里调 `image.RegisterFormat`，数据库驱动用 `sql.Register`；`import _ "pkg"` 空白导入就是为了只触发这个注册。
 
@@ -201,7 +201,7 @@ tlsinit → save_g → check → args → osinit → schedinit → newproc(mainP
          → runtime.main → doInit(..inittask) → main.main
 ```
 
-`schedinit()`（`runtime/proc.go`）内部不是随意排列，注释把依赖写得很死：`raceinit` 必须最先（`mallocinit` 会调 `racemapshadow`）→ `worldStopped()` → `ticks.init()` → `moduledataverify()` → `stackinit()` → `mallocinit()` → `getGodebugEarly()` → `cpuinit(godebug)`（必须先于 `alginit`）→ `randinit()`（必须先于 `alginit`、`mcommoninit`）→ `alginit()`（此后才允许用 map/hash/rand）→ `mcommoninit(gp.m, -1)` → `modulesinit()` → `typelinksinit()` → `itabsinit()` → `stkobjinit()`（必须先于 GC 启动）→ `sigsave` → `goargs/goenvs/secure/checkfds/parsedebugvars` → `gcinit()` → `gcrash.stack = stackalloc(16384)` → `mProfStackInit(gp.m)` → 取 `ncpu` 或 `GOMAXPROCS` 环境变量 → `procresize(procs)` 建出 P → `worldStarted()`。字段级状态是：`sched.maxmcount = 10000`、`sched.lastpoll.Store(nanotime())`、`worldStopped` 到 `worldStarted` 之间整段时间**不允许 P 运行**。这也解释了为什么第 30 讲 `itabsinit` 能「在启动时把静态 itab 批量塞进表」——它排在 `alginit` 之后、GC 之前，正好在 runtime 可用而用户 init 未跑的窗口里。
+`schedinit()`（`runtime/proc.go`）内部不是随意排列，注释把依赖写得很死：`raceinit` 必须最先（`mallocinit` 会调 `racemapshadow`）→ `worldStopped()` → `ticks.init()` → `moduledataverify()` → `stackinit()` → `mallocinit()` → `getGodebugEarly()` → `cpuinit(godebug)`（必须先于 `alginit`）→ `randinit()`（必须先于 `alginit`、`mcommoninit`）→ `alginit()`（此后才允许用 map/hash/rand）→ `mcommoninit(gp.m, -1)` → `modulesinit()` → `typelinksinit()` → `itabsinit()` → `stkobjinit()`（必须先于 GC 启动）→ `sigsave` → `goargs/goenvs/secure/checkfds/parsedebugvars` → `gcinit()` → `gcrash.stack = stackalloc(16384)` → `mProfStackInit(gp.m)` → 取 `ncpu` 或 `GOMAXPROCS` 环境变量 → `procresize(procs)` 建出 P → `worldStarted()`。字段级状态是：`sched.maxmcount = 10000`、`sched.lastpoll.Store(nanotime())`、`worldStopped` 到 `worldStarted` 之间整段时间**不允许 P 运行**。这也解释了为什么第 030 讲 `itabsinit` 能「在启动时把静态 itab 批量塞进表」——它排在 `alginit` 之后、GC 之前，正好在 runtime 可用而用户 init 未跑的窗口里。
 
 **runtime 自身耗时**：`GODEBUG=inittrace=1` 的 `clock` 只覆盖「包级变量求值加所有 init」，不含 `schedinit` 这一大段。换一个观察角度——在**第一个 `init()` 里**读 `syscall.Getrusage(RUSAGE_SELF, &ru)`，`Utime`/`Stime` 是进程到目前为止消耗的 CPU 时间，`Minflt` 是次要缺页次数，`Maxrss` 是峰值常驻集；这些数恰好就是 `rt0_go` 到 `doInit` 之间 runtime 自身初始化的累计代价，且不需要 root 权限、不依赖 GODEBUG 解析。
 
@@ -214,9 +214,9 @@ sed -n '782,880p' "$(go env GOROOT)/src/runtime/proc.go"
 sed -n '80,100p' "$(go env GOROOT)/src/runtime/asm_arm64.s"
 ```
 
-<OutputBox title="rt0_go 入口调用链（Go 1.23.8 / darwin arm64）" output="  asm_arm64.s:27  CALL runtime.tlsinit.abi0(SB)\n  asm_arm64.s:59  CALL runtime.save_g.abi0(SB)\n  asm_arm64.s:74  CALL runtime.check.abi0(SB)\n  asm_arm64.s:84  CALL runtime.args.abi0(SB)\n  asm_arm64.s:85  CALL runtime.osinit.abi0(SB)\n  asm_arm64.s:86  CALL runtime.schedinit.abi0(SB)\n  asm_arm64.s:93  CALL runtime.newproc.abi0(SB)\n  asm_arm64.s:97  CALL runtime.mstart.abi0(SB)" note="八条 CALL 与源码行号一一对应；.abi0 后缀说明汇编入口走栈式 ABI（回看第 26 讲）。" />
+<OutputBox title="rt0_go 入口调用链（Go 1.23.8 / darwin arm64）" output="  asm_arm64.s:27  CALL runtime.tlsinit.abi0(SB)\n  asm_arm64.s:59  CALL runtime.save_g.abi0(SB)\n  asm_arm64.s:74  CALL runtime.check.abi0(SB)\n  asm_arm64.s:84  CALL runtime.args.abi0(SB)\n  asm_arm64.s:85  CALL runtime.osinit.abi0(SB)\n  asm_arm64.s:86  CALL runtime.schedinit.abi0(SB)\n  asm_arm64.s:93  CALL runtime.newproc.abi0(SB)\n  asm_arm64.s:97  CALL runtime.mstart.abi0(SB)" note="八条 CALL 与源码行号一一对应；.abi0 后缀说明汇编入口走栈式 ABI（回看第 026 讲）。" />
 
-逐字段解释：`tlsinit`/`save_g` 建立 g0 与 TLS，`check` 校验，`args` 收 `argc/argv`，`osinit` 取 `ncpu` 与页大小，`schedinit` 跑上面那一长串初始化，`newproc` 造 main goroutine，`mstart` 启动 M——顺序与 `sed -n '80,100p'` 的汇编原文完全一致。八条都带 `.abi0` 后缀，正是第 26 讲「汇编/反射/cgo 仍走栈式 ABI0」的现实落点：这段入口由汇编写成，调用的是 ABI0 入口而非寄存器 ABI 的 `ABIInternal`。`sed -n '782,880p' proc.go` 给出 `schedinit` 的调用顺序与「must run before」注释，把「为什么是这个次序」从时间线变成源码约束；`procresize(procs)` 与 `worldStarted()` 两行则把「P 何时可运行」钉在 `schedinit` 的末尾。
+逐字段解释：`tlsinit`/`save_g` 建立 g0 与 TLS，`check` 校验，`args` 收 `argc/argv`，`osinit` 取 `ncpu` 与页大小，`schedinit` 跑上面那一长串初始化，`newproc` 造 main goroutine，`mstart` 启动 M——顺序与 `sed -n '80,100p'` 的汇编原文完全一致。八条都带 `.abi0` 后缀，正是第 026 讲「汇编/反射/cgo 仍走栈式 ABI0」的现实落点：这段入口由汇编写成，调用的是 ABI0 入口而非寄存器 ABI 的 `ABIInternal`。`sed -n '782,880p' proc.go` 给出 `schedinit` 的调用顺序与「must run before」注释，把「为什么是这个次序」从时间线变成源码约束；`procresize(procs)` 与 `worldStarted()` 两行则把「P 何时可运行」钉在 `schedinit` 的末尾。
 
 新观察角度二：用 `Getrusage` 量出 `inittrace` 看不到的那一段。目录中放两个带构建标签的文件：
 
@@ -274,7 +274,7 @@ go run -tags heavy .
 
 逐字段解释：`Utime.Sec/Usec` 与 `Stime.Sec/Usec` 是进程累计用户态/内核态 CPU 秒数，在**第一个 init 执行的瞬间**读，因此包含 `rt0_go` 到 `schedinit`、`doInit` 之前的全部 runtime 开销；`Minflt` 是次要缺页（映射到物理页但未换盘），`Maxrss` 是峰值常驻字节数。多一个 `_ "net/http"` 后四项同步上升：`Utime` 约从 1.1 ms 到 3.8 ms、`Minflt` 从 457 到 776、`Maxrss` 从约 4 MiB 到约 8.5 MiB——增量来自 `net/http` 及其依赖链的包级变量与 init，被算进了「首个 init 之前」的累计值，因为那些包的 init 排在 main 包 init 之前。这与第 4 节「重活移出 init」是同一现象，但观测手段从 `inittrace` 的逐包 `clock`/`bytes` 换成了进程级 CPU 与缺页计数：`inittrace` 只报 init 段，`Getrusage` 还能看到 runtime 自身那段。注意绝对值随机器与构建缓存波动，只比同一台机器上的相对增量。
 
-边界：`rt0_go` 的指令序列是 arm64 + darwin 专属，amd64 或 Linux 的 `CALL` 目标与 `.abi0` 表现不同；`schedinit` 的调用顺序与各「must run before」注释是 Go 1.23 的约束，跨版本先对照 `runtime/proc.go`；`Getrusage` 的 `RUSAGE_SELF` 只算本进程、不含子进程，Windows 上字段语义不同；`Maxrss` 在 macOS 以字节计、Linux 以 KiB 计，跨平台别直接比数值；`init()` 里读 `Getrusage` 本身是一次系统调用，会给读数引入微秒级偏差；`go tool objdump` 的地址随构建变化，只比符号与源码行号。这条链正是第 94 讲（runtime 源码：进程启动与初始化）的入口，那里会把 `rt0_go` 到 `runtime.main` 逐帧精读；第 95 讲讲 `procresize` 如何确定 P 数量，第 96 讲讲 `gcinit` 与堆初始化的衔接。
+边界：`rt0_go` 的指令序列是 arm64 + darwin 专属，amd64 或 Linux 的 `CALL` 目标与 `.abi0` 表现不同；`schedinit` 的调用顺序与各「must run before」注释是 Go 1.23 的约束，跨版本先对照 `runtime/proc.go`；`Getrusage` 的 `RUSAGE_SELF` 只算本进程、不含子进程，Windows 上字段语义不同；`Maxrss` 在 macOS 以字节计、Linux 以 KiB 计，跨平台别直接比数值；`init()` 里读 `Getrusage` 本身是一次系统调用，会给读数引入微秒级偏差；`go tool objdump` 的地址随构建变化，只比符号与源码行号。这条链正是第 094 讲（runtime 源码：进程启动与初始化）的入口，那里会把 `rt0_go` 到 `runtime.main` 逐帧精读；第 095 讲讲 `procresize` 如何确定 P 数量，第 096 讲讲 `gcinit` 与堆初始化的衔接。
 
 ### 边界、常见误解与前后联系
 
@@ -286,7 +286,7 @@ go run -tags heavy .
 
 边界要点：所有 init 都在 main goroutine 上**串行**执行，不存在并发初始化；包级变量初始化表达式里若用 `go` 启动后台任务，它可能在 init 完成前就跑、顺序不受保护；`inittrace=1` 的 `clock` 不含被依赖包的累计，`bytes`/`allocs` 是 init 期间的分配量而非常驻内存；`os.Exit` 与 init 里的 panic 会直接终止程序（main 还没开始，没有 recover 机会）；跨包无依赖的 init 顺序由文件名字典序决定、随文件名变化；交叉编译改变 GOARCH/GOOS 但不改变依赖图顺序；Go 版本升级可能改变 `inittask` 布局但语义不变；观测局限是 `inittrace` 看不到 runtime 自身初始化与链接、加载阶段的耗时，冷启动分析要叠加上一层计时或 `strace` 类工具。
 
-前后联系：第 11 讲（包与 init 初识）给用法，本讲给次序与代价；第 94 讲（runtime 源码：进程启动与初始化）从汇编 `rt0_go` 到 `schedinit`、`newproc`、`mstart`、`runtime.main` 精读整条路径，是本讲最直接的源码延续，第 96 讲（GC 源码）讲 `schedinit` 里堆与 GC 的初始化，第 95 讲（调度器源码）讲 P 数量在 `schedinit` 中如何确定，第 100 讲（极致性能优化）把「把重活移出 init」列为冷启动优化项。
+前后联系：第 011 讲（包与 init 初识）给用法，本讲给次序与代价；第 094 讲（runtime 源码：进程启动与初始化）从汇编 `rt0_go` 到 `schedinit`、`newproc`、`mstart`、`runtime.main` 精读整条路径，是本讲最直接的源码延续，第 096 讲（GC 源码）讲 `schedinit` 里堆与 GC 的初始化，第 095 讲（调度器源码）讲 P 数量在 `schedinit` 中如何确定，第 100 讲（极致性能优化）把「把重活移出 init」列为冷启动优化项。
 
 ## 4. 工程实践
 
@@ -336,8 +336,8 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="35-1" q="两个互不依赖的包 A 和 B 都被 main 导入，它们的 init 先后由什么决定？" :options='["main 里 import 的书写顺序","依赖图拓扑序加文件名字典序，不应依赖隐含先后","按包名长度","随机"]' answer="1" explain="跨包按依赖图拓扑序、同包按文件名字典序与出现顺序；由于无依赖包之间顺序不稳定，不应写依赖它。" />
-<Predict no="35-2" q="代码里写 import _ 某包，最可能发生什么？" :options='["编译报错，因为没有用到该包","只触发该包的 init，不引入任何标识符","把该包所有符号导入当前文件","跳过该包的初始化"]' answer="1" output="该包被正常初始化并执行其 init，当前文件不获得任何新标识符" explain="空白导入的唯一作用是触发 init，典型用途是让编解码器或数据库驱动完成自注册。" />
+<Quiz no="035-1" q="两个互不依赖的包 A 和 B 都被 main 导入，它们的 init 先后由什么决定？" :options='["main 里 import 的书写顺序","依赖图拓扑序加文件名字典序，不应依赖隐含先后","按包名长度","随机"]' answer="1" explain="跨包按依赖图拓扑序、同包按文件名字典序与出现顺序；由于无依赖包之间顺序不稳定，不应写依赖它。" />
+<Predict no="035-2" q="代码里写 import _ 某包，最可能发生什么？" :options='["编译报错，因为没有用到该包","只触发该包的 init，不引入任何标识符","把该包所有符号导入当前文件","跳过该包的初始化"]' answer="1" output="该包被正常初始化并执行其 init，当前文件不获得任何新标识符" explain="空白导入的唯一作用是触发 init，典型用途是让编解码器或数据库驱动完成自注册。" />
 
 ## 一页纸速记
 

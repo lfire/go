@@ -1,11 +1,11 @@
 ---
-title: 第 23 讲 · 反射 reflect 与 go generate
+title: 第 023 讲 · 反射 reflect 与 go generate
 description: 用 reflect.Type 与 reflect.Value 在运行时看见类型、读取标签并修改值，理解可设置性与反射三定律，再用 go generate 把重复代码提前生成。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★★☆" time="40 分钟" goal="理解框架背后的元编程能力" prereq="第 22 讲 · 泛型：类型参数与约束" />
+<StageHeader stage="L2 · 语法核心" level="★★★★☆" time="40 分钟" goal="理解框架背后的元编程能力" prereq="第 022 讲 · 泛型：类型参数与约束" />
 
-# 第 23 讲 · 反射 reflect 与 go generate
+# 第 023 讲 · 反射 reflect 与 go generate
 
 > 一个 JSON 解码器并不认识你写的 `User` 结构体，一个 ORM 也不知道你有哪些字段，它们却能把一行数据稳稳填进去。靠的是反射：程序在运行时检查自己的类型与值，再按名字、标签去读写。反射是框架的地基，但它同时放弃了编译期类型检查、更慢、错误多半以 panic 形式出现。这一讲把能力、坑和边界一次讲透，并给出另一条更稳的路——`go generate` 在编译前把代码生成好。
 
@@ -319,7 +319,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 会展开 `eface` / `iface` 与反射入口的关系，[第 37 讲](/core/unsafe-cgo) 讲 `unsafe` 与反射各自的边界。工程上，[第 53 讲](/engineering/mock-test) 用 gomock 生成替身而非运行时猜类型，[第 60 讲](/engineering/cicd) 把 `go generate` 接进 CI 检查生成物有无 diff。实战里，[第 104 讲](/projects/cli-codegen) 用 AST 加模板把重复代码提前生成出来，[第 117 讲](/projects/cloud-operator) 的 CRD scheme 注册则靠反射把类型信息登记进运行时。
+[第 030 讲](/core/interface-internals) 会展开 `eface` / `iface` 与反射入口的关系，[第 037 讲](/core/unsafe-cgo) 讲 `unsafe` 与反射各自的边界。工程上，[第 053 讲](/engineering/mock-test) 用 gomock 生成替身而非运行时猜类型，[第 060 讲](/engineering/cicd) 把 `go generate` 接进 CI 检查生成物有无 diff。实战里，[第 104 讲](/projects/cli-codegen) 用 AST 加模板把重复代码提前生成出来，[第 117 讲](/projects/cloud-operator) 的 CRD scheme 注册则靠反射把类型信息登记进运行时。
 
 ## 动手练一练
 
@@ -327,9 +327,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="23-1" q="关于 reflect.Value 的 CanSet，下面哪项说法正确？" :options='["只要字段可导出，CanSet 就为真","reflect.ValueOf(x) 得到的 Value 总是可设置","必须通过指针 Elem 拿到值、且字段可导出，CanSet 才可能为真","CanSet 为假时调用 SetInt 会静默失败"]' answer="2" explain="可设置性要求值可寻址、由指针 Elem 得到且字段可导出；传值得到的是副本，CanSet 为假。对假值调 Set 会 panic，不是静默失败。" />
+<Quiz no="023-1" q="关于 reflect.Value 的 CanSet，下面哪项说法正确？" :options='["只要字段可导出，CanSet 就为真","reflect.ValueOf(x) 得到的 Value 总是可设置","必须通过指针 Elem 拿到值、且字段可导出，CanSet 才可能为真","CanSet 为假时调用 SetInt 会静默失败"]' answer="2" explain="可设置性要求值可寻址、由指针 Elem 得到且字段可导出；传值得到的是副本，CanSet 为假。对假值调 Set 会 panic，不是静默失败。" />
 
-<Predict no="23-2" q="第二段代码中，reflect.ValueOf(x).CanSet() 与 reflect.ValueOf(&x).Elem().CanSet() 依次输出什么？" :options='["true true","true false","false true","false false"]' answer="2" output="false\ntrue" explain="传值 x 得到的是不可寻址副本；传 &x 再 Elem 得到可寻址的正本，因此只有后者可设置。" />
+<Predict no="023-2" q="第二段代码中，reflect.ValueOf(x).CanSet() 与 reflect.ValueOf(&x).Elem().CanSet() 依次输出什么？" :options='["true true","true false","false true","false false"]' answer="2" output="false\ntrue" explain="传值 x 得到的是不可寻址副本；传 &x 再 Elem 得到可寻址的正本，因此只有后者可设置。" />
 
 ## 一页纸速记
 

@@ -1,9 +1,9 @@
-# 第 38 讲 · 并发与并行：CSP 思想
+# 第 038 讲 · 并发与并行：CSP 思想
 
 - **阶段**：L4 · 并发编程
 - **目标**：建立正确的并发世界观
 - **知识点**：并发≠并行 / CSP 与共享内存 / Go 的取舍 / 串行/并发/并行图示 / 何时不该并发
-- **教程正文**：[第 38 讲 · 并发与并行：CSP 思想](/concurrency/concurrency-intro)
+- **教程正文**：[第 038 讲 · 并发与并行：CSP 思想](/concurrency/concurrency-intro)
 - **GitHub 目录**：[l4-concurrency/lesson-038-concurrency-intro](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-038-concurrency-intro)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 53 讲 · Mock：gomock / sqlmock / httptest
+# 第 053 讲 · Mock：gomock / sqlmock / httptest
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：隔离外部依赖，测真正的逻辑
 - **知识点**：依赖倒置与接口 / gomock 生成 / sqlmock / httptest / gomock/gomonkey 边界
-- **教程正文**：[第 53 讲 · Mock：gomock / sqlmock / httptest](/engineering/mock-test)
+- **教程正文**：[第 053 讲 · Mock：gomock / sqlmock / httptest](/engineering/mock-test)
 - **GitHub 目录**：[l5-engineering/lesson-053-mock-test](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-053-mock-test)
 
 ## 运行

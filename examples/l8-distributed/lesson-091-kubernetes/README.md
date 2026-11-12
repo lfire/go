@@ -1,9 +1,9 @@
-# 第 91 讲 · Kubernetes 部署与服务暴露
+# 第 091 讲 · Kubernetes 部署与服务暴露
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：把 Go 服务稳定跑在 K8s 上
 - **知识点**：Pod/Deployment/Service / ConfigMap/Secret / 探针与优雅退出 / 资源配额 / Ingress 与 HPA
-- **教程正文**：[第 91 讲 · Kubernetes 部署与服务暴露](/distributed/kubernetes)
+- **教程正文**：[第 091 讲 · Kubernetes 部署与服务暴露](/distributed/kubernetes)
 - **GitHub 目录**：[l8-distributed/lesson-091-kubernetes](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-091-kubernetes)
 
 ## 运行

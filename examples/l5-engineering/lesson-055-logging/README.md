@@ -1,9 +1,9 @@
-# 第 55 讲 · 日志：slog / zap 与结构化采样
+# 第 055 讲 · 日志：slog / zap 与结构化采样
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：让线上问题可从日志还原
 - **知识点**：结构化日志 / 级别与上下文 / trace_id 关联 / 性能与采样 / 日志与隐私
-- **教程正文**：[第 55 讲 · 日志：slog / zap 与结构化采样](/engineering/logging)
+- **教程正文**：[第 055 讲 · 日志：slog / zap 与结构化采样](/engineering/logging)
 - **GitHub 目录**：[l5-engineering/lesson-055-logging](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-055-logging)
 
 ## 运行

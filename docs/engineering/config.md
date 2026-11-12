@@ -1,11 +1,11 @@
 ---
-title: 第 56 讲 · 配置：flag / env / viper / 配置中心
+title: 第 056 讲 · 配置：flag / env / viper / 配置中心
 description: 按十二要素把配置外置，掌握 flag 与环境变量优先级、配置校验、viper 与热加载灰度，避免配置硬编码
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="做到同一份镜像跑多套环境" prereq="第 55 讲 · 日志：slog / zap 与结构化采样" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="做到同一份镜像跑多套环境" prereq="第 055 讲 · 日志：slog / zap 与结构化采样" />
 
-# 第 56 讲 · 配置：flag / env / viper / 配置中心
+# 第 056 讲 · 配置：flag / env / viper / 配置中心
 
 > 同一个二进制，在开发机连本地库、在预发连预发库、在生产连生产库，靠的应该是启动时注入的配置，而不是三份代码。配置硬编码最直接的代价是「改一个端口也要重新构建镜像」；更隐蔽的代价是密钥进了代码库、灰度靠发版。这一讲把配置从代码里请出去，并让它在启动那一刻就被校验清楚。
 
@@ -191,7 +191,7 @@ func main() {
 
 多来源并存时若没有确定的优先级，「到底听谁的」会变成线上谜案：同一份代码在开发机、预发、生产读到不同值，排查时无法从结果反推来源。优先级把覆盖关系写成确定规则——默认值最低，保证空环境也能启动；启动参数最高，让本地调试能临时覆盖而不去改部署平台的注入值。第一块代码里用 `os.LookupEnv` 而不是 `os.Getenv`，是为了区分「没设置」和「设成了空串」：只有 `ok` 为真才覆盖，否则一个空的环境变量会把合理的默认值冲掉，这类问题在容器里尤其常见（变量声明了但没赋值）。
 
-启动即 `Validate` 把失败提前到进程启动那一刻。若不做，非法值会溜到第一次被用到时才炸：超时为 0 触发除零、端口非法导致 listen 失败、`mode` 拼错静默走进 default 分支——故障点离配置加载很远，往往还要等流量进来才暴露。集中校验配合健康检查或 K8s 探针，能让不健康实例根本不接流量（呼应第 91 讲）。热加载用 `atomic.Value` 整份替换，则是因为逐字段赋值在并发读下会产生「A 字段新值、B 字段旧值」的中间态，一次请求里前后策略可能自相矛盾；整份 Store/Load 保证读侧永远拿到某个完整快照，代价是配置对象要当作不可变值来替换，且 `Load` 后的类型断言要求前后类型完全一致。
+启动即 `Validate` 把失败提前到进程启动那一刻。若不做，非法值会溜到第一次被用到时才炸：超时为 0 触发除零、端口非法导致 listen 失败、`mode` 拼错静默走进 default 分支——故障点离配置加载很远，往往还要等流量进来才暴露。集中校验配合健康检查或 K8s 探针，能让不健康实例根本不接流量（呼应第 091 讲）。热加载用 `atomic.Value` 整份替换，则是因为逐字段赋值在并发读下会产生「A 字段新值、B 字段旧值」的中间态，一次请求里前后策略可能自相矛盾；整份 Store/Load 保证读侧永远拿到某个完整快照，代价是配置对象要当作不可变值来替换，且 `Load` 后的类型断言要求前后类型完全一致。
 
 十二要素要求配置外置、密钥不进代码库，还有一层制品层面的理由：镜像里一旦含环境相关值，就必须一环境一构建，制品没法复用、回滚时也说不清该退到哪个镜像；密钥进了 git 历史，即便后来删掉提交也清不干净。
 
@@ -312,7 +312,7 @@ atomic.Value 最终快照: {200000 200000}
 
 **边界与失效条件**：`atomic.Value` 的原子性只覆盖这一次指针读写，不覆盖对象内部的并发修改；存引用类型时仍要整体替换新对象而非原地改；首次 `Store` 后不能存 nil，也不能并发地「第一次 Store 与 Load」同时发生（应由 `init` 或启动装配保证）。本实验里的逐字段访问是 data race，`go run -race main.go` 会额外报出 `DATA RACE`；用计数把它变成可见现象，是为了不依赖竞态检测器的调度随机性。机制能证明「读侧不会看到半个快照」，证明不了「新配置在业务上已生效」。
 
-**版本前提**：`atomic.Value` 自 Go 1.4 起提供，`CompareAndSwap` / `Swap` 方法自 Go 1.17 起加入，泛型的 `atomic.Pointer[T]` 自 Go 1.19 起可用（类型更安全，机制相同）；本实验在 Go 1.23.8（darwin/arm64）实测。第 46 讲展开无锁原语，第 49 讲展开 `-race` 能抓与不能抓的边界。
+**版本前提**：`atomic.Value` 自 Go 1.4 起提供，`CompareAndSwap` / `Swap` 方法自 Go 1.17 起加入，泛型的 `atomic.Pointer[T]` 自 Go 1.19 起可用（类型更安全，机制相同）；本实验在 Go 1.23.8（darwin/arm64）实测。第 046 讲展开无锁原语，第 049 讲展开 `-race` 能抓与不能抓的边界。
 
 ### 从整份 Store 到 CAS 循环：`atomic.Pointer[T]` 与 `sync.Map` 各自的成本边界
 
@@ -412,7 +412,7 @@ BenchmarkSyncMapStoreNewKey-12      4234443   58.54   ns/op   24 B/op  2 allocs/
 
 **边界与失效条件**：`atomic.Pointer[T]` 的 `T` 必须是指针类型、且所有 `Store` 的对象类型一致（否则行为未定义），首次 `Store` 前 `Load` 返回 nil，需像实验里先 `init`/装配一次；CAS 的 `old` 必须来自同一次 `Load`，拿缓存的旧指针去 CAS 一定失败；`sync.Map` 的 `misses >= len(dirty)` 阈值与 `dirtyLocked` 的 O(n) 拷贝是标准库实现细节，不写入语言规范，`Range` 不保证快照一致性，且 `sync.Map` 不能被复制。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64，Apple M3 Pro）实测；`atomic.Pointer[T]` 自 Go 1.19 起提供，`CompareAndSwap` / `Swap` 方法自 1.17 起（第二版已提），`sync.Map` 自 Go 1.9 起、其 `read/dirty/misses` 结构长期稳定，但 `missLocked` 的阈值是内部实现、跨版本可能调整；bench 的 ns/op 严格绑定这台机器与这个 Go 版本，只做同机对比。第 46 讲展开 `atomic.Value` 与 `sync.Pool`，第 49 讲展开 `-race`，本讲前面讲 `atomic.Value` 整份替换，这里补的是「多个写者如何不丢更新」与「按 key 读写该选谁」。
+**版本前提**：本机 Go 1.23.8（darwin/arm64，Apple M3 Pro）实测；`atomic.Pointer[T]` 自 Go 1.19 起提供，`CompareAndSwap` / `Swap` 方法自 1.17 起（第二版已提），`sync.Map` 自 Go 1.9 起、其 `read/dirty/misses` 结构长期稳定，但 `missLocked` 的阈值是内部实现、跨版本可能调整；bench 的 ns/op 严格绑定这台机器与这个 Go 版本，只做同机对比。第 046 讲展开 `atomic.Value` 与 `sync.Pool`，第 049 讲展开 `-race`，本讲前面讲 `atomic.Value` 整份替换，这里补的是「多个写者如何不丢更新」与「按 key 读写该选谁」。
 
 ### 三条最常见的误解
 
@@ -463,11 +463,11 @@ BenchmarkSyncMapStoreNewKey-12      4234443   58.54   ns/op   24 B/op  2 allocs/
     fi
 ```
 
-版本锁定理由：`go-version-file: go.mod` 让 CI 用仓库声明的 Go 版本，保证 `flag`、`strconv.Atoi`、`atomic.Value` 以及 `go test -race` 的结论与本地一致；更关键的是，配置文件与部署清单纳入版本控制之后，配置变更就与代码变更走同一套 review、 diff 与回滚，CI 里的静态校验才有稳定的比对基准。配置漂移的本质是「配置没进版本控制」，把它变成机器可判定的一步，正是第 60 讲制品与回滚、第 77 讲配置中心的共同前提。
+版本锁定理由：`go-version-file: go.mod` 让 CI 用仓库声明的 Go 版本，保证 `flag`、`strconv.Atoi`、`atomic.Value` 以及 `go test -race` 的结论与本地一致；更关键的是，配置文件与部署清单纳入版本控制之后，配置变更就与代码变更走同一套 review、 diff 与回滚，CI 里的静态校验才有稳定的比对基准。配置漂移的本质是「配置没进版本控制」，把它变成机器可判定的一步，正是第 060 讲制品与回滚、第 077 讲配置中心的共同前提。
 
 ### 与 L10 实战工程结构的呼应
 
-这套约定在 L10 随处要用：`/projects/kv-1-memory` 的启动参数、`/projects/net-shortlink` 的端口与缓存 TTL、`/projects/micro-ecommerce` 的多环境 DSN，都靠外置配置让一份制品适配多套环境；`/projects/kv-4-distributed` 的分片数、副本数与灰度切流比例，正是配置中心热加载该管的那类值。再往前，第 55 讲的 `LOG_LEVEL`、第 59 讲 pprof 采集开关、第 60 讲 CI 注入的版本变量，全都是「同一份镜像跑多套环境」的具体落点；第 50 讲把配置放在 `cmd` 入口装配，也就顺理成章了。
+这套约定在 L10 随处要用：`/projects/kv-1-memory` 的启动参数、`/projects/net-shortlink` 的端口与缓存 TTL、`/projects/micro-ecommerce` 的多环境 DSN，都靠外置配置让一份制品适配多套环境；`/projects/kv-4-distributed` 的分片数、副本数与灰度切流比例，正是配置中心热加载该管的那类值。再往前，第 055 讲的 `LOG_LEVEL`、第 059 讲 pprof 采集开关、第 060 讲 CI 注入的版本变量，全都是「同一份镜像跑多套环境」的具体落点；第 050 讲把配置放在 `cmd` 入口装配，也就顺理成章了。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -481,9 +481,9 @@ BenchmarkSyncMapStoreNewKey-12      4234443   58.54   ns/op   24 B/op  2 allocs/
 
 ## 随堂检测
 
-<Quiz no="56-1" q="按本讲约定的优先级，flag 与环境变量同时设置同一项时，谁生效？" :options='["flag，因为它是最终覆盖层","环境变量，因为它来自部署平台","代码默认值","随机，取决于设置顺序"]' answer="0" explain="约定中启动参数处于最高优先级，便于本地调试临时覆盖，而又不影响部署平台用环境变量统一注入。" />
+<Quiz no="056-1" q="按本讲约定的优先级，flag 与环境变量同时设置同一项时，谁生效？" :options='["flag，因为它是最终覆盖层","环境变量，因为它来自部署平台","代码默认值","随机，取决于设置顺序"]' answer="0" explain="约定中启动参数处于最高优先级，便于本地调试临时覆盖，而又不影响部署平台用环境变量统一注入。" />
 
-<Predict no="56-2" q="设置 APP_ADDR=:9090 且传入 -addr=:8080，按本讲 Load 的实现，最终监听地址是？" :options='[":8080",":9090","空地址","报错退出"]' answer="1" output=":9090" explain="Load 中环境变量的覆盖发生在 flag.Parse 之后，因此 APP_ADDR 最终生效。" />
+<Predict no="056-2" q="设置 APP_ADDR=:9090 且传入 -addr=:8080，按本讲 Load 的实现，最终监听地址是？" :options='[":8080",":9090","空地址","报错退出"]' answer="1" output=":9090" explain="Load 中环境变量的覆盖发生在 flag.Parse 之后，因此 APP_ADDR 最终生效。" />
 
 ## 一页纸速记
 

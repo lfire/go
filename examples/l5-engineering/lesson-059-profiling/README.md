@@ -1,9 +1,9 @@
-# 第 59 讲 · 性能剖析：pprof / trace / 火焰图
+# 第 059 讲 · 性能剖析：pprof / trace / 火焰图
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：建立可复现的性能诊断流程
 - **知识点**：CPU/Mem/Block/Mutex profile / 火焰图读法 / trace 与调度延迟 / 线上安全采集 / 优化闭环
-- **教程正文**：[第 59 讲 · 性能剖析：pprof / trace / 火焰图](/engineering/profiling)
+- **教程正文**：[第 059 讲 · 性能剖析：pprof / trace / 火焰图](/engineering/profiling)
 - **GitHub 目录**：[l5-engineering/lesson-059-profiling](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-059-profiling)
 
 ## 运行

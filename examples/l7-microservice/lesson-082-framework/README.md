@@ -1,9 +1,9 @@
-# 第 82 讲 · 自研微服务框架：从 0 到 1
+# 第 082 讲 · 自研微服务框架：从 0 到 1
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：把注册、配置、拦截、可观测收成一套框架
 - **知识点**：框架边界与需求 / Options 装配 / 服务生命周期 / 统一错误与日志 / 可观测内建 / 与 kratos/go-zero 对照
-- **教程正文**：[第 82 讲 · 自研微服务框架：从 0 到 1](/microservice/framework)
+- **教程正文**：[第 082 讲 · 自研微服务框架：从 0 到 1](/microservice/framework)
 - **GitHub 目录**：[l7-microservice/lesson-082-framework](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-082-framework)
 
 ## 运行

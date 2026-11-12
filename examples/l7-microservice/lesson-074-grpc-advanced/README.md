@@ -1,9 +1,9 @@
-# 第 74 讲 · gRPC 拦截器、metadata、错误与超时
+# 第 074 讲 · gRPC 拦截器、metadata、错误与超时
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：把横切能力统一收进拦截器
 - **知识点**：Unary/Stream 拦截器 / metadata 透传 / status 错误码 / Deadline 传播 / 认证与日志
-- **教程正文**：[第 74 讲 · gRPC 拦截器、metadata、错误与超时](/microservice/grpc-advanced)
+- **教程正文**：[第 074 讲 · gRPC 拦截器、metadata、错误与超时](/microservice/grpc-advanced)
 - **GitHub 目录**：[l7-microservice/lesson-074-grpc-advanced](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-074-grpc-advanced)
 
 ## 运行

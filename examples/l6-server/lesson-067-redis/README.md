@@ -1,9 +1,9 @@
-# 第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
+# 第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：把缓存用对而不是用多
 - **知识点**：缓存模式 / 三大经典问题 / TTL 抖动 / 双写一致 / 分布式锁初探 / 热 key
-- **教程正文**：[第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性](/server/redis)
+- **教程正文**：[第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性](/server/redis)
 - **GitHub 目录**：[l6-server/lesson-067-redis](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-067-redis)
 
 ## 运行

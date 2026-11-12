@@ -1,9 +1,9 @@
-# 第 83 讲 · CAP / BASE 与一致性模型
+# 第 083 讲 · CAP / BASE 与一致性模型
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：建立分布式系统的判断框架
 - **知识点**：CAP 的准确含义 / 一致性强弱谱系 / BASE 与最终一致 / 分区与容错 / 设计取舍案例
-- **教程正文**：[第 83 讲 · CAP / BASE 与一致性模型](/distributed/cap-base)
+- **教程正文**：[第 083 讲 · CAP / BASE 与一致性模型](/distributed/cap-base)
 - **GitHub 目录**：[l8-distributed/lesson-083-cap-base](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-083-cap-base)
 
 ## 运行

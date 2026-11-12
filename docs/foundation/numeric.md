@@ -1,11 +1,11 @@
 ---
-title: 第 07 讲 · 数值、布尔、字符与类型转换
+title: 第 007 讲 · 数值、布尔、字符与类型转换
 description: 认识整型的宽度与平台差异，避开溢出、浮点精度和隐式转换的坑
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="避开数值溢出与隐式转换的坑" prereq="第 06 讲" />
+<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="避开数值溢出与隐式转换的坑" prereq="第 006 讲" />
 
-# 第 07 讲 · 数值、布尔、字符与类型转换
+# 第 007 讲 · 数值、布尔、字符与类型转换
 
 > 数字大概是看起来最不需要学的东西，可生产事故里偏偏常见：金额算差一分、计数加到一半突然变负、把整数转成文本得到个莫名其妙的字母。Go 把数值类型分得很细，而且坚决不做隐式转换，正是为了让这些代价在代码里看得见。这一讲把整型宽度、浮点精度、byte 与 rune、以及显式转换一次讲清，之后遇到数字就不会凭直觉猜了。
 
@@ -19,7 +19,7 @@ description: 认识整型的宽度与平台差异，避开溢出、浮点精度�
 
 <ConceptDiagram type="value-pointer" title="值本身没变，变的是按哪种类型解释它" />
 
-显式转换的本质是"把这份值按另一种类型重新装盒"，值本身没有变形，但盒子能表示的范围和精度变了。理解第 05 讲那句"值与装值的容器是两回事"，转换就不会显得神秘：你换的是容器，不是数据。
+显式转换的本质是"把这份值按另一种类型重新装盒"，值本身没有变形，但盒子能表示的范围和精度变了。理解第 005 讲那句"值与装值的容器是两回事"，转换就不会显得神秘：你换的是容器，不是数据。
 
 ### 为什么 Go 把整型分得这么细，还坚决不做隐式转换
 
@@ -97,10 +97,10 @@ go build
 
 | 本讲埋下的点 | 后面在哪用到 |
 | --- | --- |
-| 固定宽度类型 | [第 24 讲](/basics/json) 的数字精度、[第 73 讲](/microservice/protobuf) 的协议字段 |
-| 显式转换 | [第 08 讲](/foundation/strings) 的 string 与 []byte、[第 31 讲](/core/string-internals) 的零拷贝转换 |
-| `strconv` 与解析 | [第 12 讲](/foundation/capstone) 的参数、[第 20 讲](/basics/errors) 的错误返回 |
-| 平台相关宽度 | [第 26 讲](/core/value-semantics) 的拷贝成本、[第 90 讲](/distributed/docker) 的镜像目标架构 |
+| 固定宽度类型 | [第 024 讲](/basics/json) 的数字精度、[第 073 讲](/microservice/protobuf) 的协议字段 |
+| 显式转换 | [第 008 讲](/foundation/strings) 的 string 与 []byte、[第 031 讲](/core/string-internals) 的零拷贝转换 |
+| `strconv` 与解析 | [第 012 讲](/foundation/capstone) 的参数、[第 020 讲](/basics/errors) 的错误返回 |
+| 平台相关宽度 | [第 026 讲](/core/value-semantics) 的拷贝成本、[第 090 讲](/distributed/docker) 的镜像目标架构 |
 
 ## 2. 语法与规则
 
@@ -188,13 +188,13 @@ func main() {
 | int / uint | 平台相关，32 或 64 位 | 日常下标、长度、循环计数 |
 | uintptr | 刚好装得下指针 | 底层编程，业务代码基本不用 |
 | byte | uint8 的别名 | 原始字节、二进制数据 |
-| rune | int32 的别名 | 一个 Unicode 字符（第 08 讲细讲） |
+| rune | int32 的别名 | 一个 Unicode 字符（第 008 讲细讲） |
 | float32 / float64 | 32 / 64 位 | 科学计算；默认用 float64 |
 | bool | true 或 false | 条件判断，不与数字互转 |
 
-`byte` 与 `rune` 是最容易混的一对：`byte` 关心"一个字节"，`rune` 关心"一个字符"。英文字符两者恰好都是 1 字节，一遇到中文就分道扬镳——一个汉字在 UTF-8 里通常占 3 字节，却是 1 个 rune。这个差别是第 08 讲的主线，这里先记住别用 `byte` 去数中文个数。
+`byte` 与 `rune` 是最容易混的一对：`byte` 关心"一个字节"，`rune` 关心"一个字符"。英文字符两者恰好都是 1 字节，一遇到中文就分道扬镳——一个汉字在 UTF-8 里通常占 3 字节，却是 1 个 rune。这个差别是第 008 讲的主线，这里先记住别用 `byte` 去数中文个数。
 
-<Callout type="warn" title="版本差异与三个坑" text="第一，Go 1.21 起内置了 min、max 函数（第 01 讲用过），但它们要求参数类型完全一致，混用 int 与 int64 仍需显式转换。第二，运行时整型溢出静默回绕，不会 panic。第三，string(整数) 是码点转字符、不是数字转文本，go vet 会告警；整数转文本请用 strconv.Itoa。第四，bool 与数字之间不能互转，Go 不认 1 等于 true 这套写法。" />
+<Callout type="warn" title="版本差异与三个坑" text="第一，Go 1.21 起内置了 min、max 函数（第 001 讲用过），但它们要求参数类型完全一致，混用 int 与 int64 仍需显式转换。第二，运行时整型溢出静默回绕，不会 panic。第三，string(整数) 是码点转字符、不是数字转文本，go vet 会告警；整数转文本请用 strconv.Itoa。第四，bool 与数字之间不能互转，Go 不认 1 等于 true 这套写法。" />
 
 <Compare :panels='[{"label":"容易写错","code":"string(65)","note":"把整数当码点，得到字符 A，而不是文本 65"},{"label":"正确做法","code":"strconv.Itoa(65)","note":"明确按十进制把整数转成文本，得到 65"}]' title="同一个 65，两种完全不同的结果" />
 
@@ -249,8 +249,8 @@ func main() {
 
 | 边界 | 说明 | 归属 |
 | --- | --- | --- |
-| Go 1.21 | 内置 `min`、`max`，但要求参数类型完全一致，混用 int 与 int64 仍需显式转换 | 本讲、[第 01 讲](/guide/opening) |
-| GOARCH | 386 上 int 为 32 位，amd64、arm64 上为 64 位；交叉编译出的产物因此不同 | 本讲实验二、[第 90 讲](/distributed/docker) |
+| Go 1.21 | 内置 `min`、`max`，但要求参数类型完全一致，混用 int 与 int64 仍需显式转换 | 本讲、[第 001 讲](/guide/opening) |
+| GOARCH | 386 上 int 为 32 位，amd64、arm64 上为 64 位；交叉编译出的产物因此不同 | 本讲实验二、[第 090 讲](/distributed/docker) |
 | IEEE 754 | float32、float64 的精度与编码跨平台一致，浮点误差不随操作系统变化 | 与 int 宽度形成对照 |
 | 操作系统 | 数值行为只与 GOARCH 有关，与 Windows、macOS、Linux 无关 | 平台差异集中在宽度与文件路径 |
 | `go vet` | 整数转字符串的 stringintconv 检查从 Go 1.15 起提供，更旧的工具链不会报 | 本讲实验三 |
@@ -262,7 +262,7 @@ func main() {
 
 边界上要主动设防：从外部读入的数字在参与运算前先校验范围，别等溢出回绕后再排查；循环计数、数组长度用平台相关的 `int` 就好，而写网络协议、文件格式时必须用 `int32`、`uint64` 这类固定宽度类型，否则换台机器解析结果就变了。`strconv.IntSize` 可以用来在运行时判断当前平台的 `int` 宽度，写兼容逻辑时比硬编码 64 稳妥。
 
-`strconv` 包是文本与数值之间的正规通道：`Itoa`、`Atoi`、`FormatFloat`、`ParseFloat` 各司其职，其中 `Atoi` 这类解析函数会返回两个值，第二个是错误，第 20 讲会系统讲错误处理，现在只要记住"解析可能失败，不能假定一定成功"。真正需要任意精度整数或 decimal 时，标准库的 `math/big` 才是边界之外的答案，浮点不是。
+`strconv` 包是文本与数值之间的正规通道：`Itoa`、`Atoi`、`FormatFloat`、`ParseFloat` 各司其职，其中 `Atoi` 这类解析函数会返回两个值，第二个是错误，第 020 讲会系统讲错误处理，现在只要记住"解析可能失败，不能假定一定成功"。真正需要任意精度整数或 decimal 时，标准库的 `math/big` 才是边界之外的答案，浮点不是。
 
 <FlowTimeline :steps='[{"title":"确认源类型","desc":"先看清楚手里是 int、int64 还是字符串","tone":"blue"},{"title":"选转换函数","desc":"同族用显式转换，跨文本用 strconv","tone":"green"},{"title":"编译器核对","desc":"类型不匹配就在这一步被拦下","tone":"purple"},{"title":"校验边界","desc":"外部输入还要检查范围与解析错误","tone":"orange"}]' direction="horizontal" />
 
@@ -278,11 +278,11 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="7-1" q="关于 Go 的数值与转换，下面哪一项说法是正确的？" :options='["int 在所有平台上都是 64 位","int 与 int64 可以直接相加，编译器会自动转换","运行时整型溢出会静默回绕，编译期常量溢出会被拦下","string(65) 会得到文本 65"]' answer="2" explain="int 是平台相关类型；不同类型必须显式转换；运行时溢出回绕而常量溢出编译报错；string(65) 得到的是字符 A。" />
+<Quiz no="007-1" q="关于 Go 的数值与转换，下面哪一项说法是正确的？" :options='["int 在所有平台上都是 64 位","int 与 int64 可以直接相加，编译器会自动转换","运行时整型溢出会静默回绕，编译期常量溢出会被拦下","string(65) 会得到文本 65"]' answer="2" explain="int 是平台相关类型；不同类型必须显式转换；运行时溢出回绕而常量溢出编译报错；string(65) 得到的是字符 A。" />
 
-<Predict no="7-2" q="第二段代码里，变量 a 与字面量 0.3 用 == 比较，结果是？" :options='["true","false","编译报错","运行时 panic"]' answer="1" explain="x 与 y 是运行时变量，相加得到 0.30000000000000004，与 0.3 不严格相等，所以是 false；若直接写常量表达式 0.1 + 0.2，编译期反而会算出精确的 0.3。" />
+<Predict no="007-2" q="第二段代码里，变量 a 与字面量 0.3 用 == 比较，结果是？" :options='["true","false","编译报错","运行时 panic"]' answer="1" explain="x 与 y 是运行时变量，相加得到 0.30000000000000004，与 0.3 不严格相等，所以是 false；若直接写常量表达式 0.1 + 0.2，编译期反而会算出精确的 0.3。" />
 
-<FillBlank no="7-3" tpl="int8 占 1 字节，int64 占 ___ 字节\n整数转文本用 strconv.___\nbyte 是 uint8 的别名，rune 是 ___ 的别名" :answers='["8","Itoa","int32"]' hint="第一空是字节数，第二空是函数名，第三空是 rune 的底层类型。" explain="int64 是 8 字节；Itoa 负责整数转十进制文本；rune 本质是 int32，用来装一个 Unicode 码点。" :explains='["int64 明确是 64 位，按 8 位一字节折算即 8 字节，且不受 32 位或 64 位平台影响，这是定长类型的意义。","整数转文本归 strconv 包，Itoa 是 integer to ASCII 的缩写，等价于十进制 FormatInt；字符串直接加整数会编译报错。","rune 要容纳一个 Unicode 码点，其值域需要 32 位有符号整数，因此定义为 int32 别名，正好与 byte 对应 uint8 相对。"]' />
+<FillBlank no="007-3" tpl="int8 占 1 字节，int64 占 ___ 字节\n整数转文本用 strconv.___\nbyte 是 uint8 的别名，rune 是 ___ 的别名" :answers='["8","Itoa","int32"]' hint="第一空是字节数，第二空是函数名，第三空是 rune 的底层类型。" explain="int64 是 8 字节；Itoa 负责整数转十进制文本；rune 本质是 int32，用来装一个 Unicode 码点。" :explains='["int64 明确是 64 位，按 8 位一字节折算即 8 字节，且不受 32 位或 64 位平台影响，这是定长类型的意义。","整数转文本归 strconv 包，Itoa 是 integer to ASCII 的缩写，等价于十进制 FormatInt；字符串直接加整数会编译报错。","rune 要容纳一个 Unicode 码点，其值域需要 32 位有符号整数，因此定义为 int32 别名，正好与 byte 对应 uint8 相对。"]' />
 
 ## 一页纸速记
 

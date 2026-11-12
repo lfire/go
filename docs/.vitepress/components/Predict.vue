@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import AnswerReview from './AnswerReview.vue'
 
 const props = defineProps<{
   q?: string
@@ -21,13 +22,17 @@ const opts = computed(() => {
 })
 const right = computed(() => Number(props.answer))
 const letters = ['A', 'B', 'C', 'D', 'E']
+/** 交给共用结果卡片：与单选题保持同一套答案 + 解析展示 */
+const correctAnswers = computed(() => [{
+  label: letters[right.value] || String(right.value + 1),
+  text: opts.value[right.value] || '',
+}])
 const picked = ref<number | null>(null)
 const shown = ref(false)
 const ok = computed(() => picked.value === right.value)
 function choose(i: number) { if (!shown.value) picked.value = i }
 function reveal() { if (picked.value !== null) shown.value = true }
 function reset() { picked.value = null; shown.value = false }
-function pretty(s?: string) { return (s || '').replace(/\\n/g, '\n') }
 </script>
 
 <template>
@@ -49,14 +54,10 @@ function pretty(s?: string) { return (s || '').replace(/\\n/g, '\n') }
     </div>
     <div class="q-foot">
       <button v-if="!shown" class="go-btn primary" :disabled="picked === null" @click="reveal">揭晓答案</button>
-      <button v-else class="go-btn ghost" @click="reset">重新猜一次</button>
+      <button v-else class="go-btn ghost" @click="reset">再试一次</button>
     </div>
     <Transition name="go-fade">
-      <div v-if="shown" class="go-feedback" :class="ok ? 'ok' : 'no'" style="margin-top:.8rem">
-        <b>{{ ok ? '✓ 猜对了！' : '✗ 结果是 ' + (letters[right] || '') }}</b>
-        <div v-if="output" class="out">{{ pretty(output) }}</div>
-        <div v-if="explain" style="margin-top:.6rem;color:var(--go-ink);font-size:13.5px">{{ explain }}</div>
-      </div>
+      <AnswerReview v-if="shown" :ok="ok" :answers="correctAnswers" :explain="explain" :output="output" mode="predict" />
     </Transition>
   </div>
 </template>

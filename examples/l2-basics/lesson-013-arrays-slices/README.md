@@ -1,9 +1,9 @@
-# 第 13 讲 · 数组与切片：定义与操作
+# 第 013 讲 · 数组与切片：定义与操作
 
 - **阶段**：L2 · 语法核心
 - **目标**：熟练使用 Go 最常用的序列结构
 - **知识点**：数组是值 / 切片创建与 make / len/cap / append 与 copy / 切片表达式
-- **教程正文**：[第 13 讲 · 数组与切片：定义与操作](/basics/arrays-slices)
+- **教程正文**：[第 013 讲 · 数组与切片：定义与操作](/basics/arrays-slices)
 - **GitHub 目录**：[l2-basics/lesson-013-arrays-slices](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-013-arrays-slices)
 
 ## 运行

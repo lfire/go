@@ -1,21 +1,21 @@
 ---
 title: 第 111 讲 · KV 贯穿线 ① 内存版与接口抽象
-description: 承接第 25 讲的内存版 KV，把 Command 与 Storage 定型为单入口契约，为网络层、WAL、Raft 留出扩展点
+description: 承接第 025 讲的内存版 KV，把 Command 与 Storage 定型为单入口契约，为网络层、WAL、Raft 留出扩展点
 ---
 
-<StageHeader stage="L10 · 工程实战" level="★★☆☆☆" time="55 分钟" goal="定义可演进的存储抽象" prereq="第 25 讲 · 内存版 KV" />
+<StageHeader stage="L10 · 工程实战" level="★★☆☆☆" time="55 分钟" goal="定义可演进的存储抽象" prereq="第 025 讲 · 内存版 KV" />
 
 # 第 111 讲 · KV 贯穿线 ① 内存版与接口抽象
 
-> 这一讲是 KV 贯穿线的正式起点，直接承接第 25 讲「阶段综合：内存版 KV」。那一讲已经把 L2 的零件装成一台能跑的小机器：`Storage` 接口定出 `Put/Get/Delete/Keys` 四个动作，`MemStore` 用 `sync.RWMutex` 护住 `map[string]string`，`Command` 把一行文本解析成可重放的操作，`Apply` 把它落到任意实现，错误用哨兵加 `errors.Is` 判定，并且明确留下了六个扩展点。但那是一份**教学实现**：接口按操作拆成四个方法，每加一种命令就要改接口和全部实现；`Op` 是字符串，适合文本却不适合编码进二进制帧；`Get` 靠错误区分「空值」与「键不存在」，一旦跨进程，错误链很容易退化成一段无法判定的文本。本讲要解决的正是这件事：把「一次操作」和「一次存储」**定型**成一份四讲都不再改动的窄腰契约，并给出一个能接住第 25 讲旧实现的适配器。看懂「什么必须稳定、什么允许变化」，是这条贯穿线真正要教的东西。
+> 这一讲是 KV 贯穿线的正式起点，直接承接第 025 讲「阶段综合：内存版 KV」。那一讲已经把 L2 的零件装成一台能跑的小机器：`Storage` 接口定出 `Put/Get/Delete/Keys` 四个动作，`MemStore` 用 `sync.RWMutex` 护住 `map[string]string`，`Command` 把一行文本解析成可重放的操作，`Apply` 把它落到任意实现，错误用哨兵加 `errors.Is` 判定，并且明确留下了六个扩展点。但那是一份**教学实现**：接口按操作拆成四个方法，每加一种命令就要改接口和全部实现；`Op` 是字符串，适合文本却不适合编码进二进制帧；`Get` 靠错误区分「空值」与「键不存在」，一旦跨进程，错误链很容易退化成一段无法判定的文本。本讲要解决的正是这件事：把「一次操作」和「一次存储」**定型**成一份四讲都不再改动的窄腰契约，并给出一个能接住第 025 讲旧实现的适配器。看懂「什么必须稳定、什么允许变化」，是这条贯穿线真正要教的东西。
 
-<CheckList id="L111-goal" title="本讲目标" :items='["写清承接关系：第 25 讲的四方法 Storage 为什么要收敛成单入口 Apply","定型 Command、Result、Op 数值与哨兵错误集合，锁定为四讲不变的数据契约","用 RWMutex、锁分片、TTL 装饰器分别给出可替换的内存实现","用 WrapLegacy 证明旧实现不返工，用契约测试与基准测试建立可度量的基线"]' />
+<CheckList id="L111-goal" title="本讲目标" :items='["写清承接关系：第 025 讲的四方法 Storage 为什么要收敛成单入口 Apply","定型 Command、Result、Op 数值与哨兵错误集合，锁定为四讲不变的数据契约","用 RWMutex、锁分片、TTL 装饰器分别给出可替换的内存实现","用 WrapLegacy 证明旧实现不返工，用契约测试与基准测试建立可度量的基线"]' />
 
 ## 0. 项目定位与真实场景
 
 把一个 KV 存储单独拎出来做一讲，是因为它几乎是所有后端系统的地基。会话（session）、功能开关（feature flag）、幂等键、分布式锁的持有标记、限流计数器、配置缓存、短链映射，底层都是「给一个 key，存或取一个 value」。以中等规模的电商后台为例：单机需要承载约一百万个活跃 key，读多写少，峰值读 QPS 在数十万量级，写 QPS 在数万到十几万量级，单次访问延迟要求压在微秒级，因为 KV 往往处在调用链最内层，它的延迟会被上游层层放大。业务方真正痛的不是「能不能存」，而是「换了存储引擎要不要改业务代码」：今天用内存 map 做本地缓存，明天要接网络服务，后天要落盘、要分片、要多副本，如果每一次都要重写调用方，团队就会被自己的抽象拖死。
 
-第 25 讲的版本在单进程内是完整且正确的，它已经用接口把「上层要什么能力」和「能力怎么实现」分开了。但进入工程实战后，这个抽象还不够窄：四个方法意味着「操作」这件事散落在接口签名里，而网络帧、WAL 记录、Raft 日志更希望只搬运**一条命令**。所以本讲的核心矛盾非常清晰：**稳定的契约与多变的实现之间的张力**。契约太宽（按操作列方法），每加一种能力都要全系统改一遍；契约太窄（只传字节），又丢失了类型与错误语义。我们要找的是那个「窄腰」：一份纯数据的 `Command` 加一个单方法 `Storage.Apply`，让命令解析、TCP 收发、日志追加、共识复制都只依赖同一样东西。
+第 025 讲的版本在单进程内是完整且正确的，它已经用接口把「上层要什么能力」和「能力怎么实现」分开了。但进入工程实战后，这个抽象还不够窄：四个方法意味着「操作」这件事散落在接口签名里，而网络帧、WAL 记录、Raft 日志更希望只搬运**一条命令**。所以本讲的核心矛盾非常清晰：**稳定的契约与多变的实现之间的张力**。契约太宽（按操作列方法），每加一种能力都要全系统改一遍；契约太窄（只传字节），又丢失了类型与错误语义。我们要找的是那个「窄腰」：一份纯数据的 `Command` 加一个单方法 `Storage.Apply`，让命令解析、TCP 收发、日志追加、共识复制都只依赖同一样东西。
 
 <Term word="窄腰" text="架构里长期稳定、上下都依赖它的一层最小契约；上层换协议、下层换引擎都不必改动它，是演进能力的来源" />
 
@@ -33,7 +33,7 @@ description: 承接第 25 讲的内存版 KV，把 Command 与 Storage 定型为
 | FR-4 | 值承载任意二进制 | `Value` 为 `[]byte`，进出都做值拷贝，调用方改写不污染内部 |
 | FR-5 | 并发安全 | `go test -race` 下多 goroutine 混合读写无数据竞争、无 fatal error |
 | FR-6 | 支持 TTL 与过期回收 | 惰性判定加后台定时清理，过期后 GET 返回未命中 |
-| FR-7 | 兼容第 25 讲实现 | 旧 `MemStore` 不经修改即可通过适配器接入新契约 |
+| FR-7 | 兼容第 025 讲实现 | 旧 `MemStore` 不经修改即可通过适配器接入新契约 |
 | FR-8 | 可替换实现 | 至少提供全局锁、锁分片两种实现，且都满足同一份契约测试 |
 
 非功能指标是设计评审里最容易被含糊带过、也最该先落纸的部分。下表给的是本讲这一版（单进程、纯内存）的 SLO 目标，它们是可压测、可证伪的。
@@ -55,17 +55,17 @@ description: 承接第 25 讲的内存版 KV，把 Command 与 Storage 定型为
 
 ## 2. 架构蓝图
 
-下面这张分层图里，只有「契约层」是稳定的，其余三层都可以被替换。点击任意模块能看到它的职责、技术选型与失败处理，这正是第 25 讲留下的扩展点在架构图上的落位。
+下面这张分层图里，只有「契约层」是稳定的，其余三层都可以被替换。点击任意模块能看到它的职责、技术选型与失败处理，这正是第 025 讲留下的扩展点在架构图上的落位。
 
-<ArchBlueprint title="KV 系统分层架构（稳定契约层是唯一的窄腰）" caption="网络层、WAL、Raft 都是实现层或接入层的不同形态，契约层始终不动" :layers='[{"name":"接入层","note":"把外部输入变成 Command","protocol":"进程内函数调用；第 112 讲改为长度前缀帧","items":[{"label":"CLI 命令解析","sub":"ParseCommand / FormatResult","detail":"职责：把一行文本解析成 Command 并把结果格式化成一行文本；技术选型：strings.Fields 加显式 Op 映射，不引第三方解析库；失败处理：未知命令、缺 key、缺 value 分别用 fmt.Errorf 包装哨兵错误返回，绝不返回零值命令当成功。","tone":"blue"},{"label":"契约测试与基准","sub":"contract_test / bench","detail":"职责：以同一套断言验证每个实现都符合 Storage 契约；技术选型：表驱动子测试加 testing.B 的 RunParallel；失败处理：任一实现不满足契约时测试立刻失败，阻止不合契约的实现被合入。","tone":"blue"},{"label":"未来 TCP SDK","sub":"第 112 讲的 Client","detail":"职责：把远程调用伪装成本地 Apply；技术选型：本讲只在接口层预留位置，不写实现；失败处理：预留 ErrClosed 与上下文取消，让调用方切换实现时零改动。","tone":"gray"}]},{"name":"契约层","note":"四讲之内锁定的最小约定","protocol":"Apply(Command) 方法调用，依赖方向一律向内","items":[{"label":"Command 结构体","sub":"Op / Key / Value","detail":"职责：统一描述一次读写，是网络帧、WAL、Raft 日志唯一的数据载体；技术选型：Op 用显式数值的 byte，Value 用 []byte 承载二进制；失败处理：未知 Op 在实现入口返回 ErrBadOp，字段集合锁定不改，避免持久化格式漂移。","tone":"green"},{"label":"Storage 接口","sub":"Apply 与 Close","detail":"职责：定义执行一次命令并返回结果的唯一入口；技术选型：只有一个 Apply 方法加一个 Close，遵循小接口原则；失败处理：关闭后任何写返回 ErrClosed，实现用编译期断言检查是否满足契约。","tone":"green"},{"label":"Result 与哨兵错误","sub":"Found / errors.Is","detail":"职责：用 Found 区分空值与未命中，用包级哨兵承载可判定的失败语义；技术选型：errors.New 定义哨兵，调用方统一 errors.Is 判定；失败处理：错误一律包装而非拼字符串，保证跨包、跨网络仍可判定。","tone":"green"}]},{"name":"实现层","note":"可替换的存储引擎","protocol":"读写锁、值拷贝、errors.Is 错误链","items":[{"label":"Memory 全局锁","sub":"单 RWMutex 加 map","detail":"职责：最直白的内存实现；技术选型：sync.RWMutex 读并行写互斥，进出 []byte 全量值拷贝；失败处理：空 key、未命中、关闭后写、未知 Op 分别返回对应哨兵错误。","tone":"orange"},{"label":"ShardedMemory 锁分片","sub":"按 key 哈希分 N 片","detail":"职责：把写竞争摊到多把锁上；技术选型：FNV-1a 取模定位分片，每片独立 RWMutex；失败处理：分片数为 0 时构造阶段补默认值，Close 幂等，避免除零与重复关闭。","tone":"orange"},{"label":"TTLMemory 装饰器","sub":"过期时间加后台回收","detail":"职责：在任意 Storage 之外叠加过期能力而不改契约；技术选型：独立过期表加 time.Ticker 后台 goroutine，惰性判定用单调时钟；失败处理：Close 关闭 quit 并 WaitGroup 等待，杜绝 goroutine 泄漏。","tone":"orange"},{"label":"LegacyAdapter 适配器","sub":"WrapLegacy","detail":"职责：把第 25 讲按操作拆方法的旧实现接进新契约；技术选型：用 errors.Is 把旧哨兵翻译成本讲哨兵；失败处理：旧实现报错且无法翻译时原样返回，不吞错。","tone":"orange"}]},{"name":"基础设施层","note":"标准库原语","items":[{"label":"sync.RWMutex","sub":"读写锁原语","detail":"职责：保护 map 的并发访问；技术选型：标准库读写锁，读多写少时读可并行；失败处理：一律 defer 解锁，保证所有返回路径都释放。","tone":"purple"},{"label":"map 与 []byte","sub":"存储与值载体","detail":"职责：存放键值并承载二进制；技术选型：map[string][]byte 加值拷贝；失败处理：并发写 map 会触发运行时 fatal，靠锁彻底隔离。","tone":"purple"},{"label":"time 单调时钟","sub":"TTL 判定","detail":"职责：判断键是否过期；技术选型：time.Now 含单调时钟分量，不受墙钟回拨影响；失败处理：时钟异常时保守判为未过期，交由后台回收兜底。","tone":"purple"},{"label":"testing 与 atomic","sub":"基线与埋点","detail":"职责：提供压测与无锁计数；技术选型：testing.B 加 sync.atomic 计数器；失败处理：基准里遇错立即 b.Fatal，不让脏数据混进指标。","tone":"purple"}]}]' />
+<ArchBlueprint title="KV 系统分层架构（稳定契约层是唯一的窄腰）" caption="网络层、WAL、Raft 都是实现层或接入层的不同形态，契约层始终不动" :layers='[{"name":"接入层","note":"把外部输入变成 Command","protocol":"进程内函数调用；第 112 讲改为长度前缀帧","items":[{"label":"CLI 命令解析","sub":"ParseCommand / FormatResult","detail":"职责：把一行文本解析成 Command 并把结果格式化成一行文本；技术选型：strings.Fields 加显式 Op 映射，不引第三方解析库；失败处理：未知命令、缺 key、缺 value 分别用 fmt.Errorf 包装哨兵错误返回，绝不返回零值命令当成功。","tone":"blue"},{"label":"契约测试与基准","sub":"contract_test / bench","detail":"职责：以同一套断言验证每个实现都符合 Storage 契约；技术选型：表驱动子测试加 testing.B 的 RunParallel；失败处理：任一实现不满足契约时测试立刻失败，阻止不合契约的实现被合入。","tone":"blue"},{"label":"未来 TCP SDK","sub":"第 112 讲的 Client","detail":"职责：把远程调用伪装成本地 Apply；技术选型：本讲只在接口层预留位置，不写实现；失败处理：预留 ErrClosed 与上下文取消，让调用方切换实现时零改动。","tone":"gray"}]},{"name":"契约层","note":"四讲之内锁定的最小约定","protocol":"Apply(Command) 方法调用，依赖方向一律向内","items":[{"label":"Command 结构体","sub":"Op / Key / Value","detail":"职责：统一描述一次读写，是网络帧、WAL、Raft 日志唯一的数据载体；技术选型：Op 用显式数值的 byte，Value 用 []byte 承载二进制；失败处理：未知 Op 在实现入口返回 ErrBadOp，字段集合锁定不改，避免持久化格式漂移。","tone":"green"},{"label":"Storage 接口","sub":"Apply 与 Close","detail":"职责：定义执行一次命令并返回结果的唯一入口；技术选型：只有一个 Apply 方法加一个 Close，遵循小接口原则；失败处理：关闭后任何写返回 ErrClosed，实现用编译期断言检查是否满足契约。","tone":"green"},{"label":"Result 与哨兵错误","sub":"Found / errors.Is","detail":"职责：用 Found 区分空值与未命中，用包级哨兵承载可判定的失败语义；技术选型：errors.New 定义哨兵，调用方统一 errors.Is 判定；失败处理：错误一律包装而非拼字符串，保证跨包、跨网络仍可判定。","tone":"green"}]},{"name":"实现层","note":"可替换的存储引擎","protocol":"读写锁、值拷贝、errors.Is 错误链","items":[{"label":"Memory 全局锁","sub":"单 RWMutex 加 map","detail":"职责：最直白的内存实现；技术选型：sync.RWMutex 读并行写互斥，进出 []byte 全量值拷贝；失败处理：空 key、未命中、关闭后写、未知 Op 分别返回对应哨兵错误。","tone":"orange"},{"label":"ShardedMemory 锁分片","sub":"按 key 哈希分 N 片","detail":"职责：把写竞争摊到多把锁上；技术选型：FNV-1a 取模定位分片，每片独立 RWMutex；失败处理：分片数为 0 时构造阶段补默认值，Close 幂等，避免除零与重复关闭。","tone":"orange"},{"label":"TTLMemory 装饰器","sub":"过期时间加后台回收","detail":"职责：在任意 Storage 之外叠加过期能力而不改契约；技术选型：独立过期表加 time.Ticker 后台 goroutine，惰性判定用单调时钟；失败处理：Close 关闭 quit 并 WaitGroup 等待，杜绝 goroutine 泄漏。","tone":"orange"},{"label":"LegacyAdapter 适配器","sub":"WrapLegacy","detail":"职责：把第 025 讲按操作拆方法的旧实现接进新契约；技术选型：用 errors.Is 把旧哨兵翻译成本讲哨兵；失败处理：旧实现报错且无法翻译时原样返回，不吞错。","tone":"orange"}]},{"name":"基础设施层","note":"标准库原语","items":[{"label":"sync.RWMutex","sub":"读写锁原语","detail":"职责：保护 map 的并发访问；技术选型：标准库读写锁，读多写少时读可并行；失败处理：一律 defer 解锁，保证所有返回路径都释放。","tone":"purple"},{"label":"map 与 []byte","sub":"存储与值载体","detail":"职责：存放键值并承载二进制；技术选型：map[string][]byte 加值拷贝；失败处理：并发写 map 会触发运行时 fatal，靠锁彻底隔离。","tone":"purple"},{"label":"time 单调时钟","sub":"TTL 判定","detail":"职责：判断键是否过期；技术选型：time.Now 含单调时钟分量，不受墙钟回拨影响；失败处理：时钟异常时保守判为未过期，交由后台回收兜底。","tone":"purple"},{"label":"testing 与 atomic","sub":"基线与埋点","detail":"职责：提供压测与无锁计数；技术选型：testing.B 加 sync.atomic 计数器；失败处理：基准里遇错立即 b.Fatal，不让脏数据混进指标。","tone":"purple"}]}]' />
 
-逐层解读为什么这样切。接入层负责把「外部世界的输入」翻译成契约层的 `Command`，它是最可能变化的一层：今天是命令行，第 112 讲就换成 TCP 帧，但翻译结果始终是同一个结构体。契约层是整张图的重心，它不依赖任何实现，只定义数据结构与一个方法；把接口放在消费侧、定义得越小越好，是第 19 讲「接受接口、返回结构体」的直接应用。实现层是可替换的引擎集合：本讲一口气给出全局锁、锁分片、TTL 装饰器、旧实现适配器四种，它们互相不知道对方存在，只认契约。基础设施层是标准库原语，不含任何业务判断。
+逐层解读为什么这样切。接入层负责把「外部世界的输入」翻译成契约层的 `Command`，它是最可能变化的一层：今天是命令行，第 112 讲就换成 TCP 帧，但翻译结果始终是同一个结构体。契约层是整张图的重心，它不依赖任何实现，只定义数据结构与一个方法；把接口放在消费侧、定义得越小越好，是第 019 讲「接受接口、返回结构体」的直接应用。实现层是可替换的引擎集合：本讲一口气给出全局锁、锁分片、TTL 装饰器、旧实现适配器四种，它们互相不知道对方存在，只认契约。基础设施层是标准库原语，不含任何业务判断。
 
 依赖方向必须严格朝内：接入层依赖契约层，实现层依赖契约层，契约层谁都不依赖。**不允许反向依赖**——`Memory` 不许 import `net`，`ParseCommand` 不许直接摸 `map`，契约层不许引用任何具体引擎类型。一旦出现反向依赖，替换实现时就会牵连出一条谁也没预料到的引用链，第 113、114 讲要做的「换实现、不换调用」也就无从谈起。
 
 <ConceptDiagram type="iface" title="依赖倒置：所有实现都指向同一份 Storage 接口" caption="接口定义在消费侧，具体实现放在实现层，替换引擎不动调用方" />
 
-<FlowTimeline title="KV 贯穿线四讲演进" direction="horizontal" :steps='[{"title":"第 25 讲 内存版","desc":"四方法 Storage 与 MemStore 打样","tone":"blue"},{"title":"① 本讲 抽象定型","desc":"Command 与单入口 Storage 锁定","tone":"green"},{"title":"② 网络层","desc":"TCP 帧与客户端 SDK","tone":"orange"},{"title":"③ 持久化","desc":"WAL、恢复、锁分片、快照","tone":"purple"},{"title":"④ 分布式","desc":"分片、副本、Raft 共识","tone":"red"}]' />
+<FlowTimeline title="KV 贯穿线四讲演进" direction="horizontal" :steps='[{"title":"第 025 讲 内存版","desc":"四方法 Storage 与 MemStore 打样","tone":"blue"},{"title":"① 本讲 抽象定型","desc":"Command 与单入口 Storage 锁定","tone":"green"},{"title":"② 网络层","desc":"TCP 帧与客户端 SDK","tone":"orange"},{"title":"③ 持久化","desc":"WAL、恢复、锁分片、快照","tone":"purple"},{"title":"④ 分布式","desc":"分片、副本、Raft 共识","tone":"red"}]' />
 
 ## 3. 模块职责与依赖方向
 
@@ -196,9 +196,9 @@ message Result {
 }
 ```
 
-版本号与灰度策略：帧头 `version` 字段从 1 起，服务端拒绝不认识的版本，`Op` 数值只增不改；灰度靠「契约不变、实现可换」完成——第 25 讲的旧实现经 `WrapLegacy` 接入后，可与新实现并存，按 key 前缀逐步切流，回滚只需换回旧实现，无需数据迁移（因为都还没持久化）。
+版本号与灰度策略：帧头 `version` 字段从 1 起，服务端拒绝不认识的版本，`Op` 数值只增不改；灰度靠「契约不变、实现可换」完成——第 025 讲的旧实现经 `WrapLegacy` 接入后，可与新实现并存，按 key 前缀逐步切流，回滚只需换回旧实现，无需数据迁移（因为都还没持久化）。
 
-<Compare title="两种契约形态的取舍" :panels='[{"label":"第 25 讲：按操作拆方法","code":"Put(k,v) error\nGet(k) (string,error)\nDelete(k) error\nKeys() []string","note":"直观、教学友好；但每加一种操作都要改接口与全部实现，网络帧与 WAL 得自己重组命令"},{"label":"本讲：统一命令入口","code":"Apply(Command) (Result, error)\nClose() error","note":"新增操作只追加一个 Op 常量；Command 是纯数据，天然可编码、可重放、可复制，是四讲能连起来的前提"}]' />
+<Compare title="两种契约形态的取舍" :panels='[{"label":"第 025 讲：按操作拆方法","code":"Put(k,v) error\nGet(k) (string,error)\nDelete(k) error\nKeys() []string","note":"直观、教学友好；但每加一种操作都要改接口与全部实现，网络帧与 WAL 得自己重组命令"},{"label":"本讲：统一命令入口","code":"Apply(Command) (Result, error)\nClose() error","note":"新增操作只追加一个 Op 常量；Command 是纯数据，天然可编码、可重放、可复制，是四讲能连起来的前提"}]' />
 
 <ConceptDiagram type="error-chain" title="错误链：fmt.Errorf 包装哨兵，errors.Is 跨层判定" caption="哨兵错误在适配器、装饰器、网络映射之间始终可判定" />
 
@@ -586,14 +586,14 @@ func FormatResult(r Result, err error) string {
 
 ### 6.5 兼容适配器：WrapLegacy
 
-**设计意图**：证明本讲不是推翻第 25 讲，而是让旧实现不返工地接入。**关键取舍**：用调用方传入的旧哨兵错误做 `errors.Is` 翻译，让错误链在新旧两层都成立；翻译不了的错误原样返回，绝不吞错。这是「接口抽象要能延续」的字面实证，也是演进时留回滚路的标准手法。
+**设计意图**：证明本讲不是推翻第 025 讲，而是让旧实现不返工地接入。**关键取舍**：用调用方传入的旧哨兵错误做 `errors.Is` 翻译，让错误链在新旧两层都成立；翻译不了的错误原样返回，绝不吞错。这是「接口抽象要能延续」的字面实证，也是演进时留回滚路的标准手法。
 
 ```go
 package kv
 
 import "errors"
 
-// LegacyStore 是第 25 讲定义的「按操作拆方法、值为 string」的存储形状。
+// LegacyStore 是第 025 讲定义的「按操作拆方法、值为 string」的存储形状。
 type LegacyStore interface {
 	Put(key, value string) error
 	Get(key string) (string, error)
@@ -603,7 +603,7 @@ type LegacyStore interface {
 
 var _ Storage = (*legacyAdapter)(nil)
 
-// WrapLegacy 把第 25 讲风格的实现适配成本讲的 Storage。
+// WrapLegacy 把第 025 讲风格的实现适配成本讲的 Storage。
 // notFound 由调用方传入旧包的哨兵错误，适配器用 errors.Is 翻译，
 // 让错误链在新旧两层都可判定，旧实现一行都不用改。
 func WrapLegacy(l LegacyStore, notFound error) Storage {
@@ -650,7 +650,7 @@ func (a *legacyAdapter) Close() error { return nil }
 
 ### 6.6 正确性用例：memory_test.go
 
-**设计意图**：用表驱动覆盖 CRUD 全路径，用并发用例暴露锁漏保护，用一个复刻第 25 讲方法集的 `tinyLegacy` 验证适配器与 TTL 组合。**关键取舍**：错误断言一律用 `errors.Is`，不比文本；并发用例里 `t.Errorf` 在多 goroutine 下是安全的，配合 `go test -race` 才能抓出真正的数据竞争。
+**设计意图**：用表驱动覆盖 CRUD 全路径，用并发用例暴露锁漏保护，用一个复刻第 025 讲方法集的 `tinyLegacy` 验证适配器与 TTL 组合。**关键取舍**：错误断言一律用 `errors.Is`，不比文本；并发用例里 `t.Errorf` 在多 goroutine 下是安全的，配合 `go test -race` 才能抓出真正的数据竞争。
 
 ```go
 package kv
@@ -708,7 +708,7 @@ func TestConcurrentApply(t *testing.T) {
 	wg.Wait()
 }
 
-// tinyLegacy 复刻第 25 讲 MemStore 的方法集，并补一把锁：真实 MemStore
+// tinyLegacy 复刻第 025 讲 MemStore 的方法集，并补一把锁：真实 MemStore
 // 用 RWMutex 保护 map，测试替身也必须线程安全，因为 TTLMemory 的后台
 // 回收会从另一个 goroutine 调用 inner.Apply。
 type tinyLegacy struct {
@@ -1078,7 +1078,7 @@ func TestStorageContract(t *testing.T) {
 }
 ```
 
-mock 边界**只切在 `Storage` 接口上**：`tinyLegacy` 是第 25 讲实现的替身，`MeteredStorage` 是装饰器，都不需要 mock 框架。map、`RWMutex`、`time.Ticker` 是被测对象本身，不能 mock——把它们 mock 掉等于什么都没测。这也是「依赖倒置、接口留在消费侧」带来的直接收益。执行命令固定为 `go test -race ./...` 与 `go test -bench=. -benchmem -run=^$ ./...`。
+mock 边界**只切在 `Storage` 接口上**：`tinyLegacy` 是第 025 讲实现的替身，`MeteredStorage` 是装饰器，都不需要 mock 框架。map、`RWMutex`、`time.Ticker` 是被测对象本身，不能 mock——把它们 mock 掉等于什么都没测。这也是「依赖倒置、接口留在消费侧」带来的直接收益。执行命令固定为 `go test -race ./...` 与 `go test -bench=. -benchmem -run=^$ ./...`。
 
 ## 11. 部署与容量
 
@@ -1142,11 +1142,11 @@ go tool pprof -top cpu.out
 | 跳表 / B-tree 有序索引 | 需要范围扫描与排序 | 支持 `Scan(prefix)` 与有序遍历 | 实现复杂、常数更大、锁更难拆 | 出现范围查询需求 |
 | 直接接 Redis / 嵌入式 RocksDB | 要持久化或跨进程 | 能力齐全、久经考验 | 引入外部依赖与运维成本、延迟从微秒升到毫秒 | 单进程内存不够或需要 HA |
 
-第二张表对比**接口形态**的替代方案，把第 25 讲到本讲的那次升级放进演进脉络里：
+第二张表对比**接口形态**的替代方案，把第 025 讲到本讲的那次升级放进演进脉络里：
 
 | 接口形态 | 代表 | 优点 | 代价 | 结论 |
 | --- | --- | --- | --- | --- |
-| 按操作拆方法 | 第 25 讲 `Storage` | 教学直观、方法自解释 | 新增操作改接口与全部实现 | 不适合贯穿线 |
+| 按操作拆方法 | 第 025 讲 `Storage` | 教学直观、方法自解释 | 新增操作改接口与全部实现 | 不适合贯穿线 |
 | 单入口 `Apply(Command)` | 本讲及后三讲 | 新操作只加 Op，命令天然可编码可重放 | 需要显式 Op 与 Found 语义 | 选定，四讲锁定 |
 | 传原始字节 | 极简 RPC | 传输层零解析 | 类型、错误、版本全靠约定，易腐化 | 不采用 |
 
@@ -1186,21 +1186,21 @@ go tool pprof -top cpu.out
 
 ## 随堂检测
 
-<Quiz no="111-1" q="把第 25 讲的四方法 Storage 收敛成单入口 Apply(Command)，最直接换来的是什么？" :options='["读写性能立刻翻倍","新增操作只需追加 Op 常量，网络帧与 WAL 复用同一条命令路径","可以删掉所有错误判定","内存占用减半"]' answer="1" explain="收敛成单入口后，Command 成为纯数据载体：第 112 讲编码成帧、第 113 讲追加进 WAL、第 114 讲作为 Raft 日志复制，全都不用重组操作语义。性能与内存不是这次升级的目标，正确性反而是靠契约测试守住的。" />
+<Quiz no="111-1" q="把第 025 讲的四方法 Storage 收敛成单入口 Apply(Command)，最直接换来的是什么？" :options='["读写性能立刻翻倍","新增操作只需追加 Op 常量，网络帧与 WAL 复用同一条命令路径","可以删掉所有错误判定","内存占用减半"]' answer="1" explain="收敛成单入口后，Command 成为纯数据载体：第 112 讲编码成帧、第 113 讲追加进 WAL、第 114 讲作为 Raft 日志复制，全都不用重组操作语义。性能与内存不是这次升级的目标，正确性反而是靠契约测试守住的。" />
 
 <Quiz no="111-2" q="关于 Result.Found，下面哪种说法正确？" :options='["Found 为 true 时 Value 一定非空","Found 与 Value 是否为空正交，空值命中时 Found 仍为 true","Found 只在 OpGet 时有意义","DEL 一个不存在的键应该返回 Found 等于 true"]' answer="1" explain="Found 专门表达「是否命中」，与 Value 是不是 nil 无关，这正是把空值与未命中分开的关键。DEL 一个不存在的键本讲返回 Found 为 false 加 nil 错误，因为 DEL 幂等、重复删不该报错。" />
 
 <Predict no="111-3" q="先执行 SET k （存一个空值），再执行 GET k，FormatResult 会输出什么？" :options='["ERR not_found","NIL","OK 后面带一个尾空格","OK nil"]' answer="2" output="OK " explain="空值是合法命中：Apply 返回 Result{Found: true, Value: nil}，FormatResult 拼出 OK 加一个空格。若误判成未命中就会回源打爆下游，这正是 Found 字段存在的意义。" />
 
-<FillBlank no="111-4" tpl="判定「键不存在」统一用 ___ 配合哨兵错误；区分空值与未命中靠 Result 的 ___ 字段；把第 25 讲旧实现接进新契约用 ___；不让调用方改写内部数据靠进出双向 ___。" :answers='["errors.Is","Found","WrapLegacy~适配器","值拷贝~append复制"]' hint="四个空分别来自 errors 包、Result 字段、适配函数、切片处理手法" explain="errors.Is 沿错误链匹配哨兵；Found 与 Value 正交；WrapLegacy 把旧接口包成单入口且旧实现不改；值拷贝杜绝锁外改写底层数组。" :explains='["哨兵错误常被 fmt.Errorf 包裹，直接判等会漏；errors.Is 沿错误链解包比对，才能识别「键不存在」。","Value 为空时无法区分是存了空值还是没命中；Result 用独立的 Found 字段表达是否命中，二者正交。","旧实现签名与新契约不一致时，用适配函数把它包成统一入口，旧代码零改动即可接入，避免大范围重写引入回归。","若把内部切片的底层数组直接交出去，调用方在锁外改写会污染状态；进和出都做一次值拷贝，才能隔离内外数据。"]' />
+<FillBlank no="111-4" tpl="判定「键不存在」统一用 ___ 配合哨兵错误；区分空值与未命中靠 Result 的 ___ 字段；把第 025 讲旧实现接进新契约用 ___；不让调用方改写内部数据靠进出双向 ___。" :answers='["errors.Is","Found","WrapLegacy~适配器","值拷贝~append复制"]' hint="四个空分别来自 errors 包、Result 字段、适配函数、切片处理手法" explain="errors.Is 沿错误链匹配哨兵；Found 与 Value 正交；WrapLegacy 把旧接口包成单入口且旧实现不改；值拷贝杜绝锁外改写底层数组。" :explains='["哨兵错误常被 fmt.Errorf 包裹，直接判等会漏；errors.Is 沿错误链解包比对，才能识别「键不存在」。","Value 为空时无法区分是存了空值还是没命中；Result 用独立的 Found 字段表达是否命中，二者正交。","旧实现签名与新契约不一致时，用适配函数把它包成统一入口，旧代码零改动即可接入，避免大范围重写引入回归。","若把内部切片的底层数组直接交出去，调用方在锁外改写会污染状态；进和出都做一次值拷贝，才能隔离内外数据。"]' />
 
 ## 一页纸速记
 
-<KnowledgeCard :points='["承接第 25 讲并做一次刻意升级：Command 与单入口 Storage 定型为四讲不变的契约","Op 用显式数值、Value 用 []byte、Result 用 Found，三者都是为网络帧与 WAL 预留","单入口让命令成为纯数据，可编码、可重放、可复制，是贯穿线能连起来的前提","全局锁、锁分片、TTL 装饰器、旧实现适配器都实现同一个 Storage","WrapLegacy 证明旧实现不返工，契约测试证明每个实现都守同一套语义","基准测试建立的性能基线，是后面三讲量化演进代价的尺子"]' :pitfalls='["把 Op 写成 iota 自动值，编码进帧后重排就是兼容性事故","直接返回内部 []byte，调用方锁外改写制造数据竞争","空值与未命中不分，误判穿透打爆下游","TTL 后台 goroutine 不随 Close 退出，测试进程挂住","往 Command 加 trace_id 或 TTL 字段，破坏四讲锁定的契约"]' summary="先把可演进的契约定稳，再让实现去变；四讲换的是 Apply 背后的引擎，不是调用方的代码。" />
+<KnowledgeCard :points='["承接第 025 讲并做一次刻意升级：Command 与单入口 Storage 定型为四讲不变的契约","Op 用显式数值、Value 用 []byte、Result 用 Found，三者都是为网络帧与 WAL 预留","单入口让命令成为纯数据，可编码、可重放、可复制，是贯穿线能连起来的前提","全局锁、锁分片、TTL 装饰器、旧实现适配器都实现同一个 Storage","WrapLegacy 证明旧实现不返工，契约测试证明每个实现都守同一套语义","基准测试建立的性能基线，是后面三讲量化演进代价的尺子"]' :pitfalls='["把 Op 写成 iota 自动值，编码进帧后重排就是兼容性事故","直接返回内部 []byte，调用方锁外改写制造数据竞争","空值与未命中不分，误判穿透打爆下游","TTL 后台 goroutine 不随 Close 退出，测试进程挂住","往 Command 加 trace_id 或 TTL 字段，破坏四讲锁定的契约"]' summary="先把可演进的契约定稳，再让实现去变；四讲换的是 Apply 背后的引擎，不是调用方的代码。" />
 
 ## 小结与下一讲
 
-1. 承接第 25 讲，把按操作拆方法的 `Storage` 收敛成单入口 `Apply(Command)`，把 `Op`、`Command`、`Result` 与哨兵错误定型为四讲不再改动的契约，并用 `WrapLegacy` 证明旧实现不返工即可接入。
+1. 承接第 025 讲，把按操作拆方法的 `Storage` 收敛成单入口 `Apply(Command)`，把 `Op`、`Command`、`Result` 与哨兵错误定型为四讲不再改动的契约，并用 `WrapLegacy` 证明旧实现不返工即可接入。
 2. 给出全局锁、锁分片、TTL 装饰器、埋点装饰器四类可替换实现，用值拷贝、`Found`、单调时钟、`errors.Is` 处理了空值、并发、过期、错误链四类边界，并用契约测试把它们钉在同一套语义上。
 3. 建立了可度量的需求表、失败矩阵、压测基线与演进路线，诚实声明纯内存版 RPO 等于全量数据、跨 key 无全局顺序这些边界。
 

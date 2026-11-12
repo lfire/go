@@ -1,9 +1,9 @@
-# 第 47 讲 · context：取消、超时、值传递
+# 第 047 讲 · context：取消、超时、值传递
 
 - **阶段**：L4 · 并发编程
 - **目标**：让并发任务可被统一叫停
 - **知识点**：Context 接口 / WithCancel/Timeout/Deadline / 取消传播 / context.Value 克制使用 / 服务端标准用法
-- **教程正文**：[第 47 讲 · context：取消、超时、值传递](/concurrency/context)
+- **教程正文**：[第 047 讲 · context：取消、超时、值传递](/concurrency/context)
 - **GitHub 目录**：[l4-concurrency/lesson-047-context](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-047-context)
 
 ## 运行

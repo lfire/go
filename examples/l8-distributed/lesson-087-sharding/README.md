@@ -1,9 +1,9 @@
-# 第 87 讲 · 一致性哈希、分片与路由
+# 第 087 讲 · 一致性哈希、分片与路由
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：让数据分布可扩展、可迁移
 - **知识点**：取模分片的问题 / 一致性哈希与虚拟节点 / 分片键选择 / 扩容与再平衡 / 热点与倾斜
-- **教程正文**：[第 87 讲 · 一致性哈希、分片与路由](/distributed/sharding)
+- **教程正文**：[第 087 讲 · 一致性哈希、分片与路由](/distributed/sharding)
 - **GitHub 目录**：[l8-distributed/lesson-087-sharding](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-087-sharding)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 69 讲 · Elasticsearch 与倒排索引
+# 第 069 讲 · Elasticsearch 与倒排索引
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：理解搜索为何快以及何时该用
 - **知识点**：倒排索引 / 分词与 mapping / 查询 DSL / 写入与刷新 / 数据同步与异构
-- **教程正文**：[第 69 讲 · Elasticsearch 与倒排索引](/server/search)
+- **教程正文**：[第 069 讲 · Elasticsearch 与倒排索引](/server/search)
 - **GitHub 目录**：[l6-server/lesson-069-search](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-069-search)
 
 ## 运行

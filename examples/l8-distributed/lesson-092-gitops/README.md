@@ -1,9 +1,9 @@
-# 第 92 讲 · Helm / GitOps / 灰度发布
+# 第 092 讲 · Helm / GitOps / 灰度发布
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：做到可声明、可回滚的发布
 - **知识点**：Helm Chart 结构 / GitOps 与 Argo CD / 滚动/蓝绿/金丝雀 / 配置与密钥管理 / 回滚演练
-- **教程正文**：[第 92 讲 · Helm / GitOps / 灰度发布](/distributed/gitops)
+- **教程正文**：[第 092 讲 · Helm / GitOps / 灰度发布](/distributed/gitops)
 - **GitHub 目录**：[l8-distributed/lesson-092-gitops](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-092-gitops)
 
 ## 运行

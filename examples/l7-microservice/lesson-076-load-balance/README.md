@@ -1,9 +1,9 @@
-# 第 76 讲 · 负载均衡与 resolver 源码
+# 第 076 讲 · 负载均衡与 resolver 源码
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：理解并定制 gRPC 的负载均衡
 - **知识点**：resolver/balancer 接口 / pick_first 与 round_robin / 策略对比 / 自定义实现 / 一致性哈希
-- **教程正文**：[第 76 讲 · 负载均衡与 resolver 源码](/microservice/load-balance)
+- **教程正文**：[第 076 讲 · 负载均衡与 resolver 源码](/microservice/load-balance)
 - **GitHub 目录**：[l7-microservice/lesson-076-load-balance](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-076-load-balance)
 
 ## 运行

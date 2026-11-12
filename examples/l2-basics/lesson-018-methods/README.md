@@ -1,9 +1,9 @@
-# 第 18 讲 · 方法与接收者：值还是指针
+# 第 018 讲 · 方法与接收者：值还是指针
 
 - **阶段**：L2 · 语法核心
 - **目标**：理解方法集，写出不踩坑的接收者
 - **知识点**：方法定义 / 值/指针接收者差别 / 方法集与接口实现 / nil 接收者 / 何时用指针
-- **教程正文**：[第 18 讲 · 方法与接收者：值还是指针](/basics/methods)
+- **教程正文**：[第 018 讲 · 方法与接收者：值还是指针](/basics/methods)
 - **GitHub 目录**：[l2-basics/lesson-018-methods](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-018-methods)
 
 ## 运行

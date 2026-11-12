@@ -17,18 +17,18 @@ description: 不假设任何编程基础，补齐值、类型、内存、函数�
 
 ## 讲次安排
 
-本阶段共 **8 讲**（第 05–12 讲），合计约 255 分钟，难度 1–2 级。
+本阶段共 **8 讲**（第 005–012 讲），合计约 255 分钟，难度 1–2 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 05 | [程序、数据、值与类型](/foundation/concepts) | ★☆☆☆☆ | 25 分钟 | 程序=数据+处理 · 值与变量的区别 · 静态类型意味着什么 |
-| 06 | [变量、常量、iota 与作用域](/foundation/variables) | ★☆☆☆☆ | 30 分钟 | var 与 := · 零值 · const 与 iota 枚举 |
-| 07 | [数值、布尔、字符与类型转换](/foundation/numeric) | ★☆☆☆☆ | 30 分钟 | 整型与平台相关类型 · 浮点与精度 · byte/rune |
-| 08 | [字符串、rune 与高效拼接](/foundation/strings) | ★★☆☆☆ | 30 分钟 | string 不可变 · byte 与 rune · range 遍历 |
-| 09 | [栈、堆、值语义与指针](/foundation/memory) | ★★☆☆☆ | 35 分钟 | 栈帧与堆 · 值传递 · 指针与取址 |
-| 10 | [函数、多返回值、变参与闭包](/foundation/callables) | ★★☆☆☆ | 35 分钟 | 多返回值与命名返回 · 变参 · 函数作为值 |
-| 11 | [包、模块与依赖管理](/foundation/packages) | ★★☆☆☆ | 30 分钟 | package 与 import · internal 可见性 · go.mod/go.sum |
-| 12 | [阶段综合：CLI 单位换算器](/foundation/capstone) | ★★☆☆☆ | 40 分钟 | flag 解析 · 输入校验与错误返回 · 表格驱动测试 |
+| 005 | [程序、数据、值与类型](/foundation/concepts) | ★☆☆☆☆ | 25 分钟 | 程序=数据+处理 · 值与变量的区别 · 静态类型意味着什么 |
+| 006 | [变量、常量、iota 与作用域](/foundation/variables) | ★☆☆☆☆ | 30 分钟 | var 与 := · 零值 · const 与 iota 枚举 |
+| 007 | [数值、布尔、字符与类型转换](/foundation/numeric) | ★☆☆☆☆ | 30 分钟 | 整型与平台相关类型 · 浮点与精度 · byte/rune |
+| 008 | [字符串、rune 与高效拼接](/foundation/strings) | ★★☆☆☆ | 30 分钟 | string 不可变 · byte 与 rune · range 遍历 |
+| 009 | [栈、堆、值语义与指针](/foundation/memory) | ★★☆☆☆ | 35 分钟 | 栈帧与堆 · 值传递 · 指针与取址 |
+| 010 | [函数、多返回值、变参与闭包](/foundation/callables) | ★★☆☆☆ | 35 分钟 | 多返回值与命名返回 · 变参 · 函数作为值 |
+| 011 | [包、模块与依赖管理](/foundation/packages) | ★★☆☆☆ | 30 分钟 | package 与 import · internal 可见性 · go.mod/go.sum |
+| 012 | [阶段综合：CLI 单位换算器](/foundation/capstone) | ★★☆☆☆ | 40 分钟 | flag 解析 · 输入校验与错误返回 · 表格驱动测试 |
 
 ## 怎么学这一阶段
 
@@ -44,4 +44,4 @@ description: 不假设任何编程基础，补齐值、类型、内存、函数�
 
 <ProgressTracker />
 
-[← 上一阶段：导学 · 建立地图](/guide/) · [第 05 讲开始 →](/foundation/concepts) · [下一阶段：阶段二 · 语法核心](/basics/)
+[← 上一阶段：导学 · 建立地图](/guide/) · [第 005 讲开始 →](/foundation/concepts) · [下一阶段：阶段二 · 语法核心](/basics/)

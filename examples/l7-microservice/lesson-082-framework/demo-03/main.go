@@ -18,7 +18,7 @@ func (o *Observability) Report() (uint64, uint64, time.Duration) {
 	return o.requests.Load(), o.errors.Load(), time.Duration(o.latency.Load())
 }
 
-// Middleware 是统一拦截链签名，与第 74 讲一致。
+// Middleware 是统一拦截链签名，与第 074 讲一致。
 type Middleware func(ctx context.Context, method string, next func() error) error
 
 func chain(ms []Middleware, final func() error) func() error {

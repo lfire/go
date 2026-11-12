@@ -1,9 +1,9 @@
-# 第 99 讲 · Go 内存模型与 happens-before 精解
+# 第 099 讲 · Go 内存模型与 happens-before 精解
 
 - **阶段**：L9 · 资深进阶与源码
 - **目标**：对并发正确性给出严格依据
 - **知识点**：官方内存模型定义 / 同步原语的保证 / 数据竞争的形式化 / 错误示例剖析 / 与硬件内存序关系
-- **教程正文**：[第 99 讲 · Go 内存模型与 happens-before 精解](/advanced/memory-model)
+- **教程正文**：[第 099 讲 · Go 内存模型与 happens-before 精解](/advanced/memory-model)
 - **GitHub 目录**：[l9-advanced/lesson-099-memory-model](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-099-memory-model)
 
 ## 运行

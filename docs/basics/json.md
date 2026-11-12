@@ -1,11 +1,11 @@
 ---
-title: 第 24 讲 · JSON、序列化与常见坑
+title: 第 024 讲 · JSON、序列化与常见坑
 description: 用 encoding/json 与 tag 写稳定的数据契约，讲清 omitempty、数字精度、时间格式、未知字段兼容与流式编解码。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="写出稳定兼容的 API 数据契约" prereq="第 23 讲 · 反射 reflect 与 go generate" />
+<StageHeader stage="L2 · 语法核心" level="★★☆☆☆" time="35 分钟" goal="写出稳定兼容的 API 数据契约" prereq="第 023 讲 · 反射 reflect 与 go generate" />
 
-# 第 24 讲 · JSON、序列化与常见坑
+# 第 024 讲 · JSON、序列化与常见坑
 
 > 服务之间、前后端之间传数据，几乎都落在 JSON 上。Go 的做法很直接：定义一个结构体，用字段标签说明每个键叫什么、什么时候不写出，编解码交给 `encoding/json`。可这套看似简单的机制里，藏着几个特别爱出事的角落：`omitempty` 会把合法的 0 一起吞掉，大整数经 `float64` 转一手就丢了末位，`time.Time` 的默认格式未必是前端要的，多传一个字段又涉及兼容。这一讲把这些坑连同工程上的约定一次讲清楚。
 
@@ -283,7 +283,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 解释 `Marshal(v any)` 接收接口时的两个字布局，[第 31 讲](/core/string-internals) 讲 `string` 与 `[]byte` 转换及 UTF-8 边界；[第 57 讲](/engineering/error-design) 把编解码错误收敛成统一响应。实战里，[第 63 讲](/server/rest-api) 把本讲的字段、精度与兼容规则写成 API 契约，[第 112 讲](/projects/kv-2-network) 的协议帧编解码、[第 115 讲](/projects/micro-ecommerce) 的 DTO 设计都建立在「结构体加 tag 就是数据契约」这一条上。
+[第 030 讲](/core/interface-internals) 解释 `Marshal(v any)` 接收接口时的两个字布局，[第 031 讲](/core/string-internals) 讲 `string` 与 `[]byte` 转换及 UTF-8 边界；[第 057 讲](/engineering/error-design) 把编解码错误收敛成统一响应。实战里，[第 063 讲](/server/rest-api) 把本讲的字段、精度与兼容规则写成 API 契约，[第 112 讲](/projects/kv-2-network) 的协议帧编解码、[第 115 讲](/projects/micro-ecommerce) 的 DTO 设计都建立在「结构体加 tag 就是数据契约」这一条上。
 
 ## 动手练一练
 
@@ -291,9 +291,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="24-1" q="关于 omitempty，下面哪项说法正确？" :options='["只让空字符串字段不输出","结构体零值字段也不会输出","0、false、空切片与 nil 都会被当作零值而不输出","它会影响解码时对缺失字段的处理"]' answer="2" explain="omitempty 只在编码时生效，对零值一视同仁：数字 0、false、空串、空切片、空 map、nil 都不写出。想保留 0 请用指针字段。" />
+<Quiz no="024-1" q="关于 omitempty，下面哪项说法正确？" :options='["只让空字符串字段不输出","结构体零值字段也不会输出","0、false、空切片与 nil 都会被当作零值而不输出","它会影响解码时对缺失字段的处理"]' answer="2" explain="omitempty 只在编码时生效，对零值一视同仁：数字 0、false、空串、空切片、空 map、nil 都不写出。想保留 0 请用指针字段。" />
 
-<Predict no="24-2" q="第二段代码里，json.Marshal(c) 打印出来的第一行是什么？" :options='["{\"retries\":0,\"debug\":false,\"ratio\":0,\"name\":\"\"}","{}","null","编译报错"]' answer="1" output="{}" explain="四个字段恰好都是零值且都带 omitempty，于是全部不出现在结果里，序列化结果就是一个空对象。" />
+<Predict no="024-2" q="第二段代码里，json.Marshal(c) 打印出来的第一行是什么？" :options='["{\"retries\":0,\"debug\":false,\"ratio\":0,\"name\":\"\"}","{}","null","编译报错"]' answer="1" output="{}" explain="四个字段恰好都是零值且都带 omitempty，于是全部不出现在结果里，序列化结果就是一个空对象。" />
 
 ## 一页纸速记
 

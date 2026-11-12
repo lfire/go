@@ -1,11 +1,11 @@
 ---
-title: 第 36 讲 · 编译、链接、SSA 与内联
+title: 第 036 讲 · 编译、链接、SSA 与内联
 description: 看懂 Go 编译产物与优化决策：SSA 中间表示、内联预算、逃逸分析输出与 objdump / nm 验证
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="看懂 Go 编译产物与优化决策" prereq="第 35 讲 · 程序启动、init 顺序与包初始化" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="看懂 Go 编译产物与优化决策" prereq="第 035 讲 · 程序启动、init 顺序与包初始化" />
 
-# 第 36 讲 · 编译、链接、SSA 与内联
+# 第 036 讲 · 编译、链接、SSA 与内联
 
 > `go build` 之后那个二进制里，你的函数还在原来的样子吗？多半不在：小函数可能被内联抹掉，循环里的边界检查可能被消除，局部变量可能被挪到堆。这一讲把从源码到可执行文件的流水线拆开，并给出每条「优化结论」的验证命令，而不是让你背结论。
 
@@ -89,7 +89,7 @@ func main() {
 <Term word="SSA" text="静态单赋值中间表示，每个变量只赋值一次、汇合处用 Phi 选值，便于做统一的数据流优化。" />
 <Term word="内联预算" text="编译器给函数体估算的成本上限（约 80 单位），超限或含昂贵构造就不内联。" />
 
-<Callout type="warn" title="易错点" text="读 -gcflags=-m 时认准三种措辞：escapes to heap 与 moved to heap 表示上堆，does not escape 表示留在栈。至于「哪些写法会逃逸」的完整清单在第 27 讲，本讲只关注怎么读输出、怎么验证优化是否生效。" />
+<Callout type="warn" title="易错点" text="读 -gcflags=-m 时认准三种措辞：escapes to heap 与 moved to heap 表示上堆，does not escape 表示留在栈。至于「哪些写法会逃逸」的完整清单在第 027 讲，本讲只关注怎么读输出、怎么验证优化是否生效。" />
 
 ### 推导链：从 cmd/compile 各阶段到 SSA 上的边界检查消除
 
@@ -193,7 +193,7 @@ BudgetExpansion(maxBudget):
 
 `scoring.go` 的注释把动机写清了：新内联器会在 `RevisitInlinability` 里按调用点启发式把某些 callee 的评分**往下调**，但这个调整发生在 `CanInline` 之后，所以初次预算要预先放宽、留出余量，后面再逐个降级；默认「返回 maxBudget」正好把 80 加倍到 160。另一个系数 `inlineHotMaxBudget = 2000` 由 `PGOInlinePrologue` 通过 profile 的调用边权重 CDF（默认 `inlineCDFHotCallSiteThresholdPercent = 99`）填 `candHotCalleeMap` 后启用，并可用 `-d=pgoinlinebudget=N` 改写。两者作用在不同路径：`2000` 是「热点函数」的固定天花板，`160` 是「通用放宽量」，别混成一个数。
 
-新观察角度：用 `-d=pgodebug=1` 与 `-d=pgoinlinebudget=N` 把放大系数**直接打印并改掉**，再用 `-d=dumpinlcallsitescores=1` 看调用点评分。复用[第 27 讲](/core/escape-analysis)那个 `pgofinal` 包（`helper` 成本 97、`BenchmarkHot` 生成 `default.pgo`）：
+新观察角度：用 `-d=pgodebug=1` 与 `-d=pgoinlinebudget=N` 把放大系数**直接打印并改掉**，再用 `-d=dumpinlcallsitescores=1` 看调用点评分。复用[第 027 讲](/core/escape-analysis)那个 `pgofinal` 包（`helper` 成本 97、`BenchmarkHot` 生成 `default.pgo`）：
 
 ```bash
 go test -bench=. -benchtime=300000x -cpuprofile=default.pgo -run=^$ .
@@ -212,7 +212,7 @@ sed -n '591,610p' "$(go env GOROOT)/src/cmd/compile/internal/inline/inlheur/scor
 
 逐字段解释：默认 `budget=2000` 远超 `cost 97`，所以 `canInlineFunction | cost: 97` 通过；`-d=pgoinlinebudget=160` 把天花板改成 160，仍大于 97，于是多打印 `hot-budget check allows inlining for call ... (cost 97)` 并给出调用点 `lib.go:43:14` 与函数 `pgofinal.Hot`；改成 90 后 97 大于 90，这行消失——放大系数的**阈值作用**被两次构建直接夹出来。`-d=dumpinlcallsitescores=1` 的表头是 `Score / Adjustment / Status / Callee / CallerPos / ScoreFlags`，`92 -5 ---|PGO ... inLoopAdj` 说明该调用点原始评分经 `-5`（`inLoopAdj`，循环内启发式调整）后为 92，`|PGO` 标记它受 profile 影响；`---` 表示本次调整没有跨过阈值。`sed` 两段分别给出 `inlineBudget` 的 `budget = inlineHotMaxBudget` / `budget += BudgetExpansion` 与 `BudgetExpansion` 的「把 80 放宽到 160」原文，把打印出的数字接回算式。
 
-边界：`inlineHotMaxBudget = 2000`、`inlineMaxBudget = 80`、`BudgetExpansion` 默认返回 `maxBudget`、99% CDF 阈值都是 Go 1.23 取值，历史上多次调整；`-d=pgodebug`、`-d=pgoinlinebudget`、`-d=inlbudgetslack`、`-d=dumpinlcallsitescores` 全是编译器内部开关，跨版本可能改名或移除；`default.pgo` 必须与构建包路径匹配，profile 无热点边时不会放大；`RevisitInlinability` 的降级发生在 `CanInline` 之后，所以「放宽到 160」不等于「最终一定内联」；`-d=ssa/all/time` 的耗时、`-d=dumpinlcallsitescores` 的评分都随机型与机器波动，只作顺序与相对关系证据。这条链在第 98 讲（编译器源码）会与 `interleaved.DevirtualizeAndInlinePackage` 的主流程合流。
+边界：`inlineHotMaxBudget = 2000`、`inlineMaxBudget = 80`、`BudgetExpansion` 默认返回 `maxBudget`、99% CDF 阈值都是 Go 1.23 取值，历史上多次调整；`-d=pgodebug`、`-d=pgoinlinebudget`、`-d=inlbudgetslack`、`-d=dumpinlcallsitescores` 全是编译器内部开关，跨版本可能改名或移除；`default.pgo` 必须与构建包路径匹配，profile 无热点边时不会放大；`RevisitInlinability` 的降级发生在 `CanInline` 之后，所以「放宽到 160」不等于「最终一定内联」；`-d=ssa/all/time` 的耗时、`-d=dumpinlcallsitescores` 的评分都随机型与机器波动，只作顺序与相对关系证据。这条链在第 098 讲（编译器源码）会与 `interleaved.DevirtualizeAndInlinePackage` 的主流程合流。
 
 ### 边界、常见误解与前后联系
 
@@ -224,7 +224,7 @@ sed -n '591,610p' "$(go env GOROOT)/src/cmd/compile/internal/inline/inlheur/scor
 
 边界要点：Go 1.17 起 amd64 等平台改用寄存器 ABI，汇编里参数位置与旧资料不同；Go 1.20 起支持 PGO（`-pgo`，Go 1.21 起默认读取 `default.pgo`），内联与去虚拟化决策会因 profile 变化；`-gcflags` 默认只作用于当前包，要观察标准库优化得用 `-gcflags=all=-m`；`GOSSAFUNC` 生成的 `ssa.html` 只覆盖指定函数、不含链接与调度后的结果；`//go:noinline`、`//go:linkname` 等编译指令不保证跨版本稳定；`go tool nm` 的符号可能因死代码消除而缺失，别把「符号不在」直接当成「函数没写」；观测 BCE 的 `-d=ssa/check_bce/debug` 属于编译器内部开关，不同版本可能改名或移除。
 
-前后联系：第 27 讲（逃逸分析）与本讲共用 `-gcflags=-m`，第 98 讲（编译器源码：SSA、逃逸与内联）会精读 SSA 构造、优化 pass、内联预算与逃逸分析实现，是本讲最直接的源码延续；第 100 讲（极致性能优化）讲 PGO 与 profile 驱动内联在真实调优里的位置；第 99 讲（Go 内存模型与 happens-before）虽不直接讲编译，但「编译器与 CPU 的重排」正是它要约束的对象。
+前后联系：第 027 讲（逃逸分析）与本讲共用 `-gcflags=-m`，第 098 讲（编译器源码：SSA、逃逸与内联）会精读 SSA 构造、优化 pass、内联预算与逃逸分析实现，是本讲最直接的源码延续；第 100 讲（极致性能优化）讲 PGO 与 profile 驱动内联在真实调优里的位置；第 099 讲（Go 内存模型与 happens-before）虽不直接讲编译，但「编译器与 CPU 的重排」正是它要约束的对象。
 
 ## 4. 工程实践
 
@@ -266,8 +266,8 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="36-1" q="想看某个函数被优化器逐 pass 改写的全过程，应该用哪条命令？" :options='["go vet","GOSSAFUNC=main.f go build","go build -gcflags=-m","go tool nm"]' answer="1" explain="GOSSAFUNC 指定函数后，编译器把各轮 SSA pass 的 IR 写进 ssa.html，可逐步对比优化前后。" />
-<Predict no="36-2" q="一个小函数因为含 select 和 defer 而没被内联，最可能的原因是什么？" :options='["函数返回了指针","内联成本超预算或命中禁止内联的构造","它没有 import","目标平台不支持"]' answer="1" output="内联被拒绝，函数保留独立栈帧并产生 CALL" explain="内联预算约 80 单位，select、defer、go、recover 等构造成本高或直接禁止内联。" />
+<Quiz no="036-1" q="想看某个函数被优化器逐 pass 改写的全过程，应该用哪条命令？" :options='["go vet","GOSSAFUNC=main.f go build","go build -gcflags=-m","go tool nm"]' answer="1" explain="GOSSAFUNC 指定函数后，编译器把各轮 SSA pass 的 IR 写进 ssa.html，可逐步对比优化前后。" />
+<Predict no="036-2" q="一个小函数因为含 select 和 defer 而没被内联，最可能的原因是什么？" :options='["函数返回了指针","内联成本超预算或命中禁止内联的构造","它没有 import","目标平台不支持"]' answer="1" output="内联被拒绝，函数保留独立栈帧并产生 CALL" explain="内联预算约 80 单位，select、defer、go、recover 等构造成本高或直接禁止内联。" />
 
 ## 一页纸速记
 

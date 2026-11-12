@@ -1,11 +1,11 @@
 ---
-title: 第 29 讲 · map 底层：hmap、桶与渐进扩容
+title: 第 029 讲 · map 底层：hmap、桶与渐进扩容
 description: 理解哈希表的实现与性能特征：hmap/bmap 结构、哈希与桶定位、溢出桶、等量/翻倍扩容、迁移与遍历
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="理解哈希表的实现与性能特征" prereq="第 16 讲 · map：哈希、遍历与 Set 技巧" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="理解哈希表的实现与性能特征" prereq="第 016 讲 · map：哈希、遍历与 Set 技巧" />
 
-# 第 29 讲 · map 底层：hmap、桶与渐进扩容
+# 第 029 讲 · map 底层：hmap、桶与渐进扩容
 
 > 会用 `map` 只需三行代码，但要解释「为什么遍历无序」「为什么并发写直接 fatal error」「为什么删了几十万个键内存还不降」，就得进到它的内部。这一讲把哈希表拆成目录、桶和搬迁三步，并特别标出一个容易踩坑的事实：这些内部结构在 Go 1.24 被换掉了。
 
@@ -156,7 +156,7 @@ go version
 GOEXPERIMENT=noswissmap go run main.go
 ```
 
-<Callout type="warn" title="unsafe 镜像的风险边界" text="用镜像结构读 count / B 只为教学：它依赖 runtime 私有布局，换一个 Go 版本就可能错位甚至崩溃。生产代码永远不要这么干，这正是第 37 讲 unsafe 主题要展开的边界。此外，并发读写 map 会直接 fatal error，delete 不会缩容，元素地址也不可取。" />
+<Callout type="warn" title="unsafe 镜像的风险边界" text="用镜像结构读 count / B 只为教学：它依赖 runtime 私有布局，换一个 Go 版本就可能错位甚至崩溃。生产代码永远不要这么干，这正是第 037 讲 unsafe 主题要展开的边界。此外，并发读写 map 会直接 fatal error，delete 不会缩容，元素地址也不可取。" />
 
 ### 推导链：从 runtime/map.go 推到每一个可观察行为
 
@@ -403,7 +403,7 @@ go build -o m23bin m24.go && go tool nm ./m23bin | grep -E 'runtime\.makemap|run
 
 边界要点：`nil` map 的读、`len`、`delete`、`range` 都安全，写入 panic；迭代期间删除或新增键是否被遍历到不保证；map 的 key 必须可比较（slice、map、func 不能作键）；Go 1.24 起默认 Swiss Table，`hmap`/`bmap` 这套字段全部失效，`GOEXPERIMENT=noswissmap` 仅用于复现经典布局、不是长期契约；`unsafe.Sizeof(m)` 只给指针宽度，看不到桶内存；用 `unsafe` 镜像读私有字段跨版本即错位甚至崩溃；`map` 不是并发安全容器，多 goroutine 共享必须外部同步或换 `sync.Map`（阶段四）。
 
-前后联系：第 16 讲（map 的使用）与第 26 讲（描述符）在这里合流；第 98 讲（编译器源码：SSA、逃逸与内联）会看 map 语法在 `cmd/compile/internal/walk` 阶段如何被降级为上述运行时调用、以及 `_fast64` 这类按类型特化是怎么选出来的，第 97 讲（channel/mutex 源码与锁竞争）给出并发 map 与 `sync.Map` 的实现依据，第 100 讲（极致性能优化）把 `make(map[K]V, n)` 预分配列为常规优化。另外第 96 讲（GC 源码）会解释 `bmap.overflow` 这类指针字段为何让 map 所在 span 必须是 scan 而不是 noscan。
+前后联系：第 016 讲（map 的使用）与第 026 讲（描述符）在这里合流；第 098 讲（编译器源码：SSA、逃逸与内联）会看 map 语法在 `cmd/compile/internal/walk` 阶段如何被降级为上述运行时调用、以及 `_fast64` 这类按类型特化是怎么选出来的，第 097 讲（channel/mutex 源码与锁竞争）给出并发 map 与 `sync.Map` 的实现依据，第 100 讲（极致性能优化）把 `make(map[K]V, n)` 预分配列为常规优化。另外第 096 讲（GC 源码）会解释 `bmap.overflow` 这类指针字段为何让 map 所在 span 必须是 scan 而不是 noscan。
 
 ## 4. 工程实践
 
@@ -457,11 +457,11 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="29-1" q="关于 Go 的 map 遍历，下列说法正确的是？" :options='["顺序固定，按插入先后","顺序按 key 排序","顺序不保证，多次遍历可能不同","只在并发时才会乱序"]' answer="2" explain="运行时为每次 range 随机选择起始桶与起始槽，渐进扩容期间还要兼顾新旧桶，因此顺序不可依赖。" />
+<Quiz no="029-1" q="关于 Go 的 map 遍历，下列说法正确的是？" :options='["顺序固定，按插入先后","顺序按 key 排序","顺序不保证，多次遍历可能不同","只在并发时才会乱序"]' answer="2" explain="运行时为每次 range 随机选择起始桶与起始槽，渐进扩容期间还要兼顾新旧桶，因此顺序不可依赖。" />
 
-<Predict no="29-2" q="插入 20 万个键后再删掉 19.9 万个，len 与底层桶内存会怎样？" :options='["len 与桶内存都降到 1000 量级","len 降到 1000，但桶数组不会自动缩小","len 不变","map 自动缩容并触发 panic"]' answer="1" output="len 降到 1000，桶仍在，HeapAlloc 不会成比例下降" explain="delete 只清槽位，不归还桶数组；map 没有自动缩容机制。要真正释放，就重建一个新 map 把剩余键搬过去。" />
+<Predict no="029-2" q="插入 20 万个键后再删掉 19.9 万个，len 与底层桶内存会怎样？" :options='["len 与桶内存都降到 1000 量级","len 降到 1000，但桶数组不会自动缩小","len 不变","map 自动缩容并触发 panic"]' answer="1" output="len 降到 1000，桶仍在，HeapAlloc 不会成比例下降" explain="delete 只清槽位，不归还桶数组；map 没有自动缩容机制。要真正释放，就重建一个新 map 把剩余键搬过去。" />
 
-<FillBlank no="29-3" tpl="经典 map 结构里记录桶个数对数的字段是 ___，一个 bmap 桶最多放 ___ 个键值对；负载因子超过约 6.5 会触发翻倍扩容。" :answers='["B","8"]' hint="填一个字段名与一个数字" explain="B 决定桶数为 2 的 B 次方；每桶 8 个槽，装不下时挂溢出桶。" :explains='["hmap 存的是桶数对 2 取对数得到的 B，桶数为 2 的 B 次方；扩容只需把 B 加一，桶数便翻倍。","每个 bmap 固定 8 个槽位，配合 top hash 快速筛选；一桶装满后不立刻扩容，而是先挂溢出桶承接多出的键值。"]' />
+<FillBlank no="029-3" tpl="经典 map 结构里记录桶个数对数的字段是 ___，一个 bmap 桶最多放 ___ 个键值对；负载因子超过约 6.5 会触发翻倍扩容。" :answers='["B","8"]' hint="填一个字段名与一个数字" explain="B 决定桶数为 2 的 B 次方；每桶 8 个槽，装不下时挂溢出桶。" :explains='["hmap 存的是桶数对 2 取对数得到的 B，桶数为 2 的 B 次方；扩容只需把 B 加一，桶数便翻倍。","每个 bmap 固定 8 个槽位，配合 top hash 快速筛选；一桶装满后不立刻扩容，而是先挂溢出桶承接多出的键值。"]' />
 
 ## 一页纸速记
 

@@ -1,9 +1,9 @@
-# 第 02 讲 · 装好环境：工具链、工作区与 Modules
+# 第 002 讲 · 装好环境：工具链、工作区与 Modules
 
 - **阶段**：L0 · 导学与学习路线
 - **目标**：在本机跑通安装、模块初始化与 IDE 调试
 - **知识点**：安装与版本管理 / GOPATH 到 Go Modules / go env 与代理 / VS Code/GoLand 与 Delve 调试
-- **教程正文**：[第 02 讲 · 装好环境：工具链、工作区与 Modules](/guide/setup)
+- **教程正文**：[第 002 讲 · 装好环境：工具链、工作区与 Modules](/guide/setup)
 - **GitHub 目录**：[l0-guide/lesson-002-setup](https://github.com/lfire/go/tree/main/examples/l0-guide/lesson-002-setup)
 
 ## 运行

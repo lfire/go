@@ -1,11 +1,11 @@
 ---
-title: 第 46 讲 · atomic 与 sync.Pool
+title: 第 046 讲 · atomic 与 sync.Pool
 description: 理解原子操作、CAS、atomic.Value 与 sync.Pool 的对象复用，看清无锁与减少分配的收益、代价和 GC 清空语义
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="40 分钟" goal="理解无锁与对象复用的收益和代价" prereq="第 45 讲 · sync 原语" />
+<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="40 分钟" goal="理解无锁与对象复用的收益和代价" prereq="第 045 讲 · sync 原语" />
 
-# 第 46 讲 · atomic 与 sync.Pool
+# 第 046 讲 · atomic 与 sync.Pool
 
 > 锁能保护复杂临界区，但高竞争下有阻塞开销。若只保护一个整数、一份只读配置，或想复用高频创建的临时缓冲区，杀鸡用牛刀就可惜了。sync/atomic 用一条 CPU 指令完成读改写，sync.Pool 在 GC 夹缝里复用对象。本讲讲清它们为什么快、边界在哪，尤其是 Pool 会被 GC 清空。
 
@@ -267,11 +267,11 @@ go test -race ./...                         # 全量回归
 </Callout>
 
 ## 动手练一练
-<Exercise title="用原子值统计命中次数" task="用 atomic.Int64 统计 100 次命中并打印总数，要求全程不加锁。" :hints='["声明 var hits atomic.Int64","用 hits.Add(1) 累加","用 hits.Load() 读结果"]' solution="var hits atomic.Int64\nfor i := 0; i != 100; i++ {\n    hits.Add(1)\n}\nfmt.Println(hits.Load())" explain="Add 不可分割，100 次累加不覆盖，Load 读到 100；换成普通整数并发累加会丢更新，正是第 49 讲的数据竞争。" />
+<Exercise title="用原子值统计命中次数" task="用 atomic.Int64 统计 100 次命中并打印总数，要求全程不加锁。" :hints='["声明 var hits atomic.Int64","用 hits.Add(1) 累加","用 hits.Load() 读结果"]' solution="var hits atomic.Int64\nfor i := 0; i != 100; i++ {\n    hits.Add(1)\n}\nfmt.Println(hits.Load())" explain="Add 不可分割，100 次累加不覆盖，Load 读到 100；换成普通整数并发累加会丢更新，正是第 049 讲的数据竞争。" />
 
 ## 随堂检测
-<Quiz no="46-1" q="关于 sync.Pool，下面说法正确的是？" :options='["Put 的对象一定会在下次 Get 拿到","适合存放长期保留的数据库连接","GC 可能随时清空 Pool 中的对象","Pool 并发不安全需额外加锁"]' answer="2" explain="Pool 对象可能在 GC 时被移除，不能假定 Put 后必复用；它只缓存可重建的临时对象，本身并发安全。" />
-<Predict no="46-2" q="8 个 goroutine 各对同一 atomic.Int64 执行 1000 次 Add(1)，最后 Load 的结果是？" :options='["小于 8000 的随机值","恰好 8000","取决于 GOMAXPROCS","运行时 panic"]' answer="1" output="8000" explain="原子加不可分割，任何更新都不被覆盖，结果与串行累加一致。" />
+<Quiz no="046-1" q="关于 sync.Pool，下面说法正确的是？" :options='["Put 的对象一定会在下次 Get 拿到","适合存放长期保留的数据库连接","GC 可能随时清空 Pool 中的对象","Pool 并发不安全需额外加锁"]' answer="2" explain="Pool 对象可能在 GC 时被移除，不能假定 Put 后必复用；它只缓存可重建的临时对象，本身并发安全。" />
+<Predict no="046-2" q="8 个 goroutine 各对同一 atomic.Int64 执行 1000 次 Add(1)，最后 Load 的结果是？" :options='["小于 8000 的随机值","恰好 8000","取决于 GOMAXPROCS","运行时 panic"]' answer="1" output="8000" explain="原子加不可分割，任何更新都不被覆盖，结果与串行累加一致。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["类型化 atomic 零值可用，Add、Load、CAS 护单变量","CAS 仅在值等于期望时更新，是无锁重试基石","atomic.Value 整体替换配置，读无锁","sync.Pool 用 Get、Put、New 复用对象","GC 会清空 Pool"]' :pitfalls='["把 Pool 当持久缓存或连接池","取出不重置就用，Put 后仍持引用"]' summary="atomic 用单指令换掉锁排队，sync.Pool 用复用换掉分配，但语义都弱于锁" />

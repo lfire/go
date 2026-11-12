@@ -1,11 +1,11 @@
 ---
-title: 第 25 讲 · 阶段综合：内存版 KV 存储
+title: 第 025 讲 · 阶段综合：内存版 KV 存储
 description: 用接口、错误、结构体与锁搭一个内存版 KV，做 CRUD、命令解析与并发保护，并为第 111 讲起的 KV 贯穿线留好扩展点。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="50 分钟" goal="用接口、错误、结构体搭一个可扩展的小系统" prereq="第 24 讲 · JSON、序列化与常见坑" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="50 分钟" goal="用接口、错误、结构体搭一个可扩展的小系统" prereq="第 024 讲 · JSON、序列化与常见坑" />
 
-# 第 25 讲 · 阶段综合：内存版 KV 存储
+# 第 025 讲 · 阶段综合：内存版 KV 存储
 
 > 前面十二讲把 L2 的零件一个个拆开讲过：map、结构体、方法、接口、错误、defer。这一讲把它们装成一台能跑的小机器——一个支持 put、get、del 的内存 KV。重点不在代码量，而在分层：上层只认一个 `Storage` 接口，底层具体实现随便换。这也是一条贯穿线的起点，第 111 到 114 讲会把它一路演进成带 WAL、分片与 Raft 的分布式存储。今天留下的每个接缝，都是以后能长出新东西的地方。
 
@@ -16,7 +16,7 @@ description: 用接口、错误、结构体与锁搭一个内存版 KV，做 CRU
 
 把 KV 想成前台储物柜。客人只和柜台打交道，柜台提供四个动作：存、取、丢、列出柜号。柜子内部是木格还是铁格、有没有监控、要不要留纸质台账，客人一概不关心。哪天商场把柜子全换了，只要柜台这四个动作没变，客人的用法就不用改。
 
-代码里，「柜台」就是 `Storage` 接口，「木格柜」就是 `MemStore`。把变量声明成接口类型，就把「我要什么能力」和「能力怎么实现」分开了：这正是第 19 讲的依赖倒置。
+代码里，「柜台」就是 `Storage` 接口，「木格柜」就是 `MemStore`。把变量声明成接口类型，就把「我要什么能力」和「能力怎么实现」分开了：这正是第 019 讲的依赖倒置。
 
 <ConceptDiagram type="architecture-layer" title="依赖倒置：命令层只认 Storage 接口，实现放在基础设施层" />
 
@@ -65,7 +65,7 @@ func (s *MemStore) Put(key, value string) error {
 		return ErrEmptyKey
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock() // 第 21 讲：解锁一定执行
+	defer s.mu.Unlock() // 第 021 讲：解锁一定执行
 	s.data[key] = value
 	return nil
 }
@@ -73,7 +73,7 @@ func (s *MemStore) Put(key, value string) error {
 func (s *MemStore) Get(key string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	v, ok := s.data[key] // 第 16 讲：comma-ok
+	v, ok := s.data[key] // 第 016 讲：comma-ok
 	if !ok {
 		return "", ErrNotFound
 	}
@@ -266,7 +266,7 @@ func main() {
 | 全局一把 `RWMutex` | 按 key 分片加锁，提高并发度 | 第 113 讲 |
 | 值只有 `string` | 加版本、TTL 与类型，再做分片与副本 | 第 114 讲 |
 
-<FlowTimeline title="KV 贯穿线的演进路线" :steps='[{"title":"第 25 讲 内存版","desc":"Storage 接口与 MemStore","tone":"blue"},{"title":"第 111 讲 抽象定型","desc":"Command 与错误模型","tone":"green"},{"title":"第 112 讲 网络层","desc":"协议帧与 TCP 服务","tone":"orange"},{"title":"第 113 讲 持久化","desc":"WAL、快照与锁分片","tone":"purple"},{"title":"第 114 讲 分布式","desc":"分片、副本与 Raft","tone":"red"}]' direction="horizontal" />
+<FlowTimeline title="KV 贯穿线的演进路线" :steps='[{"title":"第 025 讲 内存版","desc":"Storage 接口与 MemStore","tone":"blue"},{"title":"第 111 讲 抽象定型","desc":"Command 与错误模型","tone":"green"},{"title":"第 112 讲 网络层","desc":"协议帧与 TCP 服务","tone":"orange"},{"title":"第 113 讲 持久化","desc":"WAL、快照与锁分片","tone":"purple"},{"title":"第 114 讲 分布式","desc":"分片、副本与 Raft","tone":"red"}]' direction="horizontal" />
 
 <Term word="依赖倒置" text="上层定义接口、下层提供实现，业务规则不依赖具体技术；替换存储引擎时核心代码不用改。" />
 
@@ -292,7 +292,7 @@ func main() {
 
 ### 再推一层：fatal error、动态派发与返回副本的依据
 
-这一讲把前面十二讲的结论装成系统，几条设计可以追到规范与运行时依据。其一，`map` 并发写触发的是运行时 `fatal error: concurrent map writes`——`runtime/map.go` 的 `mapassign` 在写前检查 `h.flags` 里的 `hashWriting` 标志，发现同一个 `hmap` 已被另一个 goroutine 标记写入就直接 `throw`；`throw` 是 fatal error，不是 panic，`recover` 拦不住，所以 `MemStore` 必须自己持锁，不能把加锁责任推给调用方。其二，`Storage` 接口之所以能换实现，是第 19 讲的隐式实现加第 30 讲的 itab 动态派发：`var store Storage = NewMemStore()` 的两个字分别指向 itab 与 `*MemStore`，方法调用经 itab 的方法表间接跳转，编译期只检查 `MemStore` 的方法集是否覆盖 `Storage`。其三，`Keys()` 返回新切片而不是内部数据，依据是第 13 讲的「切片是描述符」——直接返回内部切片会把底层数组的写权限一起交出去。其四，`defer s.mu.Unlock()` 紧贴 `Lock()`，依据是第 21 讲的 LIFO 与参数快照。错误用哨兵加 `errors.Is`，则来自第 20 讲的 Unwrap 链。
+这一讲把前面十二讲的结论装成系统，几条设计可以追到规范与运行时依据。其一，`map` 并发写触发的是运行时 `fatal error: concurrent map writes`——`runtime/map.go` 的 `mapassign` 在写前检查 `h.flags` 里的 `hashWriting` 标志，发现同一个 `hmap` 已被另一个 goroutine 标记写入就直接 `throw`；`throw` 是 fatal error，不是 panic，`recover` 拦不住，所以 `MemStore` 必须自己持锁，不能把加锁责任推给调用方。其二，`Storage` 接口之所以能换实现，是第 019 讲的隐式实现加第 030 讲的 itab 动态派发：`var store Storage = NewMemStore()` 的两个字分别指向 itab 与 `*MemStore`，方法调用经 itab 的方法表间接跳转，编译期只检查 `MemStore` 的方法集是否覆盖 `Storage`。其三，`Keys()` 返回新切片而不是内部数据，依据是第 013 讲的「切片是描述符」——直接返回内部切片会把底层数组的写权限一起交出去。其四，`defer s.mu.Unlock()` 紧贴 `Lock()`，依据是第 021 讲的 LIFO 与参数快照。错误用哨兵加 `errors.Is`，则来自第 020 讲的 Unwrap 链。
 
 ### 两条真实误解：错误写法与正确写法
 
@@ -414,14 +414,14 @@ func main() {
 | Go 1.9 | `sync.Map` 加入 | 读多写少、键集合稳定时可用 |
 | Go 1.13 | `errors.Is` / `errors.As` 让哨兵错误可跨包装判定 | 本讲错误模型依赖它 |
 | Go 1.18 | `any` / 泛型加入，`sync.Map` 仍是具体类型 | 泛型版未进标准库 |
-| Go 1.22 | 循环变量每轮新建，并发 goroutine 传参更省心 | 与第 15 讲衔接 |
+| Go 1.22 | 循环变量每轮新建，并发 goroutine 传参更省心 | 与第 015 讲衔接 |
 | 全版本 | map 并发写 fatal、`recover` 拦不住 throw | 结论与版本无关 |
 
 适用边界还有一条：全局一把 `RWMutex` 是最简单也最正确的选择，别急着上锁分片；等压测数据说明锁是瓶颈，再按第 113 讲的思路拆，过早优化会先把正确性赔进去。
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 29 讲](/core/map-internals) 会展开 `hmap` 与 `hashWriting` 标志，[第 30 讲](/core/interface-internals) 讲 itab 动态派发，[第 45 讲](/concurrency/sync-primitives) 与 [第 49 讲](/concurrency/race) 分别给出锁原语与竞态判据；[第 52 讲](/engineering/unit-test) 用表驱动加 fake 替身测命令解析。实战里，[第 111 讲](/projects/kv-1-memory) 是本讲的直接延续，[第 113 讲](/projects/kv-3-async) 追加 WAL 与锁分片，[第 114 讲](/projects/kv-4-distributed) 演进到分片、副本与 Raft——今天留的每个接缝都在那里长出新东西。
+[第 029 讲](/core/map-internals) 会展开 `hmap` 与 `hashWriting` 标志，[第 030 讲](/core/interface-internals) 讲 itab 动态派发，[第 045 讲](/concurrency/sync-primitives) 与 [第 049 讲](/concurrency/race) 分别给出锁原语与竞态判据；[第 052 讲](/engineering/unit-test) 用表驱动加 fake 替身测命令解析。实战里，[第 111 讲](/projects/kv-1-memory) 是本讲的直接延续，[第 113 讲](/projects/kv-3-async) 追加 WAL 与锁分片，[第 114 讲](/projects/kv-4-distributed) 演进到分片、副本与 Raft——今天留的每个接缝都在那里长出新东西。
 
 ## 动手练一练
 
@@ -429,9 +429,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="25-1" q="关于本讲的设计，下面哪项说法正确？" :options='["Storage 接口应把所有可能的方法都列全，方便以后扩展","把变量声明为 Storage 后，仍能直接访问 MemStore 的 data 字段","Put 与 Delete 用写锁，Get 与 Keys 用读锁","错误判定应比较错误文本，因为哨兵无法跨包使用"]' answer="2" explain="写操作互斥用 Lock，纯读操作用 RLock 提高并行度；接口只暴露必要方法，声明成接口后看不到具体字段，哨兵正好供跨包 errors.Is 判定。" />
+<Quiz no="025-1" q="关于本讲的设计，下面哪项说法正确？" :options='["Storage 接口应把所有可能的方法都列全，方便以后扩展","把变量声明为 Storage 后，仍能直接访问 MemStore 的 data 字段","Put 与 Delete 用写锁，Get 与 Keys 用读锁","错误判定应比较错误文本，因为哨兵无法跨包使用"]' answer="2" explain="写操作互斥用 Lock，纯读操作用 RLock 提高并行度；接口只暴露必要方法，声明成接口后看不到具体字段，哨兵正好供跨包 errors.Is 判定。" />
 
-<Predict no="25-2" q="第 1 段 main 的最后一行 len(store.Keys()) 会输出什么？" :options='["1","0","2","panic"]' answer="1" output="0" explain="put 后 get 成功，随后 del 把 lang 删掉了，Keys 返回空切片，长度为 0。" />
+<Predict no="025-2" q="第 1 段 main 的最后一行 len(store.Keys()) 会输出什么？" :options='["1","0","2","panic"]' answer="1" output="0" explain="put 后 get 成功，随后 del 把 lang 删掉了，Keys 返回空切片，长度为 0。" />
 
 ## 一页纸速记
 

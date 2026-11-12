@@ -1,11 +1,11 @@
 ---
-title: 第 81 讲 · Prometheus / Grafana 与 RED 指标
+title: 第 081 讲 · Prometheus / Grafana 与 RED 指标
 description: 自建 Counter、Gauge、Histogram 与 exposition 端点，用 RED 方法让系统状态可量化可告警
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="让系统状态可量化、可告警" prereq="第 80 讲 OpenTelemetry 链路追踪" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="让系统状态可量化、可告警" prereq="第 080 讲 OpenTelemetry 链路追踪" />
 
-# 第 81 讲 · Prometheus / Grafana 与 RED 指标
+# 第 081 讲 · Prometheus / Grafana 与 RED 指标
 
 > 链路追踪回答「这一次请求为什么慢」，指标回答「整个系统现在健康吗、趋势在变坏吗」。前者是个体样本，后者是聚合数据，两者互补而不可互相替代。Prometheus 用拉取模型定期抓取服务暴露的 `/metrics`，把样本存成时间序列，再由 PromQL 计算速率与分位数、Grafana 画图、Alertmanager 告警。本讲用标准库把 Counter、Gauge、Histogram 和 exposition 文本格式各造一遍，推导 RED 三个指标怎么算，并给出一条能用的告警规则。目标仍是理解而非调 API——知道了桶与累计计数是怎么回事，才不会把 `rate` 用错对象、把平均值当成延迟真相。
 
@@ -370,7 +370,7 @@ groups:
 
 <Compare :panels='[{"label":"只记平均值","code":"avg := totalDuration / totalRequests\nlog(avg)","note":"平均值会被少量慢请求拉高、也会被大量快请求掩盖，看不出长尾体验"},{"label":"Histogram 分位数","code":"p95 := histogram.Quantile(0.95)\nalert(p95)","note":"分位数直接反映长尾，能对齐 SLO 里的 95 分位延迟目标"}]' title="延迟该看平均值还是分位数" />
 
-落地时还有几条经验。label 是时间序列的乘数，`user_id`、`order_id` 这类高基数字段绝不能当 label，否则序列数爆炸会把 Prometheus 打垮——它们应放进日志与链路追踪，指标里只留 `service`、`method`、`status` 这类低基数维度。Histogram 的桶边界要按 SLO 目标来设，比如目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗算出的分位数会失真。埋点位置选在第 74 讲的拦截器里：请求进出统一累计，业务代码零侵入，还能顺带把 trace_id 关联进日志。告警要分层：RED 面向用户症状优先报，USE 面向资源原因其次报，避免半夜被一堆 CPU 抖动吵醒却没人知道接口已经出问题。最后，Grafana 面板建议固定「流量、错误率、P95/P99、饱和度」四行，配成团队共用模板，出问题时不用临时找图。
+落地时还有几条经验。label 是时间序列的乘数，`user_id`、`order_id` 这类高基数字段绝不能当 label，否则序列数爆炸会把 Prometheus 打垮——它们应放进日志与链路追踪，指标里只留 `service`、`method`、`status` 这类低基数维度。Histogram 的桶边界要按 SLO 目标来设，比如目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗算出的分位数会失真。埋点位置选在第 074 讲的拦截器里：请求进出统一累计，业务代码零侵入，还能顺带把 trace_id 关联进日志。告警要分层：RED 面向用户症状优先报，USE 面向资源原因其次报，避免半夜被一堆 CPU 抖动吵醒却没人知道接口已经出问题。最后，Grafana 面板建议固定「流量、错误率、P95/P99、饱和度」四行，配成团队共用模板，出问题时不用临时找图。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -413,9 +413,9 @@ RED 指标在 L8 会升级成完整的稳定性语言：[/distributed/sre](/dist
 <Exercise title="给 Histogram 加上 le 标签的 exposition 输出" task="扩展 2.2 的 exposition，让 Histogram 按 Prometheus 约定输出一组带 le 标签的累计桶样本行，外加 _sum、_count，使 histogram_quantile 能直接计算。" :hints='["每个桶一行 http_request_duration_seconds_bucket{le=上界} 累计次数","额外补一个 le=+Inf 的桶，其值等于总观测次数","再输出 _sum 与 _count 两行，类型声明为 histogram"]' solution="要点一：遍历 bounds，逐行输出 bucket 样本，le 用字符串形式的上界，值为累计桶计数。\n要点二：追加 le 为 +Inf 的桶，值等于 count；真实客户端还会输出 _sum 与 _count 汇总行。\n要点三：TYPE 声明为 histogram，这样 PromQL 的 histogram_quantile 才能按 le 聚合算分位数。" explain="Prometheus 的 Histogram 就是靠一组带 le 的累计桶样本表达的，补齐它们，自建指标才能被标准查询函数消费。" />
 
 ## 随堂检测
-<Quiz no="81-1" q="累计请求数应该用哪种指标类型，为什么不能用 Gauge？" :options='["Gauge，因为请求数会上下波动","Counter，因为只增不减，配合 rate 才能用差值算窗口速率","Histogram，因为请求数要分桶","Summary，因为要算分位数"]' answer="1" explain="累计计数天然只增，Counter 的差值除以时间就是速率；Gauge 可增可减会让 rate 算出负数，语义也不匹配。" />
+<Quiz no="081-1" q="累计请求数应该用哪种指标类型，为什么不能用 Gauge？" :options='["Gauge，因为请求数会上下波动","Counter，因为只增不减，配合 rate 才能用差值算窗口速率","Histogram，因为请求数要分桶","Summary，因为要算分位数"]' answer="1" explain="累计计数天然只增，Counter 的差值除以时间就是速率；Gauge 可增可减会让 rate 算出负数，语义也不匹配。" />
 
-<Predict no="81-2" q="代码 3.1 里两份快照相隔 60 秒，请求数从 1000 涨到 4600、错误数从 10 涨到 58，算出的 Rate 与错误率大致是？" :options='["Rate 60/s，错误率约 1.3%","Rate 4600/s，错误率 5.8%","Rate 76/s，错误率 0.1%","Rate 3600/s，错误率 48%"]' answer="0" output="Rate=60.0/s Errors=0.01 Duration=0.120s；触发错误率告警: true" explain="60 秒新增 3600 个请求即 60 QPS；新增 48 个错误占比 48/3600 约 1.33%，超过 1% 阈值，因此触发告警。" />
+<Predict no="081-2" q="代码 3.1 里两份快照相隔 60 秒，请求数从 1000 涨到 4600、错误数从 10 涨到 58，算出的 Rate 与错误率大致是？" :options='["Rate 60/s，错误率约 1.3%","Rate 4600/s，错误率 5.8%","Rate 76/s，错误率 0.1%","Rate 3600/s，错误率 48%"]' answer="0" output="Rate=60.0/s Errors=0.01 Duration=0.120s；触发错误率告警: true" explain="60 秒新增 3600 个请求即 60 QPS；新增 48 个错误占比 48/3600 约 1.33%，超过 1% 阈值，因此触发告警。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["Counter 只增不减、Gauge 可增可减、Histogram 按累计桶分桶，三者用途不可混用","exposition 是纯文本：HELP 与 TYPE 声明加带标签样本行，/metrics 端点暴露给 Prometheus 拉取","RED = Rate 速率、Errors 错误占比、Duration 耗时分布，从累计值的前后差值推导","PromQL 用 rate 算速率、histogram_quantile 算分位数；告警加 for 过滤抖动"]' :pitfalls='["把 rate 用在 Gauge 上，或对重启归零的 Counter 手写差值","用平均延迟代替 P95/P99，掩盖长尾体验","把 user_id 等高基数字段当 label，导致时间序列爆炸"]' summary="一句话记住：指标只存累计值，所有速率与分位数都在查询时算出来；盯服务用 RED，盯资源用 USE。" />

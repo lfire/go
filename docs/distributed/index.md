@@ -17,21 +17,21 @@ description: 从单机思维升级到分布式与云原生思维，能担责稳�
 
 ## 讲次安排
 
-本阶段共 **11 讲**（第 83–93 讲），合计约 545 分钟，难度 3–5 级。
+本阶段共 **11 讲**（第 083–093 讲），合计约 545 分钟，难度 3–5 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 83 | [CAP / BASE 与一致性模型](/distributed/cap-base) | ★★★★☆ | 45 分钟 | CAP 的准确含义 · 一致性强弱谱系 · BASE 与最终一致 |
-| 84 | [分布式锁、幂等与去重](/distributed/distributed-lock) | ★★★★☆ | 50 分钟 | SETNX 与租约 · 看门狗与续期 · Redlock 争议 |
-| 85 | [分布式事务：2PC / TCC / Saga / 消息最终一致](/distributed/distributed-tx) | ★★★★★ | 60 分钟 | 本地事务与 ACID · 2PC 与 XA · TCC 三阶段 |
-| 86 | [分布式 ID、时钟与雪花算法](/distributed/distributed-id) | ★★★☆☆ | 40 分钟 | UUID 与自增局限 · Snowflake 结构 · 时钟回拨 |
-| 87 | [一致性哈希、分片与路由](/distributed/sharding) | ★★★★☆ | 45 分钟 | 取模分片的问题 · 一致性哈希与虚拟节点 · 分片键选择 |
-| 88 | [Raft 共识与 etcd 实践](/distributed/raft) | ★★★★★ | 55 分钟 | Leader 选举 · 日志复制 · 安全性与脑裂 |
-| 89 | [高可用：多活、容灾与混沌工程](/distributed/high-availability) | ★★★★☆ | 50 分钟 | 冗余与故障域 · 多活架构 · 容量与限流 |
-| 90 | [容器化：多阶段构建与镜像瘦身](/distributed/docker) | ★★★☆☆ | 45 分钟 | 静态编译与 CGO_ENABLED · 多阶段 Dockerfile · distroless/scratch |
-| 91 | [Kubernetes 部署与服务暴露](/distributed/kubernetes) | ★★★★☆ | 55 分钟 | Pod/Deployment/Service · ConfigMap/Secret · 探针与优雅退出 |
-| 92 | [Helm / GitOps / 灰度发布](/distributed/gitops) | ★★★★☆ | 50 分钟 | Helm Chart 结构 · GitOps 与 Argo CD · 滚动/蓝绿/金丝雀 |
-| 93 | [SRE：SLO、告警、容量与稳定性治理](/distributed/sre) | ★★★★☆ | 50 分钟 | SLI/SLO/错误预算 · 告警降噪 · 容量规划 |
+| 083 | [CAP / BASE 与一致性模型](/distributed/cap-base) | ★★★★☆ | 45 分钟 | CAP 的准确含义 · 一致性强弱谱系 · BASE 与最终一致 |
+| 084 | [分布式锁、幂等与去重](/distributed/distributed-lock) | ★★★★☆ | 50 分钟 | SETNX 与租约 · 看门狗与续期 · Redlock 争议 |
+| 085 | [分布式事务：2PC / TCC / Saga / 消息最终一致](/distributed/distributed-tx) | ★★★★★ | 60 分钟 | 本地事务与 ACID · 2PC 与 XA · TCC 三阶段 |
+| 086 | [分布式 ID、时钟与雪花算法](/distributed/distributed-id) | ★★★☆☆ | 40 分钟 | UUID 与自增局限 · Snowflake 结构 · 时钟回拨 |
+| 087 | [一致性哈希、分片与路由](/distributed/sharding) | ★★★★☆ | 45 分钟 | 取模分片的问题 · 一致性哈希与虚拟节点 · 分片键选择 |
+| 088 | [Raft 共识与 etcd 实践](/distributed/raft) | ★★★★★ | 55 分钟 | Leader 选举 · 日志复制 · 安全性与脑裂 |
+| 089 | [高可用：多活、容灾与混沌工程](/distributed/high-availability) | ★★★★☆ | 50 分钟 | 冗余与故障域 · 多活架构 · 容量与限流 |
+| 090 | [容器化：多阶段构建与镜像瘦身](/distributed/docker) | ★★★☆☆ | 45 分钟 | 静态编译与 CGO_ENABLED · 多阶段 Dockerfile · distroless/scratch |
+| 091 | [Kubernetes 部署与服务暴露](/distributed/kubernetes) | ★★★★☆ | 55 分钟 | Pod/Deployment/Service · ConfigMap/Secret · 探针与优雅退出 |
+| 092 | [Helm / GitOps / 灰度发布](/distributed/gitops) | ★★★★☆ | 50 分钟 | Helm Chart 结构 · GitOps 与 Argo CD · 滚动/蓝绿/金丝雀 |
+| 093 | [SRE：SLO、告警、容量与稳定性治理](/distributed/sre) | ★★★★☆ | 50 分钟 | SLI/SLO/错误预算 · 告警降噪 · 容量规划 |
 
 ## 怎么学这一阶段
 
@@ -47,4 +47,4 @@ description: 从单机思维升级到分布式与云原生思维，能担责稳�
 
 <ProgressTracker />
 
-[← 上一阶段：阶段七 · RPC 与微服务](/microservice/) · [第 83 讲开始 →](/distributed/cap-base) · [下一阶段：阶段九 · 资深进阶与源码](/advanced/)
+[← 上一阶段：阶段七 · RPC 与微服务](/microservice/) · [第 083 讲开始 →](/distributed/cap-base) · [下一阶段：阶段九 · 资深进阶与源码](/advanced/)

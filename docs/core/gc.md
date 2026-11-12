@@ -1,11 +1,11 @@
 ---
-title: 第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC
+title: 第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC
 description: 从三色不变式推导写屏障的动机，讲清并发标记、两处 STW 与 GOGC / MemoryLimit 的取舍
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="50 分钟" goal="理解 GC 触发、停顿与调优" prereq="第 32 讲 · 内存分配器：mcache / mcentral / mheap" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="50 分钟" goal="理解 GC 触发、停顿与调优" prereq="第 032 讲 · 内存分配器：mcache / mcentral / mheap" />
 
-# 第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC
+# 第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC
 
 > Go 的 GC 不用引用计数、也不做分代，而是并发的三色标记清除。为什么一定要「写屏障」？把 GOGC 调小真的更快吗？容器里明明还有余量却被 OOM kill 又是为什么？这一讲从三色不变式出发，把每个结论落到 gctrace 的输出和 runtime 的具体字段上。
 
@@ -307,7 +307,7 @@ sed -n '50,56p' "$(go env GOROOT)/src/runtime/mgcpacer.go"
 
 逐字段解释：`mgcpacer.go` 那两行把 `assistWorkPerByte` 与倒数 `assistBytesPerWork` 摆在同一处，验证「比值来自剩余工作量与剩余堆距离的商」；`mgcmark.go` 的 `scanWork := int64(assistWorkPerByte * float64(debtBytes))` 是债务换算的那次乘法；`gcOverAssistWork = 64 << 10` 给出下限 65536 的字面出处；`go tool objdump` 里 `mgcmark.go:653` 的 `CALL runtime.gcDrainN(SB)` 是整条链的终点——辅助标记最终落到 `gcDrainN` 扫描对象，而不是某个抽象计数器。注意 `-gcflags` 类开关看不到运行时的这两个原子字段，只有源码与链接产物的符号能证据化；`go tool objdump` 的地址随构建变化，只比符号与源码行号。
 
-边界：`scanWorkRemaining` 下限 1000、`heapRemaining` 下限 1、`gcOverAssistWork` 与 `bgScanCredit` 的偷取逻辑都是 Go 1.23 的调步实现，随版本调整；`assistWorkPerByte` 与 `assistBytesPerWork` 分开原子写、允许偏斜，别把两者当成严格互为倒数去套瞬时值；`gcCPULimiter.limiting()` 为真时 `gcAssistAlloc` 会提前返回、故意不辅助，所以 CPU 受限时这条链会断开；`//go:noinline` 与内联不影响运行时符号，但样本太小可能让 `gcAssistAlloc1` 被裁掉，故示例里持续分配 40 MiB。这条链在第 96 讲（GC 源码与真实调优）会与 `gcDrain`、后台 worker 合流。
+边界：`scanWorkRemaining` 下限 1000、`heapRemaining` 下限 1、`gcOverAssistWork` 与 `bgScanCredit` 的偷取逻辑都是 Go 1.23 的调步实现，随版本调整；`assistWorkPerByte` 与 `assistBytesPerWork` 分开原子写、允许偏斜，别把两者当成严格互为倒数去套瞬时值；`gcCPULimiter.limiting()` 为真时 `gcAssistAlloc` 会提前返回、故意不辅助，所以 CPU 受限时这条链会断开；`//go:noinline` 与内联不影响运行时符号，但样本太小可能让 `gcAssistAlloc1` 被裁掉，故示例里持续分配 40 MiB。这条链在第 096 讲（GC 源码与真实调优）会与 `gcDrain`、后台 worker 合流。
 
 ### `MemoryLimit` 怎样改写 goal：从 `memoryLimitHeapGoal` 到可读的 `NextGC`
 
@@ -386,7 +386,7 @@ sed -n '1026,1060p' "$(go env GOROOT)/src/runtime/mgcpacer.go"
 
 边界要点：`GOGC=off` 只关掉按比例触发，`MemoryLimit` 与手动 `runtime.GC()` 仍生效；`MemoryLimit` 是软上限，突发的不可回收分配仍可能短暂越界；后台标记 worker 数量约 `GOMAXPROCS` 的四分之一，故核数与平台会改变并发度；混合写屏障自 Go 1.8 起，更早版本在标记终止要 STW 重扫栈；`runtime.GC()` 是阻塞式的、会额外触发一轮，不该放进热路径；`gctrace` 的 `5%` 是 CPU 占比、`goal` 是触发目标，二者都别当成内存上限。
 
-前后联系：第 27 讲（逃逸分析）决定对象是否进堆，第 32 讲（分配器）决定 span 是否 noscan，本讲决定它们何时被回收；第 96 讲（GC 源码与真实调优案例）从 `gcStart` 到 `gcMarkDone` 精读一次 GC（后台 worker、辅助标记、调步算法、GOGC/MemoryLimit 实战），是本讲最直接的源码延续，第 95 讲（调度器源码）讲后台标记 worker 如何被调度与抢占，第 100 讲（极致性能优化）把「减分配 → 降指针密度 → 最后动 GOGC」作为标准闭环。
+前后联系：第 027 讲（逃逸分析）决定对象是否进堆，第 032 讲（分配器）决定 span 是否 noscan，本讲决定它们何时被回收；第 096 讲（GC 源码与真实调优案例）从 `gcStart` 到 `gcMarkDone` 精读一次 GC（后台 worker、辅助标记、调步算法、GOGC/MemoryLimit 实战），是本讲最直接的源码延续，第 095 讲（调度器源码）讲后台标记 worker 如何被调度与抢占，第 100 讲（极致性能优化）把「减分配 → 降指针密度 → 最后动 GOGC」作为标准闭环。
 
 ## 4. 工程实践
 
@@ -447,8 +447,8 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="33-1" q="混合写屏障最主要解决了什么问题？" :options='["让 GC 变成分代回收","避免标记终止阶段 STW 重新扫描所有栈","把对象从堆移到栈","关闭辅助标记"]' answer="1" explain="旧方案在标记终止要 STW 重扫栈；混合屏障配合标记开始时把栈一次性扫黑，使终止 STW 只需收尾，停顿降到亚毫秒。" />
-<Predict no="33-2" q="容器内存配额 64 MiB、存活堆很小，但程序疯狂分配不可回收对象。只设 GOGC=100 最可能怎样？" :options='["GC 变少、吞吐更高","堆按 goal 增长直到逼近配额，可能被 OOM kill","MemoryLimit 自动生效","暂停时间恒定"]' answer="1" output="堆随分配不断向 goal 增长，容易触碰容器配额而被 OOM kill" explain="GOGC 是相对目标，不感知容器配额；此时应设 GOMEMLIMIT 让 GC 为守住绝对上限而提前介入。" />
+<Quiz no="033-1" q="混合写屏障最主要解决了什么问题？" :options='["让 GC 变成分代回收","避免标记终止阶段 STW 重新扫描所有栈","把对象从堆移到栈","关闭辅助标记"]' answer="1" explain="旧方案在标记终止要 STW 重扫栈；混合屏障配合标记开始时把栈一次性扫黑，使终止 STW 只需收尾，停顿降到亚毫秒。" />
+<Predict no="033-2" q="容器内存配额 64 MiB、存活堆很小，但程序疯狂分配不可回收对象。只设 GOGC=100 最可能怎样？" :options='["GC 变少、吞吐更高","堆按 goal 增长直到逼近配额，可能被 OOM kill","MemoryLimit 自动生效","暂停时间恒定"]' answer="1" output="堆随分配不断向 goal 增长，容易触碰容器配额而被 OOM kill" explain="GOGC 是相对目标，不感知容器配额；此时应设 GOMEMLIMIT 让 GC 为守住绝对上限而提前介入。" />
 
 ## 一页纸速记
 

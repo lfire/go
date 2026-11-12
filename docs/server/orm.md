@@ -1,11 +1,11 @@
 ---
-title: 第 66 讲 · GORM / sqlx / sqlc 与迁移
+title: 第 066 讲 · GORM / sqlx / sqlc 与迁移
 description: 对比 GORM、sqlx、sqlc 的取舍，讲清模型与关联、预加载与 N+1、版本化迁移和 SQL 可观测性，在 ORM 与原生 SQL 之间做理性选择
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="在 ORM 与原生 SQL 之间做理性选择" prereq="第 65 讲 · database/sql" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="在 ORM 与原生 SQL 之间做理性选择" prereq="第 065 讲 · database/sql" />
 
-# 第 66 讲 · GORM / sqlx / sqlc 与迁移
+# 第 066 讲 · GORM / sqlx / sqlc 与迁移
 
 > 上一讲的 `rows.Scan` 写十遍之后，你一定会想找工具把结构体与表映射起来。但「ORM」不是一个开关，而是一整条光谱：GORM 帮你把对象关系全包了，sqlx 只把 `Scan` 这步自动化，sqlc 干脆把 SQL 在编译期变成类型安全的函数。它们对 SQL 的控制力、类型安全程度与运行时开销完全不同。这一讲用同一份业务对比三者，并解决一个 ORM 最经典的线上杀手：N+1 查询。
 
@@ -455,9 +455,9 @@ go test -race -run TestNPlusOneVsPreload -v ./...
 
 ## 随堂检测
 
-<Quiz no="66-1" q="关于 sqlc，下列描述正确的是？" :options='["它在运行时用反射把结构体映射成表","它从开发者写的 SQL 生成类型安全的 Go 代码","它是 database/sql 的替代品，自带连接池","它内置了 AutoMigrate 与关联预加载"]' answer="1" explain="sqlc 是编译期代码生成器：读 .sql 文件产出强类型函数，SQL 仍由开发者写，不接管连接池，也不管迁移。" />
+<Quiz no="066-1" q="关于 sqlc，下列描述正确的是？" :options='["它在运行时用反射把结构体映射成表","它从开发者写的 SQL 生成类型安全的 Go 代码","它是 database/sql 的替代品，自带连接池","它内置了 AutoMigrate 与关联预加载"]' answer="1" explain="sqlc 是编译期代码生成器：读 .sql 文件产出强类型函数，SQL 仍由开发者写，不接管连接池，也不管迁移。" />
 
-<Predict no="66-2" q="一个列表接口查出 200 个用户，每个用户在循环里查一次订单，并发 50 个请求，最可能出现的现象是？" :options='["SQL 总条数不变，只是稍慢","连接池等待队列暴涨，延迟飙升","GORM 自动合并成一条 IN 查询","只有第一个请求受影响"]' answer="1" output="单请求发出 201 条 SQL，50 并发下连接池被瞬间借空，WaitCount 暴涨" explain="1+N 条 SQL 会按并发倍数放大；连接池的 MaxOpenConns 成为硬瓶颈，后续请求全部阻塞在等待队列。" />
+<Predict no="066-2" q="一个列表接口查出 200 个用户，每个用户在循环里查一次订单，并发 50 个请求，最可能出现的现象是？" :options='["SQL 总条数不变，只是稍慢","连接池等待队列暴涨，延迟飙升","GORM 自动合并成一条 IN 查询","只有第一个请求受影响"]' answer="1" output="单请求发出 201 条 SQL，50 并发下连接池被瞬间借空，WaitCount 暴涨" explain="1+N 条 SQL 会按并发倍数放大；连接池的 MaxOpenConns 成为硬瓶颈，后续请求全部阻塞在等待队列。" />
 
 ## 一页纸速记
 

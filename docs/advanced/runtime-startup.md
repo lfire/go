@@ -1,11 +1,11 @@
 ---
-title: 第 94 讲 · runtime 源码：进程启动与初始化
+title: 第 094 讲 · runtime 源码：进程启动与初始化
 description: 沿 rt0_go、schedinit、newproc 到 mstart 的主流程，读懂 main 之前运行时完成的全部初始化
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="读懂 rt0_go 到 main 的路径" prereq="第 35 讲 · 程序启动、init 顺序与包初始化" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="读懂 rt0_go 到 main 的路径" prereq="第 035 讲 · 程序启动、init 顺序与包初始化" />
 
-# 第 94 讲 · runtime 源码：进程启动与初始化
+# 第 094 讲 · runtime 源码：进程启动与初始化
 
 > 用户写的 main 从来不是进程执行的第一行代码。操作系统把控制权交给入口汇编之后，运行时要先搭好栈、堆、处理器与垃圾回收，再把 main.main 包装成一个 goroutine 交给调度器。读懂这段路径，才能解释「为什么 main 里 NumGoroutine 至少是 1」「为什么命令行参数一进 main 就已经可读」「为什么把重活塞进 init 会拖慢启动」。本讲以本机 Go 1.23.8 的 GOROOT 源码为准，每一步都配一段可运行程序去验证。
 
@@ -226,8 +226,8 @@ GODEBUG=inittrace=1 ./myserver 2> init.log
 <Exercise title="验证 main 的 goroutine 身份" task="写程序用 runtime.Stack 抓当前 G 的栈，打印 NumGoroutine，判断 GOMAXPROCS 是否等于 NumCPU。" :hints='["分配 64KB 缓冲区传给 runtime.Stack", "用返回长度判断栈是否非空"]' solution="buf := make([]byte, 65536)\nn := runtime.Stack(buf, false)\nfmt.Println(n != 0)\nfmt.Println(runtime.NumGoroutine())\nfmt.Println(runtime.GOMAXPROCS(0) == runtime.NumCPU())" explain="输出应为 true、1、true：依次说明栈存在、只建了 main G、P 数量取自 NumCPU。完整写法见第二段代码。" />
 
 ## 随堂检测
-<Quiz no="94-1" q="用户包里的 main.main 是由谁包装成 goroutine 的？" :options='["链接器直接内联", "doInit 自动完成", "newproc 封装成 G 入队", "操作系统创建主线程时顺带创建"]' answer="2" explain="proc.go 在启动阶段调用 newproc 建立第一个 G，之后才由 mstart 进入调度循环。" />
-<Predict no="94-2" q="一个没有 init 的最小程序，在 main 第一行调用 runtime.NumGoroutine() 会得到什么？" :options='["0","1","2","等于 GOMAXPROCS"]' answer="1" output="1" explain="main 自己就是 1 号 G；sysmon 是独立 M 上的系统 goroutine，不计入普通 G 数量。" />
+<Quiz no="094-1" q="用户包里的 main.main 是由谁包装成 goroutine 的？" :options='["链接器直接内联", "doInit 自动完成", "newproc 封装成 G 入队", "操作系统创建主线程时顺带创建"]' answer="2" explain="proc.go 在启动阶段调用 newproc 建立第一个 G，之后才由 mstart 进入调度循环。" />
+<Predict no="094-2" q="一个没有 init 的最小程序，在 main 第一行调用 runtime.NumGoroutine() 会得到什么？" :options='["0","1","2","等于 GOMAXPROCS"]' answer="1" output="1" explain="main 自己就是 1 号 G；sysmon 是独立 M 上的系统 goroutine，不计入普通 G 数量。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["启动四段：rt0_go、schedinit、newproc、mstart", "进入 main 时 P、堆分配器与 GC 已就绪", "init 先于 main，参数在 main 之前就绪"]' :pitfalls='["死记行号：版本升级即失效", "把重活塞进 init：阻塞启动", "以为 main 被直接调用"]' summary="Go 程序从第一刻起就在调度器里，main 只是第一个用户 G。" />

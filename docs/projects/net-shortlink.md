@@ -1436,7 +1436,7 @@ go tool pprof -http=:0 http://127.0.0.1:6060/debug/pprof/profile?seconds=30
 
 <FlowTimeline title="短链服务演进路线" direction="horizontal" :steps='[{"title":"v1 单机验证","desc":"进程内号段发号器加内存映射，够用于内部工具与低流量验证","tone":"blue"},{"title":"v2 加缓存","desc":"接 Redis 旁路缓存与布隆过滤器，读延迟降到亚毫秒","tone":"green"},{"title":"v3 多实例","desc":"发号器换 Snowflake 或数据库号段，服务彻底无状态水平扩展","tone":"orange"},{"title":"v4 数据化","desc":"跳转事件进队列，接 ETL 做点击统计与热点分析","tone":"purple"}]' />
 
-v4 的点击事件队列正是第 107 讲日志 ETL 管道的输入；发号器换成 Snowflake 的完整讨论在第 86 讲分布式 ID；缓存穿透、击穿、雪崩的系统化治理在第 67 讲。本讲只把「读薄、写稳、入口严」这条主线打穿。
+v4 的点击事件队列正是第 107 讲日志 ETL 管道的输入；发号器换成 Snowflake 的完整讨论在第 086 讲分布式 ID；缓存穿透、击穿、雪崩的系统化治理在第 067 讲。本讲只把「读薄、写稳、入口严」这条主线打穿。
 
 ## 14. 真实工程里的坑
 

@@ -1,9 +1,9 @@
-# 第 46 讲 · atomic 与 sync.Pool
+# 第 046 讲 · atomic 与 sync.Pool
 
 - **阶段**：L4 · 并发编程
 - **目标**：理解无锁与对象复用的收益和代价
 - **知识点**：原子操作与 CAS / atomic.Value / sync.Pool 生命周期 / GC 清空 / 适用与误用
-- **教程正文**：[第 46 讲 · atomic 与 sync.Pool](/concurrency/atomic-pool)
+- **教程正文**：[第 046 讲 · atomic 与 sync.Pool](/concurrency/atomic-pool)
 - **GitHub 目录**：[l4-concurrency/lesson-046-atomic-pool](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-046-atomic-pool)
 
 ## 运行

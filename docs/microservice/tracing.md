@@ -1,11 +1,11 @@
 ---
-title: 第 80 讲 · OpenTelemetry 链路追踪
+title: 第 080 讲 · OpenTelemetry 链路追踪
 description: 自建 Trace 与 Span、实现 W3C traceparent 注入提取，把一次请求跨服务完整串起来
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把一次请求跨服务完整串起来" prereq="第 79 讲 熔断、降级、重试与雪崩防护" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把一次请求跨服务完整串起来" prereq="第 079 讲 熔断、降级、重试与雪崩防护" />
 
-# 第 80 讲 · OpenTelemetry 链路追踪
+# 第 080 讲 · OpenTelemetry 链路追踪
 
 > 一次下单请求会穿过网关、订单、库存、支付、数据库，任何一环变慢都会让用户感到卡。可日志分散在不同机器上，靠时间戳拼出全貌几乎不可能。链路追踪要做的，是给这次请求发一个全局唯一的「通行证」，让它经过的每一段都记下自己是谁、爹是谁、花了多久，最后拼成一张完整的调用树。本讲用标准库把 Trace、Span、context 传播、W3C traceparent 的注入与提取、采样和日志关联各写一遍，再对照 OpenTelemetry 的 API。理解注入与提取这两个动作，你就抓住了跨进程追踪的全部秘密。
 
@@ -350,7 +350,7 @@ grpcurl -plaintext -rpc-header \
 
 <Compare :panels='[{"label":"各打各的日志","code":"log.Printf(order failed)\nlog.Printf(payment failed)","note":"两个服务的日志没有共同 key，排查只能靠时间戳硬凑，跨服务问题几乎查不动"},{"label":"统一带 trace_id","code":"log.Printf(trace_id=%s failed, tid)","note":"一条 TraceID 把网关、订单、支付全串起来，日志与 Span 可互相跳转"}]' title="日志能不能串起一次请求" />
 
-落地时还有几条经验。采样率按流量与成本调，错误与慢请求可以做尾部补采，避免「出事的那条恰好没采到」。Span 命名用低基数、语义化的名字（如 `GET /order` 或 `db.query`），别把用户 ID、订单号塞进 Span 名，否则时间序列会爆炸；这类高基数字段放 attributes。每个 Span 至少打上 `rpc.method`、`http.status_code`、`error` 三类属性，排查才有抓手。日志里统一输出 trace_id 与 span_id，配合第 55 讲的结构化日志，就能从一条日志直接跳到整条调用树。最后记得在 exit span 里 `End()` 并 `defer`，漏了上报会造成链路缺口，看起来就像某个服务凭空消失。
+落地时还有几条经验。采样率按流量与成本调，错误与慢请求可以做尾部补采，避免「出事的那条恰好没采到」。Span 命名用低基数、语义化的名字（如 `GET /order` 或 `db.query`），别把用户 ID、订单号塞进 Span 名，否则时间序列会爆炸；这类高基数字段放 attributes。每个 Span 至少打上 `rpc.method`、`http.status_code`、`error` 三类属性，排查才有抓手。日志里统一输出 trace_id 与 span_id，配合第 055 讲的结构化日志，就能从一条日志直接跳到整条调用树。最后记得在 exit span 里 `End()` 并 `defer`，漏了上报会造成链路缺口，看起来就像某个服务凭空消失。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -394,9 +394,9 @@ trace_id 是贯穿可观测三支柱的那根线：[/engineering/logging](/engin
 <Exercise title="给 gRPC metadata 补上 traceparent 的透传" task="参照 2.2 的 Inject/Extract，把它们改成基于 map[string][]string 的 carrier，模拟 gRPC metadata；再写一个客户端拦截器，在每次调用前注入、服务端拦截器提取并创建子 Span。" :hints='["gRPC metadata 是 map[string][]string，key 用小写 traceparent","Inject 把格式化字符串放进切片第一个元素，Extract 从切片首元素读","客户端拦截器与服务端拦截器分别调用 Inject 与 Extract，共用一个 propagator"]' solution="要点一：定义 Carrier map[string][]string，Inject 用 Set(key, value)，Extract 用 Get(key) 取首元素。\n要点二：客户端拦截器从 ctx 取当前 Span，Inject 到 outgoing metadata，再发起调用。\n要点三：服务端拦截器 Extract incoming metadata，得到 TraceID 与 ParentID 后 StartSpan 创建子 Span，并把新 ctx 传给 handler。" explain="HTTP 与 gRPC 只是 carrier 不同，Inject 与 Extract 的语义完全一致；把传播收进拦截器，业务代码就完全不用感知。" />
 
 ## 随堂检测
-<Quiz no="80-1" q="W3C traceparent 头里，把一次请求跨进程串起来的关键字段是？" :options='["只有 span-id","32 位十六进制的 trace-id，以及用作父子关系的当前 span-id","HTTP 请求方法名","采样率配置字符串"]' answer="1" explain="TraceID 是全链路唯一标识，所有服务继承它；当前 SpanID 则成为下一跳 Span 的 ParentID，二者合起来把调用树拼出来。" />
+<Quiz no="080-1" q="W3C traceparent 头里，把一次请求跨进程串起来的关键字段是？" :options='["只有 span-id","32 位十六进制的 trace-id，以及用作父子关系的当前 span-id","HTTP 请求方法名","采样率配置字符串"]' answer="1" explain="TraceID 是全链路唯一标识，所有服务继承它；当前 SpanID 则成为下一跳 Span 的 ParentID，二者合起来把调用树拼出来。" />
 
-<Predict no="80-2" q="代码 2.2 里对一个完全没有 traceparent 头的 http.Header 调用 Extract，返回什么？" :options='["自动生成一个新 trace-id","返回 ok=false，由调用方决定是否开新 Trace","直接 panic","返回全零的 trace-id"]' answer="1" output="无头时 ok: false" explain="Extract 严格校验分段数与各段长度，缺头或格式不合法就返回 ok=false；提取层不臆造 ID，是否新建 Trace 是上层的职责。" />
+<Predict no="080-2" q="代码 2.2 里对一个完全没有 traceparent 头的 http.Header 调用 Extract，返回什么？" :options='["自动生成一个新 trace-id","返回 ok=false，由调用方决定是否开新 Trace","直接 panic","返回全零的 trace-id"]' answer="1" output="无头时 ok: false" explain="Extract 严格校验分段数与各段长度，缺头或格式不合法就返回 ok=false；提取层不臆造 ID，是否新建 Trace 是上层的职责。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["Trace 是全链路唯一 ID，Span 是一次操作并带 ParentID，context 在进程内串起父子关系","Inject 把上下文写进 traceparent 头，Extract 从对端还原；两动作缺一，链路就断在那一跳","W3C traceparent 格式为 00-TraceID-SpanID-flags，长度分别固定为 32 与 16 位十六进制","头部采样按 TraceID 确定性判定并随标志位继承；日志统一带 trace_id 才能与链路互跳"]' :pitfalls='["起 goroutine 或发消息时不传带 Span 的 ctx，链路被切成两段","Span 名里放用户 ID 等高基数字段，导致时间序列爆炸","baggage 里塞敏感信息，随每一跳扩散造成泄露"]' summary="一句话记住：TraceID 是通行证，Inject 与 Extract 是出入境盖章，Span 把经过的每一站连成一棵树。" />

@@ -1,11 +1,11 @@
 ---
-title: 第 14 讲 · 控制流：if / for / switch / goto
+title: 第 014 讲 · 控制流：if / for / switch / goto
 description: 掌握 Go 精简而独特的控制结构，理解 switch 不穿透、唯一的 for 与 goto 的边界
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★☆☆☆☆" time="30 分钟" goal="掌握 Go 精简而独特的控制结构" prereq="第 13 讲 · 数组与切片：定义与操作" />
+<StageHeader stage="L2 · 语法核心" level="★☆☆☆☆" time="30 分钟" goal="掌握 Go 精简而独特的控制结构" prereq="第 013 讲 · 数组与切片：定义与操作" />
 
-# 第 14 讲 · 控制流：if / for / switch / goto
+# 第 014 讲 · 控制流：if / for / switch / goto
 
 > 前面的程序都一条直线走到底。真实逻辑要能「看情况」和「重复做」：满足条件才执行、不满足换一条路、同一段代码跑很多次。Go 把控制流收得很紧——只有一种循环关键字 `for`，`switch` 默认不穿透。学完本讲，你能写出结构清晰、不被其他语言习惯带偏的分支与循环。
 
@@ -380,7 +380,7 @@ FOUND:
 | 版本 | 变化 | 适用边界 |
 | --- | --- | --- |
 | Go 1.18 | 泛型加入，但 `type switch` 的 case 不能写类型参数 | 仍是语法限制 |
-| Go 1.22 | 循环变量每轮新建，由 `go.mod` 的 `go` 指令决定 | 与第 15 讲衔接，闭包捕获语义改变 |
+| Go 1.22 | 循环变量每轮新建，由 `go.mod` 的 `go` 指令决定 | 与第 015 讲衔接，闭包捕获语义改变 |
 | Go 1.22 | 新增整数 range：`for i := range 10` | 仍是同一个 ForStmt 节点 |
 | Go 1.23 | 新增函数迭代器 range：`for x := range seq` | 需 `iter.Seq`，同样是每轮新变量 |
 | 全版本 | switch 自动结束、goto 不跨声明、else 紧跟右花括号 | 结论与工具链版本无关 |
@@ -389,7 +389,7 @@ FOUND:
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 36 讲](/core/compiler) 会展开 SSA 与控制流降级，用 `go tool compile -S` 看这里说的跳转指令；[第 44 讲](/concurrency/select) 的 `case` 与 switch 一样是独立分支、`break` 语义相同。实战里，[第 108 讲](/projects/data-sql-tool) 的 AST 遍历满是 `type switch` 与多分支 switch，[第 117 讲](/projects/cloud-operator) 的 Reconcile 状态机靠 `for` 加 `switch` 驱动——把控制流写直，后面这些代码才好读。
+[第 036 讲](/core/compiler) 会展开 SSA 与控制流降级，用 `go tool compile -S` 看这里说的跳转指令；[第 044 讲](/concurrency/select) 的 `case` 与 switch 一样是独立分支、`break` 语义相同。实战里，[第 108 讲](/projects/data-sql-tool) 的 AST 遍历满是 `type switch` 与多分支 switch，[第 117 讲](/projects/cloud-operator) 的 Reconcile 状态机靠 `for` 加 `switch` 驱动——把控制流写直，后面这些代码才好读。
 
 ## 动手练一练
 
@@ -397,9 +397,9 @@ FOUND:
 
 ## 随堂检测
 
-<Quiz no="14-1" q="关于 Go 的 switch，正确的是？" :options='["命中 case 后会继续穿透","fallthrough 可写在最后一个 case","无条件 switch 的 case 可写布尔表达式","switch 条件必须加括号"]' answer="2" explain="命中即结束；fallthrough 不能用于最后一个 case；条件不加括号。" />
+<Quiz no="014-1" q="关于 Go 的 switch，正确的是？" :options='["命中 case 后会继续穿透","fallthrough 可写在最后一个 case","无条件 switch 的 case 可写布尔表达式","switch 条件必须加括号"]' answer="2" explain="命中即结束；fallthrough 不能用于最后一个 case；条件不加括号。" />
 
-<Predict no="14-2" q="day 为 3，case 3 末尾有 fallthrough，紧跟 case 4 打印「邻近周四」，输出是？" :options='["只有 周三","周三 与 邻近周四","只有 邻近周四","周三 与 其它"]' answer="1" output="周三\n邻近周四" explain="fallthrough 执行下一个 case 后 switch 结束，default 不再执行。" />
+<Predict no="014-2" q="day 为 3，case 3 末尾有 fallthrough，紧跟 case 4 打印「邻近周四」，输出是？" :options='["只有 周三","周三 与 邻近周四","只有 邻近周四","周三 与 其它"]' answer="1" output="周三\n邻近周四" explain="fallthrough 执行下一个 case 后 switch 结束，default 不再执行。" />
 
 ## 一页纸速记
 

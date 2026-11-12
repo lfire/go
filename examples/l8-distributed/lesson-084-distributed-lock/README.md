@@ -1,9 +1,9 @@
-# 第 84 讲 · 分布式锁、幂等与去重
+# 第 084 讲 · 分布式锁、幂等与去重
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：在并发下守住数据正确性
 - **知识点**：SETNX 与租约 / 看门狗与续期 / Redlock 争议 / 幂等键设计 / 去重表与状态机
-- **教程正文**：[第 84 讲 · 分布式锁、幂等与去重](/distributed/distributed-lock)
+- **教程正文**：[第 084 讲 · 分布式锁、幂等与去重](/distributed/distributed-lock)
 - **GitHub 目录**：[l8-distributed/lesson-084-distributed-lock](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-084-distributed-lock)
 
 ## 运行

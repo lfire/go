@@ -1,9 +1,9 @@
-# 第 08 讲 · 字符串、rune 与高效拼接
+# 第 008 讲 · 字符串、rune 与高效拼接
 
 - **阶段**：L1 · 编程地基
 - **目标**：理解 UTF-8 并写出不乱码、不慢的字符串代码
 - **知识点**：string 不可变 / byte 与 rune / range 遍历 / strings.Builder / 拼接性能对比
-- **教程正文**：[第 08 讲 · 字符串、rune 与高效拼接](/foundation/strings)
+- **教程正文**：[第 008 讲 · 字符串、rune 与高效拼接](/foundation/strings)
 - **GitHub 目录**：[l1-foundation/lesson-008-strings](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-008-strings)
 
 ## 运行

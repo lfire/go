@@ -1,9 +1,9 @@
-# 第 95 讲 · 调度器源码：schedule / findRunnable / sysmon
+# 第 095 讲 · 调度器源码：schedule / findRunnable / sysmon
 
 - **阶段**：L9 · 资深进阶与源码
 - **目标**：把 GMP 从概念落到代码
 - **知识点**：schedule 主循环 / findRunnable 顺序 / 窃取与全局队列 / sysmon 与抢占 / 关键字段速查
-- **教程正文**：[第 95 讲 · 调度器源码：schedule / findRunnable / sysmon](/advanced/runtime-scheduler)
+- **教程正文**：[第 095 讲 · 调度器源码：schedule / findRunnable / sysmon](/advanced/runtime-scheduler)
 - **GitHub 目录**：[l9-advanced/lesson-095-runtime-scheduler](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-095-runtime-scheduler)
 
 ## 运行

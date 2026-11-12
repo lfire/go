@@ -1,9 +1,9 @@
-# 第 36 讲 · 编译、链接、SSA 与内联
+# 第 036 讲 · 编译、链接、SSA 与内联
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：看懂 Go 编译产物与优化决策
 - **知识点**：编译流程 / SSA 中间表示 / 内联与预算 / 逃逸分析输出 / go tool objdump 与 nm
-- **教程正文**：[第 36 讲 · 编译、链接、SSA 与内联](/core/compiler)
+- **教程正文**：[第 036 讲 · 编译、链接、SSA 与内联](/core/compiler)
 - **GitHub 目录**：[l3-core/lesson-036-compiler](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-036-compiler)
 
 ## 运行

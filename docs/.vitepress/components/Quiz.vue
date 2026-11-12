@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import RichText from './RichText.vue'
+import AnswerReview from './AnswerReview.vue'
 
 const props = defineProps<{
   q: string
@@ -28,6 +29,10 @@ const opts = computed(() => toArray(props.options))
 const answers = computed(() => toAnswers(props.answer).sort((a, b) => a - b))
 const isMulti = computed(() => props.multi === true || props.multi === 'true' || answers.value.length > 1)
 const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+/** 交给共用结果卡片：正确选项的字母 + 完整文本 */
+const correctAnswers = computed(() =>
+  answers.value.map((i) => ({ label: letters[i] || String(i + 1), text: opts.value[i] || '' })),
+)
 
 const picked = ref<number[]>([])
 const submitted = ref(false)
@@ -74,11 +79,7 @@ function reset() { submitted.value = false; picked.value = [] }
       <span v-if="!submitted && !picked.length" class="go-sub">选一个选项开始</span>
     </div>
     <Transition name="go-fade">
-      <div v-if="submitted" class="go-feedback" :class="correct ? 'ok' : 'no'">
-        <b>{{ correct ? '✓ 答对了！' : '✗ 再想想～' }}</b>
-        <span v-if="!correct"> 正确选项：{{ answers.map(i => letters[i] || i + 1).join('、') }}。</span>
-        <span v-if="explain"> <RichText :text="explain" /></span>
-      </div>
+      <AnswerReview v-if="submitted" :ok="correct" :answers="correctAnswers" :explain="explain" mode="quiz" />
     </Transition>
   </div>
 </template>

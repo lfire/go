@@ -1,9 +1,9 @@
-# 第 26 讲 · 值语义深潜：赋值、传参、拷贝成本
+# 第 026 讲 · 值语义深潜：赋值、传参、拷贝成本
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：从机器视角理解 Go 的默认行为
 - **知识点**：一切皆值 / 结构体拷贝 / 数组与切片传参差别 / 大对象传递成本 / 编译器优化
-- **教程正文**：[第 26 讲 · 值语义深潜：赋值、传参、拷贝成本](/core/value-semantics)
+- **教程正文**：[第 026 讲 · 值语义深潜：赋值、传参、拷贝成本](/core/value-semantics)
 - **GitHub 目录**：[l3-core/lesson-026-value-semantics](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-026-value-semantics)
 
 ## 运行

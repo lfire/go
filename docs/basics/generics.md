@@ -1,11 +1,11 @@
 ---
-title: 第 22 讲 · 泛型：类型参数与约束
+title: 第 022 讲 · 泛型：类型参数与约束
 description: 用类型参数把算法与具体类型解耦，掌握约束、comparable、类型推断与泛型类型，并知道何时不该用泛型。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="用泛型消除重复而不过度设计" prereq="第 21 讲 · defer / panic / recover" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="用泛型消除重复而不过度设计" prereq="第 021 讲 · defer / panic / recover" />
 
-# 第 22 讲 · 泛型：类型参数与约束
+# 第 022 讲 · 泛型：类型参数与约束
 
 > 给 `[]int` 写一个求和函数，再给 `[]float64` 写一个，两段代码除了类型名一模一样。泛型出现之前，只有两条路：复制粘贴，或者改用 `interface{}` 加类型断言——前者维护两份，后者丢掉编译期类型检查、还容易在断言处 panic。泛型给了第三条路：把「类型」也当成参数传进函数，让编译器替你检查每一种具体用法。这一讲学会写它，更重要的是学会判断什么时候别写它。
 
@@ -178,7 +178,7 @@ func main() {
 
 <Compare title="类型安全与装箱的对照" :panels='[{"label":"推荐：泛型加 comparable","code":"func Index[T comparable](s []T, x T) int {\n    for i, v := range s {\n        if v == x {\n            return i\n        }\n    }\n    return -1\n}","note":"编译期保证 T 可比较，无装箱、无断言。"},{"label":"反例：any 加相等比较","code":"func IndexAny(s []any, x any) int {\n    for i, v := range s {\n        if v == x { // 动态类型不可比较会 panic\n            return i\n        }\n    }\n    return -1\n}","note":"入参得先转成 []any，编译期不检查，运行时还可能崩。"}]' />
 
-配合上一讲的取舍一起记：接口表达「你能做什么」（一组行为），泛型表达「你是什么形状」（一组类型）。两者不是替代关系，第 19 讲的「接受接口、返回结构体」依旧适用。
+配合上一讲的取舍一起记：接口表达「你能做什么」（一组行为），泛型表达「你是什么形状」（一组类型）。两者不是替代关系，第 019 讲的「接受接口、返回结构体」依旧适用。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -280,7 +280,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 会讲接口的类型集与 `eface`，[第 36 讲](/core/compiler) 展开字典与 GCShape 模板、内联预算，把「泛型为什么有编译与体积代价」落到编译产物。工程上，[第 54 讲](/engineering/bench-fuzz) 用基准测试量化泛型与接口的差别。实战里，[第 108 讲](/projects/data-sql-tool) 要在「一套 AST 适配多种数据源」处判断用接口还是泛型，[第 118 讲](/projects/ai-gateway) 的多供应商适配也是同一类选择题。
+[第 030 讲](/core/interface-internals) 会讲接口的类型集与 `eface`，[第 036 讲](/core/compiler) 展开字典与 GCShape 模板、内联预算，把「泛型为什么有编译与体积代价」落到编译产物。工程上，[第 054 讲](/engineering/bench-fuzz) 用基准测试量化泛型与接口的差别。实战里，[第 108 讲](/projects/data-sql-tool) 要在「一套 AST 适配多种数据源」处判断用接口还是泛型，[第 118 讲](/projects/ai-gateway) 的多供应商适配也是同一类选择题。
 
 ## 动手练一练
 
@@ -288,9 +288,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="22-1" q="关于 comparable 与 any，下面哪项说法正确？" :options='["any 约束下的类型参数可以直接做加法","comparable 保证类型支持相等比较，可作 map 的键","comparable 是用户自己定义的接口","any 只允许数值类型"]' answer="1" explain="comparable 是内建约束，描述可比较类型的集合，允许 == 与 != 并可作为 map 键；any 不限制类型，因此也不保证任何特定运算。" />
+<Quiz no="022-1" q="关于 comparable 与 any，下面哪项说法正确？" :options='["any 约束下的类型参数可以直接做加法","comparable 保证类型支持相等比较，可作 map 的键","comparable 是用户自己定义的接口","any 只允许数值类型"]' answer="1" explain="comparable 是内建约束，描述可比较类型的集合，允许 == 与 != 并可作为 map 键；any 不限制类型，因此也不保证任何特定运算。" />
 
-<Predict no="22-2" q="若把 Sum 的约束从 Number 改成 any，其他代码不动，会怎样？" :options='["照常输出 6 4 6","输出全为 0","编译报错：对 any 做加法不合法","运行时 panic"]' answer="2" output="编译报错：invalid operation: total += v" explain="any 的类型集包含所有类型，函数体里的 += 必须对集合内每个类型都合法，而 string、切片等不支持加法，编译器因此拒绝。约束越宽，函数体里能做的事反而越少。" />
+<Predict no="022-2" q="若把 Sum 的约束从 Number 改成 any，其他代码不动，会怎样？" :options='["照常输出 6 4 6","输出全为 0","编译报错：对 any 做加法不合法","运行时 panic"]' answer="2" output="编译报错：invalid operation: total += v" explain="any 的类型集包含所有类型，函数体里的 += 必须对集合内每个类型都合法，而 string、切片等不支持加法，编译器因此拒绝。约束越宽，函数体里能做的事反而越少。" />
 
 ## 一页纸速记
 

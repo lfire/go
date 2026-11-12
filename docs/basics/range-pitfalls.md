@@ -1,11 +1,11 @@
 ---
-title: 第 15 讲 · for range 与闭包捕获陷阱
+title: 第 015 讲 · for range 与闭包捕获陷阱
 description: 拆解 range 的副本语义、循环变量捕获与 Go 1.22 的语义变化，学会定位经典生产 bug
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="30 分钟" goal="避开 Go 面试与生产中最经典的坑" prereq="第 14 讲 · 控制流：if / for / switch / goto" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="30 分钟" goal="避开 Go 面试与生产中最经典的坑" prereq="第 014 讲 · 控制流：if / for / switch / goto" />
 
-# 第 15 讲 · for range 与闭包捕获陷阱
+# 第 015 讲 · for range 与闭包捕获陷阱
 
 > 上一讲把 `range` 留到了这里，因为它最容易写出「看起来对、跑起来错」的代码：遍历时改不动元素、把循环变量交给闭包后拿到一串相同的值、遍历 map 的顺序每次都不一样。更麻烦的是，其中一类坑在 Go 1.22 被语言层面修掉了，同一份源码用不同版本的 `go.mod` 会跑出不同结果。本讲逐个拆开并给出可复现的排查路径。
 
@@ -360,7 +360,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 28 讲](/core/slice-internals) 会从 SliceHeader 解释 range 为何只拷描述符，[第 29 讲](/core/map-internals) 展开 `mapiterinit` 的随机起点与渐进扩容，[第 27 讲](/core/escape-analysis) 用 `-gcflags=-m` 把「闭包捕获导致逃逸」讲透，[第 49 讲](/concurrency/race) 则说明 `-race` 能抓与不能抓的边界。实战里，[第 109 讲](/projects/concurrent-crawler) 的 worker pool 正是「把循环变量交给 goroutine」的高发现场，[第 107 讲](/projects/data-log-etl) 的 pipeline 同样要先确认 `go` 指令版本再定写法。
+[第 028 讲](/core/slice-internals) 会从 SliceHeader 解释 range 为何只拷描述符，[第 029 讲](/core/map-internals) 展开 `mapiterinit` 的随机起点与渐进扩容，[第 027 讲](/core/escape-analysis) 用 `-gcflags=-m` 把「闭包捕获导致逃逸」讲透，[第 049 讲](/concurrency/race) 则说明 `-race` 能抓与不能抓的边界。实战里，[第 109 讲](/projects/concurrent-crawler) 的 worker pool 正是「把循环变量交给 goroutine」的高发现场，[第 107 讲](/projects/data-log-etl) 的 pipeline 同样要先确认 `go` 指令版本再定写法。
 
 ## 动手练一练
 
@@ -368,9 +368,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="15-1" q="关于 Go 1.22 循环变量变化，正确的是？" :options='["只影响 range","由 go.mod 的 go 指令决定","闭包改为按值捕获","移除 map 遍历"]' answer="1" explain="1.22 对 for 与 range 同时改为每轮新变量。" />
+<Quiz no="015-1" q="关于 Go 1.22 循环变量变化，正确的是？" :options='["只影响 range","由 go.mod 的 go 指令决定","闭包改为按值捕获","移除 map 遍历"]' answer="1" explain="1.22 对 for 与 range 同时改为每轮新变量。" />
 
-<Predict no="15-2" q="go.mod 写 go 1.21，把三轮 range 的循环变量地址存进切片再解引用，会打印什么？" :options='["4 5 6","6 6 6","三个不同地址","编译失败"]' answer="1" output="6 6 6" explain="旧语义整轮共用一个变量，三个指针都指向最后的值。" />
+<Predict no="015-2" q="go.mod 写 go 1.21，把三轮 range 的循环变量地址存进切片再解引用，会打印什么？" :options='["4 5 6","6 6 6","三个不同地址","编译失败"]' answer="1" output="6 6 6" explain="旧语义整轮共用一个变量，三个指针都指向最后的值。" />
 
 ## 一页纸速记
 

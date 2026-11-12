@@ -56,7 +56,7 @@ description: 按业务边界拆分服务、用 .proto 定契约、以 Saga 编�
 
 <ConceptDiagram type="mq-flow" title="binlog 到 ES 的异构同步：本地消息表、Kafka、幂等消费" caption="业务写入与消息写入同事务，消费端按 external version 挡住乱序与重放" />
 
-<ConceptDiagram type="discovery" title="服务注册发现与健康摘除" caption="沿用第 75 讲：实例上下线对调用方透明，故障实例由健康检查摘除" />
+<ConceptDiagram type="discovery" title="服务注册发现与健康摘除" caption="沿用第 075 讲：实例上下线对调用方透明，故障实例由健康检查摘除" />
 
 <ConceptDiagram type="gateway" title="网关协议转换：REST JSON 转内部 gRPC" caption="幂等键、trace_id 与 deadline 都在这一层注入并向下透传" />
 
@@ -1154,11 +1154,11 @@ func BenchmarkSagaSuccess(b *testing.B) {
 
 ## 8. 并发与一致性
 
-并发模型上，网关每个请求一个 goroutine，编排器在同一请求内串行推进 Saga（四步有严格先后依赖，不能并行）；幂等存储、outbox、ES 位点各自用 `sync.Mutex` 保护临界区，生产里换成数据库唯一索引与行锁。**锁粒度**刻意收在「单个幂等键 / 单个 SKU」而非全局：`IdemStore` 用一把锁保护整张 map 是演示用的简化，生产中按 key 分片或直接用唯一索引，避免所有请求挤在一把锁上——这正是第 97 讲的锁竞争拐点。
+并发模型上，网关每个请求一个 goroutine，编排器在同一请求内串行推进 Saga（四步有严格先后依赖，不能并行）；幂等存储、outbox、ES 位点各自用 `sync.Mutex` 保护临界区，生产里换成数据库唯一索引与行锁。**锁粒度**刻意收在「单个幂等键 / 单个 SKU」而非全局：`IdemStore` 用一把锁保护整张 map 是演示用的简化，生产中按 key 分片或直接用唯一索引，避免所有请求挤在一把锁上——这正是第 097 讲的锁竞争拐点。
 
 竞态分析集中在三处：并发重复请求靠 `Begin` 的 `IN_PROGRESS` 状态互斥（6.2 的断言 `entered=1`）；库存预扣与释放必须共用同一临界区，否则回补与再次扣减交错会把数值算错；订单状态更新用 `version` 乐观锁，禁止 PAID 回退到 CREATED，避免乱序的补偿覆盖已支付状态。
 
-一致性级别选 **BASE 最终一致**而非 ACID 强一致，依据是业务可接受「支付中的几十秒中间态」，但无法接受 2PC 带来的长时间资源锁定与协调者单点。Saga 由多个独立本地事务组成，步骤之间没有隔离，中间态对外可见；它靠补偿把系统收敛到一致，属于第 83 讲的 BASE 范畴。顺序保证上，Kafka 按 `order_id` 分区保序，消费者按消息 ID 幂等；binlog 允许乱序到达，但用 external version 把乱序收敛成「只保留最新版本」，这是把顺序问题转化为幂等问题。
+一致性级别选 **BASE 最终一致**而非 ACID 强一致，依据是业务可接受「支付中的几十秒中间态」，但无法接受 2PC 带来的长时间资源锁定与协调者单点。Saga 由多个独立本地事务组成，步骤之间没有隔离，中间态对外可见；它靠补偿把系统收敛到一致，属于第 083 讲的 BASE 范畴。顺序保证上，Kafka 按 `order_id` 分区保序，消费者按消息 ID 幂等；binlog 允许乱序到达，但用 external version 把乱序收敛成「只保留最新版本」，这是把顺序问题转化为幂等问题。
 
 <Compare title="跨服务一致性的两条路线" :panels='[{"label":"2PC 强一致","code":"协调者统一投票，所有参与者同一时刻提交或回滚","note":"一致性强，但长时间锁资源、协调者故障会阻塞，库存行被锁住拖垮吞吐，本场景不选"},{"label":"Saga 补偿","code":"一串本地事务加逆序补偿，中间态可见","note":"吞吐高、无全局锁，代价是要自己写补偿、保证幂等与可重试，是本讲选择"}]' />
 

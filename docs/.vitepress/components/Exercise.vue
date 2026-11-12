@@ -45,7 +45,7 @@ const code = computed(() => String(props.solution ?? '').replace(/\\n/g, '\n'))
       </div>
       <Transition name="go-fade">
         <div v-if="solution && showSolution">
-          <pre style="background:var(--vp-code-block-bg);color:var(--vp-c-text-1);padding:.9rem 1rem;border-radius:10px;font-family:var(--vp-font-family-mono);font-size:13px;line-height:1.75;overflow-x:auto">{{ code }}</pre>
+          <pre class="go-ex-solution">{{ code }}</pre>
         </div>
       </Transition>
       <div v-if="explain" class="go-sub" style="margin-top:.6rem">{{ explain }}</div>

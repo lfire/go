@@ -1,11 +1,11 @@
 ---
-title: 第 20 讲 · 错误处理：error、包装与错误链
+title: 第 020 讲 · 错误处理：error、包装与错误链
 description: 把失败当作普通返回值，用 fmt.Errorf 的 %w 逐层包装保留根因，再用 errors.Is 与 errors.As 做可判定的分支。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="写出可诊断、可判定的错误处理" prereq="第 19 讲 · 接口：隐式实现与组合" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="写出可诊断、可判定的错误处理" prereq="第 019 讲 · 接口：隐式实现与组合" />
 
-# 第 20 讲 · 错误处理：error、包装与错误链
+# 第 020 讲 · 错误处理：error、包装与错误链
 
 > 程序只要碰到外部世界就会失败：文件被删、网络断线、用户输入不合法。很多语言用「异常」把失败从正常流程里扔出去，调用链上任何一层都可能悄悄把它漏掉，读代码的人也看不出哪个函数会失败。Go 选了另一条路：失败只是一个普通的返回值，明明白白写在函数签名里。学完这一讲，你能让错误既带上足够的上下文，又不丢掉最原始的病因，还能在任意一层准确判断「这是不是某一种特定错误」。
 
@@ -166,7 +166,7 @@ func main() {
 
 <Callout type="warn" title="易错点：%w 与 errors.Is 必须成对使用" text="中间任何一层写成 %v、或用 errors.New 重新造一个错误，根因就断了，errors.Is 立刻失效。判定错误一律用 errors.Is 或 errors.As，不要用等值比较去比包装后的错误，更不要用 strings.Contains 去匹配错误文本；文本是给人看的，不是给程序做分支的。" />
 
-最后划清边界：这一讲解决的是「程序内部能不能识别错误类别」，靠的是错误链与类型，不是数字编号。业务错误码、HTTP 状态、gRPC 状态属于对外契约，要有稳定的编号与文案映射，那是 [第 57 讲](/engineering/error-design) 的内容。本阶段守住三条就够：库函数用哨兵或自定义类型表达类别，中间层用 `%w` 加上下文，最外层统一打印一次。把业务码提前塞进错误链，会让内部逻辑被外部协议绑住，是过早耦合。
+最后划清边界：这一讲解决的是「程序内部能不能识别错误类别」，靠的是错误链与类型，不是数字编号。业务错误码、HTTP 状态、gRPC 状态属于对外契约，要有稳定的编号与文案映射，那是 [第 057 讲](/engineering/error-design) 的内容。本阶段守住三条就够：库函数用哨兵或自定义类型表达类别，中间层用 `%w` 加上下文，最外层统一打印一次。把业务码提前塞进错误链，会让内部逻辑被外部协议绑住，是过早耦合。
 
 ## 4. 工程实践
 
@@ -271,7 +271,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 会说明 `error` 同样是接口，typed nil 的坑在这里一样成立——失败时返回 `(*MyError)(nil)` 会让 `err != nil` 为真；[第 57 讲](/engineering/error-design) 把本讲划清的边界落地成错误码、错误栈与统一响应。实战里，[第 112 讲](/projects/kv-2-network) 把哨兵错误映射成协议错误码而不泄露内部文案，[第 107 讲](/projects/data-log-etl) 用错误类别决定重试还是丢弃，[第 118 讲](/projects/ai-gateway) 需要把多家供应商的错误归一化成同一套可判定类型。
+[第 030 讲](/core/interface-internals) 会说明 `error` 同样是接口，typed nil 的坑在这里一样成立——失败时返回 `(*MyError)(nil)` 会让 `err != nil` 为真；[第 057 讲](/engineering/error-design) 把本讲划清的边界落地成错误码、错误栈与统一响应。实战里，[第 112 讲](/projects/kv-2-network) 把哨兵错误映射成协议错误码而不泄露内部文案，[第 107 讲](/projects/data-log-etl) 用错误类别决定重试还是丢弃，[第 118 讲](/projects/ai-gateway) 需要把多家供应商的错误归一化成同一套可判定类型。
 
 ## 动手练一练
 
@@ -279,9 +279,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="20-1" q="关于 fmt.Errorf 的 %w，下面哪项说法是正确的？" :options='["%w 会把错误转成字符串，链到此为止","%w 生成一个实现 Unwrap 的包装错误，可被 errors.Is 回溯","%w 与 %v 完全等价，只是写法更短","%w 只能用于自定义错误类型，不能用于标准库错误"]' answer="1" explain="%w 的核心作用是保留可回溯的链；%v 只是把错误文本拼进来，链断掉。errors.Is 与 errors.As 都依赖这条链。" />
+<Quiz no="020-1" q="关于 fmt.Errorf 的 %w，下面哪项说法是正确的？" :options='["%w 会把错误转成字符串，链到此为止","%w 生成一个实现 Unwrap 的包装错误，可被 errors.Is 回溯","%w 与 %v 完全等价，只是写法更短","%w 只能用于自定义错误类型，不能用于标准库错误"]' answer="1" explain="%w 的核心作用是保留可回溯的链；%v 只是把错误文本拼进来，链断掉。errors.Is 与 errors.As 都依赖这条链。" />
 
-<Predict no="20-2" q="若把第二段代码里两处 %w 都改成 %v，errors.Is(err, os.ErrNotExist) 会输出什么？" :options='["true","false","编译报错","panic"]' answer="1" output="false" explain="改成 %v 后不再有 Unwrap 链，errors.Is 只能比较最外层那个字符串错误，与 os.ErrNotExist 不匹配，因此返回 false。代码照常编译，这也正是这个坑隐蔽的地方。" />
+<Predict no="020-2" q="若把第二段代码里两处 %w 都改成 %v，errors.Is(err, os.ErrNotExist) 会输出什么？" :options='["true","false","编译报错","panic"]' answer="1" output="false" explain="改成 %v 后不再有 Unwrap 链，errors.Is 只能比较最外层那个字符串错误，与 os.ErrNotExist 不匹配，因此返回 false。代码照常编译，这也正是这个坑隐蔽的地方。" />
 
 ## 一页纸速记
 

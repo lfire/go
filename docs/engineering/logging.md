@@ -1,11 +1,11 @@
 ---
-title: 第 55 讲 · 日志：slog / zap 与结构化采样
+title: 第 055 讲 · 日志：slog / zap 与结构化采样
 description: 用 log/slog 写结构化日志，掌握级别、上下文与 trace_id 关联、采样与脱敏，并避免日志打太多
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="让线上问题可从日志还原" prereq="第 54 讲 · 基准测试、模糊测试与覆盖率" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="让线上问题可从日志还原" prereq="第 054 讲 · 基准测试、模糊测试与覆盖率" />
 
-# 第 55 讲 · 日志：slog / zap 与结构化采样
+# 第 055 讲 · 日志：slog / zap 与结构化采样
 
 > 线上出问题时，最怕的不是没有日志，而是日志一大堆却拼不出当时发生了什么：一行行自由文本的 `fmt.Println`，没有请求标识、没有关键字段、还把手机号也打了进去。日志的目标只有一个——**让一次线上事件能被还原、被检索、被聚合**。这一讲用 Go 1.21 起内置的 `log/slog` 把这件事做对，并重点讲清楚什么不该打。
 
@@ -132,7 +132,7 @@ func main() {
 
 结构化日志针对的是自由文本不可检索：一行 `fmt.Println("订单 A-1001 创建")` 只能靠子串或正则匹配，值里含空格、换行，或者想按金额区间聚合时就失效；拆成固定事件名加独立键值字段后，日志系统能对 `order_id`、`status` 建索引、做聚合与告警。事件名必须稳定、不能拼变量，是因为 `订单 A-1001 创建` 与 `订单 A-1002 创建` 是两个不同的 msg，无法 group by；变量该进字段，不该进 message。
 
-级别是「输出门槛」，而且门槛前移到了 Handler 入口：低于当前级别的事件在格式化之前就被丢弃，成本几乎为零；若先把字符串拼好再判断要不要打，格式化开销已经付掉了，高频 Debug 全开时这部分浪费随 QPS 线性增长。`trace_id` 必须作为独立字段、并放进 context，是因为拼进 message 只是一个词、无法按字段过滤；放进 context 则能跨函数、跨服务传递而不污染每个函数签名（呼应第 47 讲），由入口中间件统一注入，业务代码不必层层手传。
+级别是「输出门槛」，而且门槛前移到了 Handler 入口：低于当前级别的事件在格式化之前就被丢弃，成本几乎为零；若先把字符串拼好再判断要不要打，格式化开销已经付掉了，高频 Debug 全开时这部分浪费随 QPS 线性增长。`trace_id` 必须作为独立字段、并放进 context，是因为拼进 message 只是一个词、无法按字段过滤；放进 context 则能跨函数、跨服务传递而不污染每个函数签名（呼应第 047 讲），由入口中间件统一注入，业务代码不必层层手传。
 
 采样补的是级别管不到的那一维：级别只按「重要性」过滤，不按「频率」限流。同一类 INFO 事件每秒十万次时全量落盘照样打爆磁盘，按每 N 条留 1 条或按 trace_id 哈希采样，能保住统计代表性又控住量。脱敏必须在写入前完成，是因为日志会被复制到采集、归档、分析多个系统，一旦明文落盘，跨系统删除与追回几乎不可能，还附带合规风险——后端脱敏只能算第二道防线。
 
@@ -265,7 +265,7 @@ Enabled 守卫 + Sprintf allocs/op = 0
 
 **边界与失效条件**：`Enabled` 只保证不构造 `Record`、不格式化、不写盘，不省实参求值，也不省 `...any` 对引用类型/大对象的装箱；`front [5]Attr` 是标准库实现细节，字段超过 5 个会触发切片分配；`slog.LogValuer` 自 Go 1.21 起才有。换成 `zap` 时零分配靠的是 `CheckedEntry` 池化而非 `front` 数组，`Enabled` 的语义边界仍在，但分配数字会不同——这也是「先 slog、压测确认瓶颈再换 Handler」的机制依据。
 
-**版本前提**：`log/slog` 自 Go 1.21 内置，本实验在 Go 1.23.8（darwin/arm64）实测；1.21 到 1.23 之间 `HandlerOptions` 与默认行为有细节调整，`go build -gcflags=-m` 可看到 `... argument does not escape` 与 `func literal escapes` 一类诊断（呼应第 27 讲逃逸分析），具体结论随编译器版本变化。CI 用 `go-version-file: go.mod` 锁版本，才能保证这里 allocs 数字可复现。
+**版本前提**：`log/slog` 自 Go 1.21 内置，本实验在 Go 1.23.8（darwin/arm64）实测；1.21 到 1.23 之间 `HandlerOptions` 与默认行为有细节调整，`go build -gcflags=-m` 可看到 `... argument does not escape` 与 `func literal escapes` 一类诊断（呼应第 027 讲逃逸分析），具体结论随编译器版本变化。CI 用 `go-version-file: go.mod` 锁版本，才能保证这里 allocs 数字可复现。
 
 ### 一条日志穿过 Handler 的四道方法：WithAttrs / WithGroup / ReplaceAttr 的调用契约
 
@@ -336,7 +336,7 @@ Handle: groups=[req] 预置=[svc=order trace=t-1] 本次=[id=7 phone=13800138000
 
 由此推出 `ReplaceAttr` 用在哪：它作用在「合并后的每条非 group Attr」上，既能改内置的 `time/level/msg`，也能改 `With` 与 `Record` 里的字段，但**收不到 group 本身**。所以脱敏要按 `a.Key` 判断，不能指望 `groups` 参数里出现 `req` 就把整组丢掉——那个参数是「当前所在 group 路径」，用于给 `["g"]` 里的 `b` 做区分，不是 group 属性的名。可证伪的一条：`ReplaceAttr` 若返回零值 `Attr{}`，该字段被丢弃（源码 144 行），这比在写入前 `mask(phone)` 更彻底——后者仍输出一个 `phone=****` 键，前者连键都不出现；把 `WithGroup("")` 传空串，接口规定返回 receiver 本身，链式调用不会新增一层，`groups` 也不变。
 
-**zap 的 `CheckedEntry` 池化**解释第二版留下的那句「换 zap 时零分配靠 `CheckedEntry` 池化」。读 `go.uber.org/zap@v1.24.0/zapcore/entry.go`：`_cePool = sync.Pool{New: ... return &CheckedEntry{cores: make([]Core, 4)}}`（36 行），`getCheckedEntry` 从池里取一个并 `ce.reset()`（清空 `Entry`、`ErrorOutput`、把 `cores` 逐个置 nil 再截成长度 0，220 行），`CheckedEntry.Write` 写完各 Core 后**把 `ce` 还回池**（`putCheckedEntry(ce)`，266 行）。它甚至用 `dirty bool`（215 行）做「best-effort detection of pool misuse」：若一个已被归还的 `ce` 又被 `Write`，`dirty` 为真就打一条 `Unsafe CheckedEntry re-use` 到 `ErrorOutput` 而不是静默写坏数据。机制上的取舍就清楚了：slog 用 `front [5]Attr` 栈上数组省小对象，zap 用 `sync.Pool` 复用整条 `CheckedEntry`（含预分配的 `cores` 切片），两者都为了「高频日志不产生每次分配」，但一个靠内联数组、一个靠对象池——这正是第二版「先 slog、压测确认瓶颈再换 Handler」在分配层的依据。可证伪：`sync.Pool` 里的对象会在 GC 时被清空（呼应第 46 讲），所以 `CheckedEntry` 的复用率随 GC 频率波动，压测里「零分配」不是恒定承诺；把 `ce` 在 `Write` 之后继续使用会触发 `dirty` 告警，说明它不是可以随便持有的普通值。
+**zap 的 `CheckedEntry` 池化**解释第二版留下的那句「换 zap 时零分配靠 `CheckedEntry` 池化」。读 `go.uber.org/zap@v1.24.0/zapcore/entry.go`：`_cePool = sync.Pool{New: ... return &CheckedEntry{cores: make([]Core, 4)}}`（36 行），`getCheckedEntry` 从池里取一个并 `ce.reset()`（清空 `Entry`、`ErrorOutput`、把 `cores` 逐个置 nil 再截成长度 0，220 行），`CheckedEntry.Write` 写完各 Core 后**把 `ce` 还回池**（`putCheckedEntry(ce)`，266 行）。它甚至用 `dirty bool`（215 行）做「best-effort detection of pool misuse」：若一个已被归还的 `ce` 又被 `Write`，`dirty` 为真就打一条 `Unsafe CheckedEntry re-use` 到 `ErrorOutput` 而不是静默写坏数据。机制上的取舍就清楚了：slog 用 `front [5]Attr` 栈上数组省小对象，zap 用 `sync.Pool` 复用整条 `CheckedEntry`（含预分配的 `cores` 切片），两者都为了「高频日志不产生每次分配」，但一个靠内联数组、一个靠对象池——这正是第二版「先 slog、压测确认瓶颈再换 Handler」在分配层的依据。可证伪：`sync.Pool` 里的对象会在 GC 时被清空（呼应第 046 讲），所以 `CheckedEntry` 的复用率随 GC 频率波动，压测里「零分配」不是恒定承诺；把 `ce` 在 `Write` 之后继续使用会触发 `dirty` 告警，说明它不是可以随便持有的普通值。
 
 ### 从 `io.Writer` 到 `write(2)`：`O_APPEND` 保证的原子性到底覆盖到哪
 
@@ -415,7 +415,7 @@ O_APPEND   : 行数=1600 完整=1600 (预期=1600)
 
 这也回填了第二版「脱敏必须在写入前完成」的一层：日志一旦被 `write(2)` 追加进文件，就脱离了 Go 进程的控制，采集、轮转、归档都按字节复制；`ReplaceAttr` 返回零值丢弃字段、或 `mask` 打码，都是在这唯一一次 `write` 之前完成的。把「不泄露」押在日志后端，等于押在已经落盘的字节能被追回，机制上不成立。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`O_APPEND` 语义依 POSIX / Darwin 内核，Linux 上一致；`os.OpenFile` 的 flag 映射、`bufio.Scanner` 默认 64K 行上限是本机行为；zap 以 `go.uber.org/zap@v1.24.0` 为准（本机模块缓存内版本），`sync.Pool` 与 `dirty` 检测自该版本稳定；`log/slog` 自 Go 1.21 内置，`Handler` 接口契约与 `ReplaceAttr` 的逐次调用示例在 `handler.go` 注释中，1.21–1.23 间细节有调整但语义不变。第 46 讲展开 `sync.Pool` 的 GC 生命周期，本讲前面讲 `Enabled` 短路与 `front [5]Attr`，这两节补的是「日志从 Logger 到内核系统调用」中间被跳过的两段。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`O_APPEND` 语义依 POSIX / Darwin 内核，Linux 上一致；`os.OpenFile` 的 flag 映射、`bufio.Scanner` 默认 64K 行上限是本机行为；zap 以 `go.uber.org/zap@v1.24.0` 为准（本机模块缓存内版本），`sync.Pool` 与 `dirty` 检测自该版本稳定；`log/slog` 自 Go 1.21 内置，`Handler` 接口契约与 `ReplaceAttr` 的逐次调用示例在 `handler.go` 注释中，1.21–1.23 间细节有调整但语义不变。第 046 讲展开 `sync.Pool` 的 GC 生命周期，本讲前面讲 `Enabled` 短路与 `front [5]Attr`，这两节补的是「日志从 Logger 到内核系统调用」中间被跳过的两段。
 
 ### 三条最常见的误解
 
@@ -443,7 +443,7 @@ O_APPEND   : 行数=1600 完整=1600 (预期=1600)
 
 1. `df -h` 确认数据盘 100%，`du -sh /var/log/*` 定位到该服务的日志目录占了绝大部分；
 2. 抽样看日志内容，几乎全是同一条「进入循环处理 item」的 Debug；
-3. 追配置，发现灰度环境为排查问题把 `LOG_LEVEL=debug` 带进了生产（配置漂移，呼应第 56 讲），而这段代码每个请求要循环上千次；
+3. 追配置，发现灰度环境为排查问题把 `LOG_LEVEL=debug` 带进了生产（配置漂移，呼应第 056 讲），而这段代码每个请求要循环上千次；
 4. 算账：单请求 1000 行、每行约 200 字节即 200KB，按 1 万 QPS 估算每秒约 2GB，磁盘必然被打满；
 5. 根因是三件事叠加——循环体内的高频日志、生产误开 DEBUG、既没有采样也没有输出限额。
 
@@ -459,7 +459,7 @@ grep -E '^LOG_LEVEL=' deploy/prod.env
 LOG_LEVEL=info
 ```
 
-逐字段看：`grep` 只输出匹配行，字段名与取值一目了然；CI 里可进一步用「匹配到 debug 就非零退出」让误配直接失败的断言，而不是打印出来等人看。把这类「配置即代码」的检查放进流水线，是第 56 讲配置校验与第 60 讲 CI 门禁的共同落点。
+逐字段看：`grep` 只输出匹配行，字段名与取值一目了然；CI 里可进一步用「匹配到 debug 就非零退出」让误配直接失败的断言，而不是打印出来等人看。把这类「配置即代码」的检查放进流水线，是第 056 讲配置校验与第 060 讲 CI 门禁的共同落点。
 
 ### 把日志约束接进 CI
 
@@ -484,7 +484,7 @@ LOG_LEVEL=info
 
 ### 与 L10 实战工程结构的呼应
 
-这套约定在 L10 是基础设施：`/projects/net-shortlink`、`/projects/micro-ecommerce` 都在入口中间件生成 `trace_id` 并注入 context，业务层只追加自己的字段；`/projects/data-log-etl` 本身就是日志处理管道，字段字典直接决定能按哪些维度聚合；`/projects/kv-3-async` 的 WAL 与恢复过程靠状态变更日志还原现场。再往后，第 57 讲统一响应里的错误码要写进 `error` 字段，第 59 讲 pprof 的耗时、第 80 讲链路追踪的 span，都靠同一个 `trace_id` 与日志关联。日志不是出事才想起来的补丁，而是从第一讲就要定好字段字典的地基。
+这套约定在 L10 是基础设施：`/projects/net-shortlink`、`/projects/micro-ecommerce` 都在入口中间件生成 `trace_id` 并注入 context，业务层只追加自己的字段；`/projects/data-log-etl` 本身就是日志处理管道，字段字典直接决定能按哪些维度聚合；`/projects/kv-3-async` 的 WAL 与恢复过程靠状态变更日志还原现场。再往后，第 057 讲统一响应里的错误码要写进 `error` 字段，第 059 讲 pprof 的耗时、第 080 讲链路追踪的 span，都靠同一个 `trace_id` 与日志关联。日志不是出事才想起来的补丁，而是从第一讲就要定好字段字典的地基。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -498,9 +498,9 @@ LOG_LEVEL=info
 
 ## 随堂检测
 
-<Quiz no="55-1" q="关于 slog 的结构化字段，哪项做法是正确的？" :options='["把 trace_id 拼进 message 字符串里","把 trace_id 作为独立键值字段传入","所有信息都用 fmt.Sprintf 拼成一行","只在 ERROR 级别才记录字段"]' answer="1" explain="只有独立字段才能被日志系统检索与聚合；拼进 message 里的文本无法按字段过滤。" />
+<Quiz no="055-1" q="关于 slog 的结构化字段，哪项做法是正确的？" :options='["把 trace_id 拼进 message 字符串里","把 trace_id 作为独立键值字段传入","所有信息都用 fmt.Sprintf 拼成一行","只在 ERROR 级别才记录字段"]' answer="1" explain="只有独立字段才能被日志系统检索与聚合；拼进 message 里的文本无法按字段过滤。" />
 
-<Predict no="55-2" q="用 slog.LevelInfo 的 HandlerOptions 记录一条 slog.Debug，会输出吗？" :options='["会输出","不会输出","会自动升级成 WARN","会 panic"]' answer="1" output="（无输出）" explain="Handler 的 Level 是最低输出门槛，低于 INFO 的 Debug 在进入格式化前就被丢弃，成本几乎为零。" />
+<Predict no="055-2" q="用 slog.LevelInfo 的 HandlerOptions 记录一条 slog.Debug，会输出吗？" :options='["会输出","不会输出","会自动升级成 WARN","会 panic"]' answer="1" output="（无输出）" explain="Handler 的 Level 是最低输出门槛，低于 INFO 的 Debug 在进入格式化前就被丢弃，成本几乎为零。" />
 
 ## 一页纸速记
 

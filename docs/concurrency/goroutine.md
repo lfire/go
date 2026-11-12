@@ -1,11 +1,11 @@
 ---
-title: 第 39 讲 · goroutine：创建、栈与生命周期
-description: 第 39 讲 · goroutine：创建、栈与生命周期 —— go 关键字、初始栈与增长、调度单位、泄漏与排查、GOMAXPROCS
+title: 第 039 讲 · goroutine：创建、栈与生命周期
+description: 第 039 讲 · goroutine：创建、栈与生命周期 —— go 关键字、初始栈与增长、调度单位、泄漏与排查、GOMAXPROCS
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★☆☆☆" time="35 分钟" goal="知道协程轻在哪里、会怎么泄漏" prereq="第 38 讲 · 并发与并行：CSP 思想" />
+<StageHeader stage="L4 · 并发编程" level="★★☆☆☆" time="35 分钟" goal="知道协程轻在哪里、会怎么泄漏" prereq="第 038 讲 · 并发与并行：CSP 思想" />
 
-# 第 39 讲 · goroutine：创建、栈与生命周期
+# 第 039 讲 · goroutine：创建、栈与生命周期
 
 > 上一讲我们确认了一件事：并发的收益来自重叠等待。这一讲看承担这些等待的最小执行单元——goroutine。它常常被叫作「轻量线程」，但「轻」到底轻在哪、能开多少个、什么时候会悄悄赖着不走，是写出稳定服务必须回答的问题。搞懂这三点，你才会明白为什么 Go 敢给每个请求随手开一个 goroutine。
 
@@ -146,7 +146,7 @@ func main() {
 
 ### 再深一层：go 语句的 happens-before、泄漏时序与可验证证据
 
-「main 不会等 goroutine」只是现象，背后的规则写在 Go 内存模型里。`go_mem.html` 对 `go` 语句的唯一承诺是：**`go` 语句 synchronized before 新 goroutine 开始执行**。由此能推出一条完整的可见性边界：`go` 之前 main 的所有写入，对新 G 的起点可见；反过来，新 G 里的写入对 main 之后的读**不自动可见**——两者此后没有任何排序，除非再引入 channel、`sync.Mutex`、`WaitGroup` 或原子操作。所以「起了 goroutine 看不到输出」与「共享变量读到旧值」是同一件事的两面：都缺一条同步边。`sync/waitgroup.go` 的注释补上另一半：`Done` synchronizes before 它所解除阻塞的 `Wait` 的返回，因此 `wg.Wait()` 之后读任务写入是安全的，前提仍是 `Add` 在 `go` 之前（否则计数可能还没登记，见第 45 讲）。
+「main 不会等 goroutine」只是现象，背后的规则写在 Go 内存模型里。`go_mem.html` 对 `go` 语句的唯一承诺是：**`go` 语句 synchronized before 新 goroutine 开始执行**。由此能推出一条完整的可见性边界：`go` 之前 main 的所有写入，对新 G 的起点可见；反过来，新 G 里的写入对 main 之后的读**不自动可见**——两者此后没有任何排序，除非再引入 channel、`sync.Mutex`、`WaitGroup` 或原子操作。所以「起了 goroutine 看不到输出」与「共享变量读到旧值」是同一件事的两面：都缺一条同步边。`sync/waitgroup.go` 的注释补上另一半：`Done` synchronizes before 它所解除阻塞的 `Wait` 的返回，因此 `wg.Wait()` 之后读任务写入是安全的，前提仍是 `Add` 在 `go` 之前（否则计数可能还没登记，见第 045 讲）。
 
 | 写法 | 保证 | 不保证 / 边界 |
 | --- | --- | --- |
@@ -263,9 +263,9 @@ go test -bench=BenchmarkSpawnG -benchmem -run=^$ ./...       # 看一次 go 加 
 
 ## 随堂检测
 
-<Quiz no="39-1" q="关于 goroutine 的栈，下面哪一项是正确的？" :options='["每个 goroutine 生来就有 8MB 固定栈，与线程一样","初始栈约 2KB，按需自动增长，函数返回后会被回收","栈只增不减，运行过的 goroutine 的栈永远不会释放","goroutine 栈由内核分配，创建必须陷入内核态"]' answer="1" explain="Go 运行时在用户态给每个 G 分配约 2KB 的初始栈，不够时自动搬去更大的连续栈；函数返回后 G 终止、栈被回收，创建过程不需要系统调用。" />
+<Quiz no="039-1" q="关于 goroutine 的栈，下面哪一项是正确的？" :options='["每个 goroutine 生来就有 8MB 固定栈，与线程一样","初始栈约 2KB，按需自动增长，函数返回后会被回收","栈只增不减，运行过的 goroutine 的栈永远不会释放","goroutine 栈由内核分配，创建必须陷入内核态"]' answer="1" explain="Go 运行时在用户态给每个 G 分配约 2KB 的初始栈，不够时自动搬去更大的连续栈；函数返回后 G 终止、栈被回收，创建过程不需要系统调用。" />
 
-<Predict no="39-2" q="main 里用循环起了 3 个执行 fmt.Println(i) 的 goroutine，随后函数直接结束，最可能看到什么？" :options='["稳定打印 0 1 2","大概率什么都不打印","固定打印三行，只是顺序随机","编译报错：goroutine 不能被丢弃"]' answer="1" output="（大概率没有任何输出，程序直接退出）" explain="main 也是一个 goroutine，它一返回进程就结束，运行时不会等待其它 G。想让输出出现，必须用 WaitGroup、channel 或其它同步手段显式等待；这也是「起了协程却看不到日志」的头号原因。" />
+<Predict no="039-2" q="main 里用循环起了 3 个执行 fmt.Println(i) 的 goroutine，随后函数直接结束，最可能看到什么？" :options='["稳定打印 0 1 2","大概率什么都不打印","固定打印三行，只是顺序随机","编译报错：goroutine 不能被丢弃"]' answer="1" output="（大概率没有任何输出，程序直接退出）" explain="main 也是一个 goroutine，它一返回进程就结束，运行时不会等待其它 G。想让输出出现，必须用 WaitGroup、channel 或其它同步手段显式等待；这也是「起了协程却看不到日志」的头号原因。" />
 
 ## 一页纸速记
 

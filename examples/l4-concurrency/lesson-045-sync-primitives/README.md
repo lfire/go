@@ -1,9 +1,9 @@
-# 第 45 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
+# 第 045 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
 
 - **阶段**：L4 · 并发编程
 - **目标**：在共享内存场景选对原语
 - **知识点**：互斥锁与互斥粒度 / 读写锁 / WaitGroup / Once 与单例 / Cond 与广播 / 常见死锁
-- **教程正文**：[第 45 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond](/concurrency/sync-primitives)
+- **教程正文**：[第 045 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond](/concurrency/sync-primitives)
 - **GitHub 目录**：[l4-concurrency/lesson-045-sync-primitives](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-045-sync-primitives)
 
 ## 运行

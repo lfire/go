@@ -1,9 +1,9 @@
-# 第 89 讲 · 高可用：多活、容灾与混沌工程
+# 第 089 讲 · 高可用：多活、容灾与混沌工程
 
 - **阶段**：L8 · 分布式与云原生
 - **目标**：面向故障设计而不是祈祷不故障
 - **知识点**：冗余与故障域 / 多活架构 / 容量与限流 / 演练与注入 / 恢复预案与复盘
-- **教程正文**：[第 89 讲 · 高可用：多活、容灾与混沌工程](/distributed/high-availability)
+- **教程正文**：[第 089 讲 · 高可用：多活、容灾与混沌工程](/distributed/high-availability)
 - **GitHub 目录**：[l8-distributed/lesson-089-high-availability](https://github.com/lfire/go/tree/main/examples/l8-distributed/lesson-089-high-availability)
 
 ## 运行

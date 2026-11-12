@@ -1,9 +1,9 @@
-# 第 54 讲 · 基准测试、模糊测试与覆盖率
+# 第 054 讲 · 基准测试、模糊测试与覆盖率
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：用数据而不是感觉谈性能与质量
 - **知识点**：Benchmark 写法 / benchstat 对比 / 内存分配指标 / fuzz test / 覆盖率与误区
-- **教程正文**：[第 54 讲 · 基准测试、模糊测试与覆盖率](/engineering/bench-fuzz)
+- **教程正文**：[第 054 讲 · 基准测试、模糊测试与覆盖率](/engineering/bench-fuzz)
 - **GitHub 目录**：[l5-engineering/lesson-054-bench-fuzz](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-054-bench-fuzz)
 
 ## 运行

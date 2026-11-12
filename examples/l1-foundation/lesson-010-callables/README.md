@@ -1,9 +1,9 @@
-# 第 10 讲 · 函数、多返回值、变参与闭包
+# 第 010 讲 · 函数、多返回值、变参与闭包
 
 - **阶段**：L1 · 编程地基
 - **目标**：写出符合 Go 风格的函数与回调
 - **知识点**：多返回值与命名返回 / 变参 / 函数作为值 / 闭包与捕获 / defer 初识
-- **教程正文**：[第 10 讲 · 函数、多返回值、变参与闭包](/foundation/callables)
+- **教程正文**：[第 010 讲 · 函数、多返回值、变参与闭包](/foundation/callables)
 - **GitHub 目录**：[l1-foundation/lesson-010-callables](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-010-callables)
 
 ## 运行

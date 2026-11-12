@@ -1,9 +1,9 @@
-# 第 42 讲 · channel：语义、缓冲与关闭
+# 第 042 讲 · channel：语义、缓冲与关闭
 
 - **阶段**：L4 · 并发编程
 - **目标**：用 channel 正确传递数据与信号
 - **知识点**：无缓冲/缓冲 / 发送接收阻塞规则 / 关闭与遍历 / 只发送/只接收 / nil channel
-- **教程正文**：[第 42 讲 · channel：语义、缓冲与关闭](/concurrency/channel)
+- **教程正文**：[第 042 讲 · channel：语义、缓冲与关闭](/concurrency/channel)
 - **GitHub 目录**：[l4-concurrency/lesson-042-channel](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-042-channel)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 17 讲 · 结构体、标签与内存对齐
+# 第 017 讲 · 结构体、标签与内存对齐
 
 - **阶段**：L2 · 语法核心
 - **目标**：设计合理的数据模型
 - **知识点**：定义与字面量 / 匿名字段与嵌入 / json tag / 内存对齐与字段顺序 / 空结构体
-- **教程正文**：[第 17 讲 · 结构体、标签与内存对齐](/basics/structs)
+- **教程正文**：[第 017 讲 · 结构体、标签与内存对齐](/basics/structs)
 - **GitHub 目录**：[l2-basics/lesson-017-structs](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-017-structs)
 
 ## 运行

@@ -1,11 +1,11 @@
 ---
-title: 第 64 讲 · WebSocket / SSE 与实时推送
+title: 第 064 讲 · WebSocket / SSE 与实时推送
 description: 讲清协议握手与升级、gorilla/websocket 读写泵与心跳、断线重连、SSE 取舍以及广播与连接管理，实现可用的长连接服务
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="实现长连接场景与连接治理" prereq="第 63 讲 · REST API" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="实现长连接场景与连接治理" prereq="第 063 讲 · REST API" />
 
-# 第 64 讲 · WebSocket / SSE 与实时推送
+# 第 064 讲 · WebSocket / SSE 与实时推送
 
 > 前面所有接口都是「客户端问一句、服务端答一句」：连接用完即走，服务端永远不知道客户端还在不在。可聊天室、行情推送、任务进度、日志流这些场景，需要服务端**主动、持续地**把消息送出去。这一讲把短请求升级成长连接：先看 HTTP 如何握手升级成 WebSocket，再解决长连接真正的难点——心跳、僵尸连接、并发写与扇出广播，最后给出 SSE 这个更轻的替代方案。
 
@@ -317,7 +317,7 @@ func main() {
 
 **帧格式解释了「单写」铁律。** RFC 6455 第 5.2 节的一个帧由 `FIN(1) + RSV(3) + opcode(4) + MASK(1) + 载荷长度(7/16/64 位) + 掩码键(0 或 4 字节) + 载荷` 组成。一条应用消息可以拆成多帧、靠 FIN 位标识结束，opcode 区分 text(0x1)、binary(0x2)、close(0x8)、ping(0x9)、pong(0xA)，控制帧必须 FIN=1 且载荷不超过 125 字节。由此推出并发写为什么不是「加锁就好」：若两个 goroutine 各自写帧，A 写了未置 FIN 的续帧，B 又插入一个 text 帧，帧序列交错后消息边界与 opcode 语义都被破坏，对端解析出错乱报文，gorilla/websocket 文档因此明确不支持并发写。规范还要求**客户端到服务端**的帧必须掩码（MASK=1），目的是防止历史上一类缓存污染攻击（RFC 6455 第 10.3 节），服务端到客户端不掩码——这层由库透明处理，但知道它存在才明白升级后不能再往连接里裸写字节。
 
-**心跳参数之间有严格的不等式。** `SetReadDeadline(now + pongWait)` 定义「多久没收到任何帧就判定连接已死」，服务端每 `pingPeriod` 发一次 Ping，对端回 Pong 时 `SetPongHandler` 把读超时往后推。推导：必须 `pingPeriod < pongWait`，否则心跳还没来得及刷新超时，正常连接已被误杀；再留一点余量，工程上取 `pongWait * 9 / 10`。`writeWait` 单独限制每次落笔，防止对端不读导致写阻塞。为什么不交给 TCP keepalive？因为系统默认探测间隔常以小时计，而 NAT、负载均衡器对空闲连接的静默清除往往是 60 到 350 秒；只有应用层心跳才能同时对抗「半开连接」与中间设备的空闲超时。这是第 61 讲四类超时在长连接上的变体，也说明 WebSocket 必须从短请求的 `WriteTimeout` 体系里豁免出来。
+**心跳参数之间有严格的不等式。** `SetReadDeadline(now + pongWait)` 定义「多久没收到任何帧就判定连接已死」，服务端每 `pingPeriod` 发一次 Ping，对端回 Pong 时 `SetPongHandler` 把读超时往后推。推导：必须 `pingPeriod < pongWait`，否则心跳还没来得及刷新超时，正常连接已被误杀；再留一点余量，工程上取 `pongWait * 9 / 10`。`writeWait` 单独限制每次落笔，防止对端不读导致写阻塞。为什么不交给 TCP keepalive？因为系统默认探测间隔常以小时计，而 NAT、负载均衡器对空闲连接的静默清除往往是 60 到 350 秒；只有应用层心跳才能同时对抗「半开连接」与中间设备的空闲超时。这是第 061 讲四类超时在长连接上的变体，也说明 WebSocket 必须从短请求的 `WriteTimeout` 体系里豁免出来。
 
 **SSE 帧是纯文本协议，不是库的魔法。** `text/event-stream` 里每个事件由 `id:`、`event:`、`data:`、`retry:` 等行组成，空行表示事件结束，冒号开头的行是注释（正好用来做心跳、防止代理掐空闲连接）；浏览器 `EventSource` 断线后自动重连并带上 `Last-Event-ID` 请求头，服务端据此从断点补发。它是普通 HTTP 流，天然穿过各类代理与网关，却只支持服务端到客户端的单向 UTF-8 文本。理解帧格式才能解释两个高频坑：不调用 `Flusher.Flush()` 数据会卡在缓冲区里根本没发出去；注释行不加，长连接会被代理按空闲超时掐掉。
 
@@ -446,7 +446,7 @@ go test -race -run 'TestSecWebSocketAccept|TestSSEFrameAndFlush' -v ./...
 - L7 的 /microservice/gateway 必须显式放行 `Upgrade` 并对长连接单独放宽超时，否则握手在网关层就被掐断；/microservice/resilience 的指数退避加抖动正是本讲「断线风暴」的通用解法。
 - L10 的 /projects/ai-gateway 用 SSE 做 LLM 流式转发，几乎原封不动复用本讲的 `text/event-stream`、`Flush` 与心跳注释；/projects/micro-seckill 的库存与行情推送则需要 WebSocket 的全双工与连接治理。
 
-上生产前还要补齐几件事。第一，**鉴权前置**：WebSocket 握手仍是一次 HTTP 请求，Bearer Token 或 Cookie 校验要在 `Upgrade` 之前完成；升级成功后连接长期存活，令牌过期需要有踢下线机制（见第 70 讲的吊销话题）。第二，**连接数治理**：单机连接数受 fd 与内存限制，要设全局上限并按用户限流，广播队列要有容量与丢弃策略。第三，**水平扩展**：Hub 只持有本进程的连接，多实例部署时广播必须经由 Redis Pub/Sub 或消息队列做跨机扇出，否则用户连到 A 机器就收不到 B 机器发出的消息。
+上生产前还要补齐几件事。第一，**鉴权前置**：WebSocket 握手仍是一次 HTTP 请求，Bearer Token 或 Cookie 校验要在 `Upgrade` 之前完成；升级成功后连接长期存活，令牌过期需要有踢下线机制（见第 070 讲的吊销话题）。第二，**连接数治理**：单机连接数受 fd 与内存限制，要设全局上限并按用户限流，广播队列要有容量与丢弃策略。第三，**水平扩展**：Hub 只持有本进程的连接，多实例部署时广播必须经由 Redis Pub/Sub 或消息队列做跨机扇出，否则用户连到 A 机器就收不到 B 机器发出的消息。
 
 <Compare title="按方向选型，而不是按热度选型" :panels='[{"label":"场景 A · 双向交互","code":"聊天 / 协同编辑 / 游戏\n客户端需要持续往服务端发消息","note":"选 WebSocket：全双工、可传二进制；自己实现心跳与指数退避重连"},{"label":"场景 B · 单向推送","code":"通知 / 行情 / 进度条 / 日志流\n只需服务端往客户端推","note":"选 SSE：普通 HTTP，代理友好，浏览器自动重连，服务端代码少一半"}]' />
 
@@ -466,9 +466,9 @@ go test -race -run 'TestSecWebSocketAccept|TestSSEFrameAndFlush' -v ./...
 
 ## 随堂检测
 
-<Quiz no="64-1" q="关于 WebSocket 并发写，下列说法正确的是？" :options='["多个 goroutine 可安全并发调用 WriteMessage","一个连接应由唯一 goroutine 负责写，其余通过 channel 投递","写操作由库内部加锁，无需关心","只要不开压缩就不会有问题"]' answer="1" explain="gorilla/websocket 明确不支持并发写，标准做法是每个连接一个写泵，业务 goroutine 只往它的 send 通道发消息。" />
+<Quiz no="064-1" q="关于 WebSocket 并发写，下列说法正确的是？" :options='["多个 goroutine 可安全并发调用 WriteMessage","一个连接应由唯一 goroutine 负责写，其余通过 channel 投递","写操作由库内部加锁，无需关心","只要不开压缩就不会有问题"]' answer="1" explain="gorilla/websocket 明确不支持并发写，标准做法是每个连接一个写泵，业务 goroutine 只往它的 send 通道发消息。" />
 
-<Predict no="64-2" q="广播时对慢客户端用了阻塞发送（没有 default 分支），会发生什么？" :options='["只有该客户端收不到消息","整场广播被这条连接卡住，其他客户端一起延迟","库自动丢弃该消息","服务端立即 panic"]' answer="1" output="所有在线客户端的推送都被阻塞，直到慢客户端的 send 队列腾出空间" explain="Hub 的广播循环是串行的，一个阻塞发送会卡住整轮扇出；用带 default 的非阻塞发送并踢出慢客户端，才能隔离故障。" />
+<Predict no="064-2" q="广播时对慢客户端用了阻塞发送（没有 default 分支），会发生什么？" :options='["只有该客户端收不到消息","整场广播被这条连接卡住，其他客户端一起延迟","库自动丢弃该消息","服务端立即 panic"]' answer="1" output="所有在线客户端的推送都被阻塞，直到慢客户端的 send 队列腾出空间" explain="Hub 的广播循环是串行的，一个阻塞发送会卡住整轮扇出；用带 default 的非阻塞发送并踢出慢客户端，才能隔离故障。" />
 
 ## 一页纸速记
 

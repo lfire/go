@@ -3,7 +3,7 @@ title: 第 100 讲 · 极致性能优化：从 pprof 到 30w QPS
 description: 走一遍建立基线、pprof 定位、逐项优化、量化验证与防回归的完整性能闭环
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="走一遍完整的性能优化闭环" prereq="第 59 讲 · 性能剖析 / 第 54 讲 · 基准测试" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="60 分钟" goal="走一遍完整的性能优化闭环" prereq="第 059 讲 · 性能剖析 / 第 054 讲 · 基准测试" />
 
 # 第 100 讲 · 极致性能优化：从 pprof 到 30w QPS
 

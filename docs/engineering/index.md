@@ -17,21 +17,21 @@ description: 把代码变成可维护、可测试、可发布、可诊断的工�
 
 ## 讲次安排
 
-本阶段共 **11 讲**（第 50–60 讲），合计约 465 分钟，难度 2–4 级。
+本阶段共 **11 讲**（第 050–060 讲），合计约 465 分钟，难度 2–4 级。
 
 | 讲次 | 标题 | 难度 | 时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
-| 50 | [项目结构与分层设计](/engineering/project-layout) | ★★★☆☆ | 40 分钟 | cmd/internal/pkg/api · 按领域还是按层 · 依赖方向 |
-| 51 | [代码规范、gofmt、vet 与 golangci-lint](/engineering/code-style) | ★★☆☆☆ | 35 分钟 | Effective Go 要点 · 命名与注释 · gofmt/goimports |
-| 52 | [单元测试与表驱动测试](/engineering/unit-test) | ★★★☆☆ | 40 分钟 | testing 基础 · 表驱动 · t.Run 子测试 |
-| 53 | [Mock：gomock / sqlmock / httptest](/engineering/mock-test) | ★★★★☆ | 45 分钟 | 依赖倒置与接口 · gomock 生成 · sqlmock |
-| 54 | [基准测试、模糊测试与覆盖率](/engineering/bench-fuzz) | ★★★☆☆ | 40 分钟 | Benchmark 写法 · benchstat 对比 · 内存分配指标 |
-| 55 | [日志：slog / zap 与结构化采样](/engineering/logging) | ★★★☆☆ | 40 分钟 | 结构化日志 · 级别与上下文 · trace_id 关联 |
-| 56 | [配置：flag / env / viper / 配置中心](/engineering/config) | ★★★☆☆ | 40 分钟 | 十二要素与配置外置 · flag 与环境变量 · viper |
-| 57 | [错误码、错误栈与统一响应](/engineering/error-design) | ★★★★☆ | 45 分钟 | 错误分类与错误码 · 错误栈封装 · 内部错误到 HTTP/gRPC 状态 |
-| 58 | [设计模式与 Functional Options / wire](/engineering/patterns-design) | ★★★★☆ | 45 分钟 | Functional Options · 工厂与单例 · 策略与中间件 |
-| 59 | [性能剖析：pprof / trace / 火焰图](/engineering/profiling) | ★★★★☆ | 50 分钟 | CPU/Mem/Block/Mutex profile · 火焰图读法 · trace 与调度延迟 |
-| 60 | [CI/CD、Makefile、代码生成与发布](/engineering/cicd) | ★★★☆☆ | 45 分钟 | Makefile 与脚本 · GitHub Actions · go generate 与代码生成 |
+| 050 | [项目结构与分层设计](/engineering/project-layout) | ★★★☆☆ | 40 分钟 | cmd/internal/pkg/api · 按领域还是按层 · 依赖方向 |
+| 051 | [代码规范、gofmt、vet 与 golangci-lint](/engineering/code-style) | ★★☆☆☆ | 35 分钟 | Effective Go 要点 · 命名与注释 · gofmt/goimports |
+| 052 | [单元测试与表驱动测试](/engineering/unit-test) | ★★★☆☆ | 40 分钟 | testing 基础 · 表驱动 · t.Run 子测试 |
+| 053 | [Mock：gomock / sqlmock / httptest](/engineering/mock-test) | ★★★★☆ | 45 分钟 | 依赖倒置与接口 · gomock 生成 · sqlmock |
+| 054 | [基准测试、模糊测试与覆盖率](/engineering/bench-fuzz) | ★★★☆☆ | 40 分钟 | Benchmark 写法 · benchstat 对比 · 内存分配指标 |
+| 055 | [日志：slog / zap 与结构化采样](/engineering/logging) | ★★★☆☆ | 40 分钟 | 结构化日志 · 级别与上下文 · trace_id 关联 |
+| 056 | [配置：flag / env / viper / 配置中心](/engineering/config) | ★★★☆☆ | 40 分钟 | 十二要素与配置外置 · flag 与环境变量 · viper |
+| 057 | [错误码、错误栈与统一响应](/engineering/error-design) | ★★★★☆ | 45 分钟 | 错误分类与错误码 · 错误栈封装 · 内部错误到 HTTP/gRPC 状态 |
+| 058 | [设计模式与 Functional Options / wire](/engineering/patterns-design) | ★★★★☆ | 45 分钟 | Functional Options · 工厂与单例 · 策略与中间件 |
+| 059 | [性能剖析：pprof / trace / 火焰图](/engineering/profiling) | ★★★★☆ | 50 分钟 | CPU/Mem/Block/Mutex profile · 火焰图读法 · trace 与调度延迟 |
+| 060 | [CI/CD、Makefile、代码生成与发布](/engineering/cicd) | ★★★☆☆ | 45 分钟 | Makefile 与脚本 · GitHub Actions · go generate 与代码生成 |
 
 ## 怎么学这一阶段
 
@@ -47,4 +47,4 @@ description: 把代码变成可维护、可测试、可发布、可诊断的工�
 
 <ProgressTracker />
 
-[← 上一阶段：阶段四 · 并发编程](/concurrency/) · [第 50 讲开始 →](/engineering/project-layout) · [下一阶段：阶段六 · 服务端与数据](/server/)
+[← 上一阶段：阶段四 · 并发编程](/concurrency/) · [第 050 讲开始 →](/engineering/project-layout) · [下一阶段：阶段六 · 服务端与数据](/server/)

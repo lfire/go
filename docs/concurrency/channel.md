@@ -1,11 +1,11 @@
 ---
-title: 第 42 讲 · channel：语义、缓冲与关闭
-description: 第 42 讲 · channel：语义、缓冲与关闭 —— 无缓冲与缓冲、发送接收阻塞规则、关闭与遍历、只发送只接收、nil channel
+title: 第 042 讲 · channel：语义、缓冲与关闭
+description: 第 042 讲 · channel：语义、缓冲与关闭 —— 无缓冲与缓冲、发送接收阻塞规则、关闭与遍历、只发送只接收、nil channel
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="用 channel 正确传递数据与信号" prereq="第 41 讲 · 调度循环：抢占、窃取与 handoff" />
+<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="40 分钟" goal="用 channel 正确传递数据与信号" prereq="第 041 讲 · 调度循环：抢占、窃取与 handoff" />
 
-# 第 42 讲 · channel：语义、缓冲与关闭
+# 第 042 讲 · channel：语义、缓冲与关闭
 
 > 调度器解决了「让 goroutine 都跑起来」，但跑起来之后它们怎么交换数据？共享变量加锁当然可以，Go 更推荐的答案是 channel。它把「传递数据」和「同步时机」合成了一件事：一次发送既是交出值，也是一次握手。这一讲把 channel 的行为规则讲死——什么时候阻塞、什么时候 panic、谁来关闭、关闭后还能读什么。这些规则记住了，后面写 pipeline、select、context 才不会处处踩坑。
 
@@ -152,7 +152,7 @@ channel 为什么「既传数据又同步」，不是一句口诀，而是 `go_m
 - **关闭 synchronized before 读到零值的那次接收**：`The closing of a channel is synchronized before a receive that returns a zero value because the channel is closed.`。`close(done)` 之所以能替代共享 bool 广播叫停大批 goroutine，靠的正是这条（第 44、47 讲会再用）。
 - **缓冲槽位复用也带同步**：`The kth receive on a channel with capacity C is synchronized before the completion of the (k+C)th send from that channel completes.`。即使不走直接拷贝、只是复用同一个环形槽位，同步边依然成立——这条最常被漏掉。
 
-机器级依据在 `runtime/chan.go`：`chansend`、`chanrecv`、`closechan` 都在 `hchan.lock` 的保护下把阻塞方包成 `sudog` 挂进等待队列，配对时直接拷贝值并 `goready` 唤醒（结构见第 43 讲）。锁的 acquire/release 加上 goroutine 唤醒，共同实现了上面这四条同步动作。反过来，共享 bool 标志、`time.Sleep` 轮询、`len(ch)` 快照都不在清单里，用它们「判断完成」或「判断能不能发」都没有正确性依据。
+机器级依据在 `runtime/chan.go`：`chansend`、`chanrecv`、`closechan` 都在 `hchan.lock` 的保护下把阻塞方包成 `sudog` 挂进等待队列，配对时直接拷贝值并 `goready` 唤醒（结构见第 043 讲）。锁的 acquire/release 加上 goroutine 唤醒，共同实现了上面这四条同步动作。反过来，共享 bool 标志、`time.Sleep` 轮询、`len(ch)` 快照都不在清单里，用它们「判断完成」或「判断能不能发」都没有正确性依据。
 
 | 动作 | 保证 | 不保证 / 边界 |
 | --- | --- | --- |
@@ -280,7 +280,7 @@ go test -run=^$ -bench=BenchmarkUnbuffered -blockprofile=block.out ./... && go t
 
 <Compare title="别拿 len 当发送许可" :panels='[{"label":"错误：检查后使用","code":"if len(ch) &lt; cap(ch) {\n    ch &lt;- v // 之间可能被别人填满\n}","note":"len 是快照、不是同步动作；判断与发送之间缓冲区可能已被别的生产者占满，属逻辑竞态，-race 抓不到。"},{"label":"正确：非阻塞探测或靠背压","code":"select {\ncase ch &lt;- v:\ndefault:\n    // 满了就降级或等背压\n}","note":"select 的 case 就绪是运行时判定的，或直接发送让缓冲满自然阻塞形成背压。"}]' note="能不能发，由 channel 的阻塞规则说了算，不由 len 的瞬时值说了算。" />
 
-<Callout type="note" title="把规则串起来" text="第 43 讲会拆开 hchan，解释这四条同步动作在运行时怎么落地；第 44 讲用 close(done) 与 select 搭超时停止；第 47 讲用 context 树把取消沿调用链传播；第 48 讲把「谁写谁关」当成 pipeline 收尾的第一纪律。本讲的四条红线与四条 happens-before 规则，是后面所有套路的公共地基。" />
+<Callout type="note" title="把规则串起来" text="第 043 讲会拆开 hchan，解释这四条同步动作在运行时怎么落地；第 044 讲用 close(done) 与 select 搭超时停止；第 047 讲用 context 树把取消沿调用链传播；第 048 讲把「谁写谁关」当成 pipeline 收尾的第一纪律。本讲的四条红线与四条 happens-before 规则，是后面所有套路的公共地基。" />
 
 这些规则在实战里几乎逐条出现。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 Frontier 是有界队列，生产端与 worker 之间靠「谁发送谁关闭」收尾，队列满时背压到生产端而不是静默丢任务；第 107 讲 [日志分析 ETL](/projects/data-log-etl) 用 pipeline 串起读取、解析、聚合、落库，阶段间 channel 的 close 顺序直接决定会不会漏数据；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 用 close 广播触发优雅退位、用超时释放租约；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 的有界队列削峰、结果轮询与超时释放，正是「缓冲容量即允许积压量」的工程版本。
 
@@ -306,9 +306,9 @@ go test -run=^$ -bench=BenchmarkUnbuffered -blockprofile=block.out ./... && go t
 
 ## 随堂检测
 
-<Quiz no="42-1" q="向一个已经关闭的 channel 发送数据，会发生什么？" :options='["立即返回元素零值","触发 panic","永久阻塞","数据被静默丢弃"]' answer="1" explain="关闭意味着「不会再有数据了」，此时再发送属于违反协议，运行时直接 panic。接收方向则相反：关闭后仍可接收剩余数据，排空后无限次返回零值与 ok=false。" />
+<Quiz no="042-1" q="向一个已经关闭的 channel 发送数据，会发生什么？" :options='["立即返回元素零值","触发 panic","永久阻塞","数据被静默丢弃"]' answer="1" explain="关闭意味着「不会再有数据了」，此时再发送属于违反协议，运行时直接 panic。接收方向则相反：关闭后仍可接收剩余数据，排空后无限次返回零值与 ok=false。" />
 
-<Predict no="42-2" q="容量为 2 的缓冲 channel 里放入 10、20 后关闭，再用 for range 遍历，最后再接收一次，会看到什么？" :options='["遍历输出 10 20，最后一次拿到 0 且 ok=false","遍历输出 10 20，最后一次永久阻塞","遍历直接 panic，因为 channel 已关闭","遍历只输出 10，20 随关闭被丢弃"]' answer="0" output="取出: 10\n取出: 20\n再次接收: v=0 ok=false" explain="关闭不会丢弃缓冲里已排队的数据，range 会先把它们取空再退出。此后继续接收会立刻返回零值与 ok=false，既不阻塞也不 panic。" />
+<Predict no="042-2" q="容量为 2 的缓冲 channel 里放入 10、20 后关闭，再用 for range 遍历，最后再接收一次，会看到什么？" :options='["遍历输出 10 20，最后一次拿到 0 且 ok=false","遍历输出 10 20，最后一次永久阻塞","遍历直接 panic，因为 channel 已关闭","遍历只输出 10，20 随关闭被丢弃"]' answer="0" output="取出: 10\n取出: 20\n再次接收: v=0 ok=false" explain="关闭不会丢弃缓冲里已排队的数据，range 会先把它们取空再退出。此后继续接收会立刻返回零值与 ok=false，既不阻塞也不 panic。" />
 
 ## 一页纸速记
 

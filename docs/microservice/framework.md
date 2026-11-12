@@ -1,11 +1,11 @@
 ---
-title: 第 82 讲 · 自研微服务框架：从 0 到 1
+title: 第 082 讲 · 自研微服务框架：从 0 到 1
 description: 用 Options 装配、生命周期、统一错误与内建可观测收成一套最小框架，并对照 kratos 与 go-zero
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★★" time="60 分钟" goal="把注册、配置、拦截、可观测收成一套框架" prereq="第 81 讲 Prometheus / Grafana 与 RED 指标" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★★" time="60 分钟" goal="把注册、配置、拦截、可观测收成一套框架" prereq="第 081 讲 Prometheus / Grafana 与 RED 指标" />
 
-# 第 82 讲 · 自研微服务框架：从 0 到 1
+# 第 082 讲 · 自研微服务框架：从 0 到 1
 
 > 前面十讲我们各自造过最小 RPC、拦截器、注册表、负载均衡、配置热更新、网关、熔断、追踪与指标。它们现在还是一堆互不相连的零件。这一讲做收束：把这些能力按「装配 → 生命周期 → 横切 → 可观测」四层装进一个最小框架，让业务只写一个 handler、其余由框架兜住。重点不是再造一个 kratos 或 go-zero，而是想清楚框架的边界在哪、能力怎么插拔、以及工业框架在设计取舍上各自放弃了什么。有了这个视角，你既能读懂成熟框架的源码分层，也能在需要时裁出恰好够用的那一套。
 
@@ -149,7 +149,7 @@ func (s *Server) Start(registrar func(string)) error {
 		return fmt.Errorf("already started")
 	}
 	for _, name := range s.services {
-		registrar(name) // 对接第 75 讲的注册中心
+		registrar(name) // 对接第 075 讲的注册中心
 	}
 	s.started = true
 	return nil
@@ -209,7 +209,7 @@ func main() {
 
 ### 3.1 把可观测内建进拦截链
 
-框架最该「默认开启」的就是可观测：把日志、trace 注入、指标采集做成一条中间件链挂在 handler 外，业务一行埋点都不用写。下面的 `Observability` 汇总请求数、错误数与累计耗时，正好对应第 81 讲的 RED 三项；`Build` 把三种横切能力按洋葱顺序装好。这正是 kratos 的 middleware 链与 go-zero 内建治理的同构骨架。
+框架最该「默认开启」的就是可观测：把日志、trace 注入、指标采集做成一条中间件链挂在 handler 外，业务一行埋点都不用写。下面的 `Observability` 汇总请求数、错误数与累计耗时，正好对应第 081 讲的 RED 三项；`Build` 把三种横切能力按洋葱顺序装好。这正是 kratos 的 middleware 链与 go-zero 内建治理的同构骨架。
 
 ```go
 package main
@@ -232,7 +232,7 @@ func (o *Observability) Report() (uint64, uint64, time.Duration) {
 	return o.requests.Load(), o.errors.Load(), time.Duration(o.latency.Load())
 }
 
-// Middleware 是统一拦截链签名，与第 74 讲一致。
+// Middleware 是统一拦截链签名，与第 074 讲一致。
 type Middleware func(ctx context.Context, method string, next func() error) error
 
 func chain(ms []Middleware, final func() error) func() error {
@@ -447,12 +447,12 @@ go vet ./...
 <Predict q="按 3.4 的测试，两个 Option 用完全相反的顺序装配，TestOptionOrderIrrelevant 的结果是？" :options='["失败，顺序影响结果","PASS，两份 Options 相等","直接编译报错","结果取决于随机数"]' answer="1" output="--- PASS: TestOptionOrderIrrelevant (0.00s)" explain="每个 Option 只改一个字段，装配顺序无关，两份 Options 相等；PASS 正是可组合性的直接证据。" />
 
 ## 动手练一练
-<Exercise title="给最小框架补上配置热更新与熔断默认策略" task="把第 77 讲的配置 Store 与第 79 讲的 Breaker 作为两个内建能力接进 App：用 WithConfigStore 装配，并在 middleware 链里默认加一层熔断，超时用 Options.Timeout 统一注入。" :hints='["新增 Option 只改一个字段，App 里存一个配置 Store 指针","熔断中间件放在拦截链外层，失败达到阈值就短路后续 handler","超时通过 context.WithTimeout 从 Options.Timeout 派生并传给 handler"]' solution="要点一：加 WithConfigStore(s) Option，App 持有 Store，业务用 Get 读当前快照，配置变更由第 77 讲的 Push 热更。\n要点二：Build 里追加 breaker 中间件，调用前 Allow、调用后 Record，Open 状态直接返回统一 Error。\n要点三：入口用 context.WithTimeout(ctx, opts.Timeout) 派生 ctx 并逐层传递，保证 deadline 全链路一致。" explain="把配置、熔断、超时收成框架默认能力，业务就再也不会漏掉这几道防线，这正是「内建」相对「按需调用」的价值。" />
+<Exercise title="给最小框架补上配置热更新与熔断默认策略" task="把第 077 讲的配置 Store 与第 079 讲的 Breaker 作为两个内建能力接进 App：用 WithConfigStore 装配，并在 middleware 链里默认加一层熔断，超时用 Options.Timeout 统一注入。" :hints='["新增 Option 只改一个字段，App 里存一个配置 Store 指针","熔断中间件放在拦截链外层，失败达到阈值就短路后续 handler","超时通过 context.WithTimeout 从 Options.Timeout 派生并传给 handler"]' solution="要点一：加 WithConfigStore(s) Option，App 持有 Store，业务用 Get 读当前快照，配置变更由第 077 讲的 Push 热更。\n要点二：Build 里追加 breaker 中间件，调用前 Allow、调用后 Record，Open 状态直接返回统一 Error。\n要点三：入口用 context.WithTimeout(ctx, opts.Timeout) 派生 ctx 并逐层传递，保证 deadline 全链路一致。" explain="把配置、熔断、超时收成框架默认能力，业务就再也不会漏掉这几道防线，这正是「内建」相对「按需调用」的价值。" />
 
 ## 随堂检测
-<Quiz no="82-1" q="自研框架用 Functional Options 装配，相比全局单例配置最大的好处是什么？" :options='["进程启动更快","依赖显式可组合、带默认值、便于多实例与测试隔离","自动生成的代码更少","天然支持所有传输协议"]' answer="1" explain="Option 把每份依赖显式传入并有默认值兜底，换几个 Option 就能造出隔离实例做测试；全局单例在多实例与来源追踪上都很脆弱。" />
+<Quiz no="082-1" q="自研框架用 Functional Options 装配，相比全局单例配置最大的好处是什么？" :options='["进程启动更快","依赖显式可组合、带默认值、便于多实例与测试隔离","自动生成的代码更少","天然支持所有传输协议"]' answer="1" explain="Option 把每份依赖显式传入并有默认值兜底，换几个 Option 就能造出隔离实例做测试；全局单例在多实例与来源追踪上都很脆弱。" />
 
-<Predict no="82-2" q="代码 2.2 里 Start 之后调用 Stop，注册与反注册的先后顺序是？为什么？" :options='["先停流量再反注册，顺序无所谓","先反注册再停流量，避免摘除窗口内仍有新请求打到已停实例","只反注册不停流量","顺序由注册中心决定，框架管不着"]' answer="1" output="已注册: [order.Greeter]\nbefore: SayHello\nafter : SayHello\n演示：未等到信号，主动走停机流程\n反注册: order.Greeter\n已停止" explain="优雅退出必须先把实例从注册中心摘除，让调用方停止派发新请求，再停止对外服务；否则摘除生效前的窗口里仍会有流量打到已经不再处理的实例。" />
+<Predict no="082-2" q="代码 2.2 里 Start 之后调用 Stop，注册与反注册的先后顺序是？为什么？" :options='["先停流量再反注册，顺序无所谓","先反注册再停流量，避免摘除窗口内仍有新请求打到已停实例","只反注册不停流量","顺序由注册中心决定，框架管不着"]' answer="1" output="已注册: [order.Greeter]\nbefore: SayHello\nafter : SayHello\n演示：未等到信号，主动走停机流程\n反注册: order.Greeter\n已停止" explain="优雅退出必须先把实例从注册中心摘除，让调用方停止派发新请求，再停止对外服务；否则摘除生效前的窗口里仍会有流量打到已经不再处理的实例。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["框架只收敛重复且无关业务的四层：Options 装配、生命周期、横切拦截链、内建可观测","Functional Options 显式可组合带默认值；统一 Error 带稳定码并支持 errors.As 沿链判定","Start 先注册再服务，Stop 先反注册再停流量，顺序错了就有摘除窗口的漏流量","kratos 走分层可插拔与标准生态，go-zero 走代码生成与约定优先，最小框架用来理解二者共同骨架"]' :pitfalls='["把业务状态机、SQL 或第三方 SDK 封装塞进框架，让最常变的代码压在最底层","Options 没有默认值，每起一个服务都要抄一长串配置","可观测按需开启而非默认内建，出事时才发现没有指标与链路"]' summary="一句话记住：框架 = 显式装配 + 有序生命周期 + 统一横切 + 默认可观测，边界守住才不会长成巨石。" />

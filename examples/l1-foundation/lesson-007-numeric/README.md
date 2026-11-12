@@ -1,9 +1,9 @@
-# 第 07 讲 · 数值、布尔、字符与类型转换
+# 第 007 讲 · 数值、布尔、字符与类型转换
 
 - **阶段**：L1 · 编程地基
 - **目标**：避开数值溢出与隐式转换的坑
 - **知识点**：整型与平台相关类型 / 浮点与精度 / byte/rune / 显式转换 / math 与 strconv
-- **教程正文**：[第 07 讲 · 数值、布尔、字符与类型转换](/foundation/numeric)
+- **教程正文**：[第 007 讲 · 数值、布尔、字符与类型转换](/foundation/numeric)
 - **GitHub 目录**：[l1-foundation/lesson-007-numeric](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-007-numeric)
 
 ## 运行

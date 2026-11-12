@@ -1,11 +1,11 @@
 ---
-title: 第 34 讲 · defer 实现与 open-coded 优化
+title: 第 034 讲 · defer 实现与 open-coded 优化
 description: 从堆分配、栈分配到开放编码，讲清 defer 变快的原理、open-coded 的适用条件与退化场景
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="35 分钟" goal="知道 defer 为何从慢变快" prereq="第 33 讲 · 垃圾回收：三色标记、屏障与 GOGC" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="35 分钟" goal="知道 defer 为何从慢变快" prereq="第 033 讲 · 垃圾回收：三色标记、屏障与 GOGC" />
 
-# 第 34 讲 · defer 实现与 open-coded 优化
+# 第 034 讲 · defer 实现与 open-coded 优化
 
 > 很多人听说「defer 有开销」便在热路径里一律不用，也有人以为 Go 1.14 之后 defer 完全免费。真相取决于编译器能不能把它展开。这一讲沿 `_defer` 结构的三代实现往下走，用 `-gcflags=-m` 与 `go tool objdump` 亲眼确认你的 defer 落在哪一档。
 
@@ -118,7 +118,7 @@ deferBits 取 8 位而非更宽，是编译器在「展开成本」与「覆盖�
 
 以下路径与常量以 Go 1.21~1.23 为准，跨版本前先对照本机源码。运行时记录定义在 `runtime/runtime2.go` 的 `_defer`，字段有 `heap`（是否堆分配）、`openDefer`（是否开放编码）、`sp` 与 `pc`（调用者栈指针与程序计数器）、`fn`（待执行函数）、`link`（指向下一条），以及 `framepc`、`varp`；每个 g 用 `_defer` 字段挂链表表头，注册时头插、返回时从头取，天然形成 LIFO。开放编码根本不造这条记录，改由编译器在 `cmd/compile/internal/ssagen` 维护 `openDeferInfo` 与一个 `uint8` 的 deferBits，位数由 `maxOpenDefers = 8` 限定；能否展开的判断落在 `cmd/compile/internal/walk` 的 `walkDefer`。异常路径由 `runtime/panic.go` 的 `deferreturn`、`runOpenDeferFrame` 与 `freedefer` 兜底，panic 或 Goexit 时会把已展开的 defer 临时还原成栈上记录再执行，语义因此不受优化影响。
 
-复现实验有三条：`go build -gcflags='-m -m' defer.go 2>&1 | grep -i defer` 看编译器对展开的诊断，`go tool compile -S defer.go | grep -E 'deferproc|deferreturn'` 看是否残留运行时调用（开放编码时应为空），`go test -bench=. -benchmem` 用 `ns/op` 与 `allocs/op` 把差距量化。生产里若 pprof 出现 `runtime.deferprocStack` 或 `runtime.deferreturn` 热点，说明有函数没被展开，回头查是不是循环内 defer、条数超 8 或含 recover；批量排查可对整个包跑一次 `-gcflags=-m` 再 grep。常见误用依次是：在 `for` 里 defer 关文件解锁（既退化又把释放推迟到函数末）、以为 Go 1.14 之后完全零成本、以及在命名返回值的函数里靠 defer 悄悄改返回值（语义坑见第 21 讲）。
+复现实验有三条：`go build -gcflags='-m -m' defer.go 2>&1 | grep -i defer` 看编译器对展开的诊断，`go tool compile -S defer.go | grep -E 'deferproc|deferreturn'` 看是否残留运行时调用（开放编码时应为空），`go test -bench=. -benchmem` 用 `ns/op` 与 `allocs/op` 把差距量化。生产里若 pprof 出现 `runtime.deferprocStack` 或 `runtime.deferreturn` 热点，说明有函数没被展开，回头查是不是循环内 defer、条数超 8 或含 recover；批量排查可对整个包跑一次 `-gcflags=-m` 再 grep。常见误用依次是：在 `for` 里 defer 关文件解锁（既退化又把释放推迟到函数末）、以为 Go 1.14 之后完全零成本、以及在命名返回值的函数里靠 defer 悄悄改返回值（语义坑见第 021 讲）。
 
 再补三点源码细节。`deferprocStack` 与老 `deferproc` 的差别在于前者在栈帧里预留 slot，只填 `_defer` 字段而不再向堆申请，这正是 `allocs/op` 保持为 0 的原因；`runtime/panic.go` 的 `freedefer` 会把用完的记录放进 P 的 defer 池复用，进一步摊薄成本。`deferBits` 是 `uint8`，8 位上限不是随意定的：每个返回点都要按位生成条件跳转，位数越多展开出的清理代码越长，反而吞掉收益。还要注意 `runtime.Goexit` 同样会执行该 goroutine 的 defer 链，别以为只有正常 return 和 panic 两条路径。另外 `deferreturn` 只在返回前调用一次，循环内所有 defer 都要等这一刻倒序执行，资源释放被整体推迟，这正是循环里 defer 关文件拖到函数末的原因。
 
@@ -365,7 +365,7 @@ func main() { f() }
 
 逐字段解释：`0b10110010` 的置位是 7、5、4、1；`7 - LeadingZeros8` 每轮取最高位，清位后继续，输出正是 LIFO 的 `7, 5, 4, 1`，与 `nextDefer` 里 `i := 7 - sys.LeadingZeros8(bits)` 完全一致——`deferBits` 8 位上限也因此不只是「条数限制」，更是「一条 `LeadingZeros8` 指令就能定序」的机器级理由。`debug.Stack()` 的栈里，`main.f.func1()`（被 defer 的闭包）紧压在 `panic({...})` 帧之上，且该帧定位到 `runtime/panic.go:791`——正是 `gopanic` 的 `for { fn, ok := p.nextDefer(); ...; fn() }` 里 `fn()` 那一行。这从运行时栈证明异常路径的 defer 由 `gopanic` 的展开循环调用，而不是函数正常返回时的 `deferreturn` 展开点调用；两条路径共用 `nextDefer`，只是入口不同。
 
-边界：以上符号与行号以 Go 1.23.8 为准，`runOpenDeferFrame`/`freedefer` 在更早资料里仍会出现，跨版本先 `grep` 再对号入座；`FUNCDATA_OpenCodedDeferInfo` 的 varint 布局、`deferBitsOffset/slotsOffset` 相对 SP 的存法都是实现细节；`-d=defer=1` 是编译器内部开关，措辞随版本变化；`debug.Stack()` 自身会分配，只适合诊断、别放热路径；`//go:noinline` 是本实验前提；`go tool objdump`/`nm -size` 那类产物观察前两版已用过，这里刻意改用编译诊断、位扫描与运行时栈三个新角度。这条链在第 98 讲（`walkDefer` 与 `openDeferInfo`）会与编译器侧合流。
+边界：以上符号与行号以 Go 1.23.8 为准，`runOpenDeferFrame`/`freedefer` 在更早资料里仍会出现，跨版本先 `grep` 再对号入座；`FUNCDATA_OpenCodedDeferInfo` 的 varint 布局、`deferBitsOffset/slotsOffset` 相对 SP 的存法都是实现细节；`-d=defer=1` 是编译器内部开关，措辞随版本变化；`debug.Stack()` 自身会分配，只适合诊断、别放热路径；`//go:noinline` 是本实验前提；`go tool objdump`/`nm -size` 那类产物观察前两版已用过，这里刻意改用编译诊断、位扫描与运行时栈三个新角度。这条链在第 098 讲（`walkDefer` 与 `openDeferInfo`）会与编译器侧合流。
 
 ### 边界、常见误解与前后联系
 
@@ -375,9 +375,9 @@ func main() { f() }
 | defer 的参数在执行时才求值 | 注册时求值；`defer fmt.Println(i)` 打印的是注册那一刻的 i | 循环里 defer 打印计数的程序 |
 | `runtime.Goexit` 不会执行 defer | 会执行该 goroutine 的 defer 链，只有 `os.Exit` 不会 | `runtime.Goexit` 的文档与 defer 链路径 |
 
-边界要点：三代实现的版本线是 Go 1.13 栈分配、Go 1.14 开放编码；`panic`、`runtime.Goexit`、`recover` 路径会把已展开的 defer 临时还原成栈上 `_defer` 再执行，语义不受优化影响；**`os.Exit` 不执行任何 defer**，是最容易忽略的例外；命名返回值下 defer 可悄悄改返回值（第 21 讲）；循环内 defer 把释放整体推迟到函数末；`-gcflags=-m` 与 `objdump` 措辞随版本变化，反汇编的 grep 结果还依赖内联决策；多 goroutine 各自持有独立 `_defer` 链，互不影响。
+边界要点：三代实现的版本线是 Go 1.13 栈分配、Go 1.14 开放编码；`panic`、`runtime.Goexit`、`recover` 路径会把已展开的 defer 临时还原成栈上 `_defer` 再执行，语义不受优化影响；**`os.Exit` 不执行任何 defer**，是最容易忽略的例外；命名返回值下 defer 可悄悄改返回值（第 021 讲）；循环内 defer 把释放整体推迟到函数末；`-gcflags=-m` 与 `objdump` 措辞随版本变化，反汇编的 grep 结果还依赖内联决策；多 goroutine 各自持有独立 `_defer` 链，互不影响。
 
-前后联系：第 21 讲（defer/panic/recover）给语义，本讲给实现；第 98 讲（编译器源码：SSA、逃逸与内联）会精读 `cmd/compile/internal/walk` 的 `walkDefer` 与 `cmd/compile/internal/ssagen` 的 `openDeferInfo`/`maxOpenDefers`，看开放编码与内联预算如何共同决定是否展开，第 100 讲（极致性能优化）把「别在循环里 defer」列为热路径规则。
+前后联系：第 021 讲（defer/panic/recover）给语义，本讲给实现；第 098 讲（编译器源码：SSA、逃逸与内联）会精读 `cmd/compile/internal/walk` 的 `walkDefer` 与 `cmd/compile/internal/ssagen` 的 `openDeferInfo`/`maxOpenDefers`，看开放编码与内联预算如何共同决定是否展开，第 100 讲（极致性能优化）把「别在循环里 defer」列为热路径规则。
 
 ## 4. 工程实践
 
@@ -479,8 +479,8 @@ go test -bench='OpenCoded|LoopDefer' -benchmem -run=^$ ./...
 
 ## 随堂检测
 
-<Quiz no="34-1" q="下列哪项最可能让 defer 退回栈上或堆上分配？" :options='["函数里有 3 条固定 defer","defer 出现在 for 循环里","函数返回值是 error","defer 调用了方法"]' answer="1" explain="循环内 defer 的执行次数编译期无法确定，无法用固定 deferBits 展开；数量超过 8、含 recover 或展开成本过高也会退化。" />
-<Predict no="34-2" q="一个函数有 9 条不在循环里的 defer，编译器会怎样处理？" :options='["全部开放编码","仅前 8 条开放编码","整体退回栈上分配","直接编译报错"]' answer="2" output="因超出 maxOpenDefers=8，整函数退回非开放编码路径" explain="deferBits 是 8 位，第 9 条放不下，编译器放弃整个函数的开放编码优化而非只优化一部分。" />
+<Quiz no="034-1" q="下列哪项最可能让 defer 退回栈上或堆上分配？" :options='["函数里有 3 条固定 defer","defer 出现在 for 循环里","函数返回值是 error","defer 调用了方法"]' answer="1" explain="循环内 defer 的执行次数编译期无法确定，无法用固定 deferBits 展开；数量超过 8、含 recover 或展开成本过高也会退化。" />
+<Predict no="034-2" q="一个函数有 9 条不在循环里的 defer，编译器会怎样处理？" :options='["全部开放编码","仅前 8 条开放编码","整体退回栈上分配","直接编译报错"]' answer="2" output="因超出 maxOpenDefers=8，整函数退回非开放编码路径" explain="deferBits 是 8 位，第 9 条放不下，编译器放弃整个函数的开放编码优化而非只优化一部分。" />
 
 ## 一页纸速记
 

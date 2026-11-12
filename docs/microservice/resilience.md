@@ -1,11 +1,11 @@
 ---
-title: 第 79 讲 · 熔断、降级、重试与雪崩防护
+title: 第 079 讲 · 熔断、降级、重试与雪崩防护
 description: 用重试预算、熔断状态机、降级兜底与舱壁隔离，让局部故障不演变成全站雪崩
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="让局部故障不演变成全站故障" prereq="第 78 讲 API 网关、鉴权与限流" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="让局部故障不演变成全站故障" prereq="第 078 讲 API 网关、鉴权与限流" />
 
-# 第 79 讲 · 熔断、降级、重试与雪崩防护
+# 第 079 讲 · 熔断、降级、重试与雪崩防护
 
 > 分布式系统里最反直觉的一条规律是：为了「更可靠」而加的重试，往往正是把小故障放大成全站雪崩的元凶。下游稍微变慢，上游纷纷超时重试，瞬时请求量成倍翻，本就吃力的下游被彻底压垮，接着相邻服务被拖垮，故障沿调用链级联扩散。本讲用标准库把重试预算、熔断状态机、降级兜底和舱壁隔离各造一遍，并推演一次雪崩是怎么被「好意的重试」点燃的。学完你会明白：稳定性不是加了多少重试，而是有没有给失败设好边界。
 
@@ -394,7 +394,7 @@ Showing nodes accounting for 980, 96.08% of 1020 total
 
 ### 4.4 与后续阶段的呼应
 
-本讲的五道防线在 L8 会被放进更大的稳定性框架：[/distributed/high-availability](/distributed/high-availability) 用混沌工程主动注入故障、验证熔断与降级是否真的生效，[/distributed/sre](/distributed/sre) 把「重试浪费」纳入错误预算与告警降噪，而写操作要安全重试的前提是幂等键，见 [/distributed/distributed-lock](/distributed/distributed-lock) 的去重与状态机。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 的峰值流量下，一次无预算的重试就足以把库存服务打垮，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把超时预算、熔断、降级串成一条完整防线——这正是第 74 讲 deadline 传播在这里的落点。
+本讲的五道防线在 L8 会被放进更大的稳定性框架：[/distributed/high-availability](/distributed/high-availability) 用混沌工程主动注入故障、验证熔断与降级是否真的生效，[/distributed/sre](/distributed/sre) 把「重试浪费」纳入错误预算与告警降噪，而写操作要安全重试的前提是幂等键，见 [/distributed/distributed-lock](/distributed/distributed-lock) 的去重与状态机。到 L10，[/projects/micro-seckill](/projects/micro-seckill) 的峰值流量下，一次无预算的重试就足以把库存服务打垮，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把超时预算、熔断、降级串成一条完整防线——这正是第 074 讲 deadline 传播在这里的落点。
 
 <Quiz q="下游已过载、失败率接近 1，客户端对每个失败请求固定重试 3 次，期望请求量约变成原来的多少？" :options='["约 1.1 倍","约 2 倍","约 4 倍","基本不变"]' answer="2" explain="失败率接近 1 时每次都会打满重试，一个原始请求变成初次加三次重试共四次尝试，放大约 4 倍，正是重试风暴的点火条件。" />
 
@@ -404,9 +404,9 @@ Showing nodes accounting for 980, 96.08% of 1020 total
 <Exercise title="给熔断器加失败率窗口与指标上报" task="扩展 2.1 的 Breaker：用「最近 N 次调用里失败占比」替代连续失败计数来触发熔断，并在每次状态迁移与短路时打印一行结构化日志。" :hints='["用一个定长切片做滑动窗口，记录每次调用成功或失败","窗口填满后计算失败比例，超过阈值才 trip","状态迁移时统一走一个 setState 辅助函数，在里面打日志"]' solution="要点一：Breaker 增加 window []bool 与 cursor，Record 时按环形写入并统计失败比例。\n要点二：窗口未满时先不熔断，避免启动期样本不足误判；达到阈值再调 trip。\n要点三：抽出 setState(next State)，所有迁移都经过它，在其中打印 from、to、时间与当前失败率。" explain="失败率窗口比连续计数更能容忍偶发抖动；把状态迁移收进统一入口，指标与日志才不会漏报。" />
 
 ## 随堂检测
-<Quiz no="79-1" q="下游已经过载变慢，客户端对每个失败请求固定重试 3 次，最可能引发什么？" :options='["下游自动扩容并恢复","重试使总请求量成倍放大，把下游彻底压垮形成雪崩","错误率保持不变","超时被自动取消，毫无影响"]' answer="1" explain="重试把每个原始请求放大成多次，在下游本就吃力时形成正反馈：越慢越重试、越重试越慢，最终耗尽连接与 goroutine 并沿调用链级联扩散。" />
+<Quiz no="079-1" q="下游已经过载变慢，客户端对每个失败请求固定重试 3 次，最可能引发什么？" :options='["下游自动扩容并恢复","重试使总请求量成倍放大，把下游彻底压垮形成雪崩","错误率保持不变","超时被自动取消，毫无影响"]' answer="1" explain="重试把每个原始请求放大成多次，在下游本就吃力时形成正反馈：越慢越重试、越重试越慢，最终耗尽连接与 goroutine 并沿调用链级联扩散。" />
 
-<Predict no="79-2" q="代码 3.1 里舱壁容量 1，手动占满配额后调用 CallWithFallback，再释放后调用，两次返回分别是什么？" :options='["两次都 cached-data","先 cached-data，后 real-data","两次都 real-data","先 real-data，后 cached-data"]' answer="1" output="舱壁满时返回: cached-data；恢复后返回: real-data" explain="舱壁满时 b.Do 走 default 立即返回 ErrBusy，CallWithFallback 命中降级返回兜底值；释放配额后真实调用成功，返回 real-data。" />
+<Predict no="079-2" q="代码 3.1 里舱壁容量 1，手动占满配额后调用 CallWithFallback，再释放后调用，两次返回分别是什么？" :options='["两次都 cached-data","先 cached-data，后 real-data","两次都 real-data","先 real-data，后 cached-data"]' answer="1" output="舱壁满时返回: cached-data；恢复后返回: real-data" explain="舱壁满时 b.Do 走 default 立即返回 ErrBusy，CallWithFallback 命中降级返回兜底值；释放配额后真实调用成功，返回 real-data。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["重试预算按总请求比例发放额度，把重试放大倍数锁死，是防雪崩的第一道闸","熔断器 Closed、Open、HalfOpen 三态，冷却后靠半开探测自愈，成功够数才闭合","舱壁给每个依赖独立并发配额，降级兜底保核心链路，二者让故障被关在局部","超时、预算、熔断、降级、舱壁按调用顺序串联，任一环缺席压力都会漏下去"]' :pitfalls='["对非幂等写操作或确定性错误做无脑重试，越重试越糟","熔断后没有半开探测，服务恢复也永远不敢放流量","兜底逻辑又去调用那个已经挂掉的下游，降级形同虚设"]' summary="一句话记住：稳定性不是敢重试，而是给超时、重试、失败都设好边界，把故障关在最小舱室里。" />

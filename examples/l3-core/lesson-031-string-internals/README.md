@@ -1,9 +1,9 @@
-# 第 31 讲 · 字符串底层与零拷贝转换
+# 第 031 讲 · 字符串底层与零拷贝转换
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：知道字符串转换的代价与安全边界
 - **知识点**：string 头部结构 / 不可变与共享 / []byte 转换拷贝 / unsafe 零拷贝 / 适用与风险
-- **教程正文**：[第 31 讲 · 字符串底层与零拷贝转换](/core/string-internals)
+- **教程正文**：[第 031 讲 · 字符串底层与零拷贝转换](/core/string-internals)
 - **GitHub 目录**：[l3-core/lesson-031-string-internals](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-031-string-internals)
 
 ## 运行

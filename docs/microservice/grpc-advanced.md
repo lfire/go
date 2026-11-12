@@ -1,11 +1,11 @@
 ---
-title: 第 74 讲 · gRPC 拦截器、metadata、错误与超时
+title: 第 074 讲 · gRPC 拦截器、metadata、错误与超时
 description: 把横切能力统一收进拦截器，讲透 metadata 透传、status 错误码与 deadline 传播
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把横切能力统一收进拦截器" prereq="第 73 讲 Protobuf 与 gRPC 四种流" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把横切能力统一收进拦截器" prereq="第 073 讲 Protobuf 与 gRPC 四种流" />
 
-# 第 74 讲 · gRPC 拦截器、metadata、错误与超时
+# 第 074 讲 · gRPC 拦截器、metadata、错误与超时
 
 > 契约和四种流解决的是「怎么调」，但真实服务里还有一大堆与业务无关、却每个方法都绕不开的事：鉴权、日志、限流、链路 ID、panic 兜底、超时控制。如果把它们散落在每个 handler 里，代码会迅速膨胀且各写各的。gRPC 给出的答案是拦截器（Interceptor）——像 net/http 的中间件一样，把横切逻辑收成一条洋葱链。本讲不只列 API，而是用标准库把拦截器、metadata、status 错误码和 deadline 传播各造一遍，再对照真实 grpc 包的对应能力，让你明白框架替你做了什么、以及哪条链路一旦写断就会出事。
 
@@ -396,7 +396,7 @@ grpc-status: 0
 
 ### 4.3 两条真实工程误解
 
-**误解一：中间层用 context.Background() 起一个新 ctx 更干净，不影响调用。** 这是把「想要一个干净的 context」和「切断上游约束」混为一谈。Background 没有任何 deadline、取消信号，也不带 metadata；用它派生下游，等于把第 74 讲最看重的三条链一次性剪断，下游可能无限等待，链路 ID 也从这一跳起消失。
+**误解一：中间层用 context.Background() 起一个新 ctx 更干净，不影响调用。** 这是把「想要一个干净的 context」和「切断上游约束」混为一谈。Background 没有任何 deadline、取消信号，也不带 metadata；用它派生下游，等于把第 074 讲最看重的三条链一次性剪断，下游可能无限等待，链路 ID 也从这一跳起消失。
 
 <Compare :panels='[{"label":"错误：Background 重置","code":"ctx := context.Background()\ncall(ctx)","note":"deadline、取消信号、metadata 三条链同时断"},{"label":"正确：派生传入 ctx","code":"ctx, cancel := context.WithTimeout(parent, d)\ndefer cancel()\ncall(ctx)","note":"沿用父预算，逐跳只能缩短不能延长"}]' title="中间层不要重置 context" />
 
@@ -406,7 +406,7 @@ grpc-status: 0
 
 ### 4.4 与后续阶段的呼应
 
-本讲的 deadline 逐跳传播，在 [/distributed/distributed-tx](/distributed/distributed-tx) 的 Saga 补偿链路里会被放大成跨多个服务的统一预算；[/distributed/high-availability](/distributed/high-availability) 的级联失败推演，把「某层一个 Background 重置」升级成全站风险；[/distributed/sre](/distributed/sre) 的错误预算，则和「只对可恢复码重试」直接对应——把重试浪费在确定性错误上，就是在白烧错误预算。实战里，[/projects/micro-seckill](/projects/micro-seckill) 的下单链路若有一层重置 ctx，秒杀超时会瞬间放大成雪崩；[/projects/micro-ecommerce](/projects/micro-ecommerce) 用拦截器统一注入 trace-id，正是第 80 讲链路追踪的入口。
+本讲的 deadline 逐跳传播，在 [/distributed/distributed-tx](/distributed/distributed-tx) 的 Saga 补偿链路里会被放大成跨多个服务的统一预算；[/distributed/high-availability](/distributed/high-availability) 的级联失败推演，把「某层一个 Background 重置」升级成全站风险；[/distributed/sre](/distributed/sre) 的错误预算，则和「只对可恢复码重试」直接对应——把重试浪费在确定性错误上，就是在白烧错误预算。实战里，[/projects/micro-seckill](/projects/micro-seckill) 的下单链路若有一层重置 ctx，秒杀超时会瞬间放大成雪崩；[/projects/micro-ecommerce](/projects/micro-ecommerce) 用拦截器统一注入 trace-id，正是第 080 讲链路追踪的入口。
 
 <Quiz q="grpc-timeout 头的值 300m 表示多长？" :options='["300 纳秒","300 微秒","300 毫秒","300 分钟"]' answer="2" explain="grpc-timeout 的单位里小写 m 是毫秒、大写 M 是分钟，300m 即 300 毫秒。用相对剩余量而非绝对时刻，是因为两端时钟未必同步。" />
 
@@ -416,9 +416,9 @@ grpc-status: 0
 <Exercise title="给拦截器链加上 panic 恢复与 trace-id 透传" task="在 2.1 的 chain 里新增一个 recoverInterceptor 放最外层，把业务里的 panic 转成 Internal 错误；再写一个透传拦截器，从 Incoming metadata 取出 trace-id 并挂到下一跳的 Outgoing context。" :hints='["recover 必须写在 defer 里，且要放在调用 handler 之前注册","用命名返回值把 panic 转成 error，避免返回零值","透传时新建或复制一份 Metadata，只把需要的 key 挂回 context"]' solution="要点一：recoverInterceptor 用 defer 加 recover，命中时把命名返回 err 设为 Errorf(Internal, msg)，它应放在数组最外层。\n要点二：透传拦截器先 FromIncomingContext 取 trace-id，再用 NewOutgoingContext 挂回新 ctx 传给 handler。\n要点三：拦截器顺序是日志、recover、认证、透传、业务，越靠外越先做前置逻辑。" explain="把 recover 放最外层才能兜住内层所有 panic；把 metadata 显式再挂回 Outgoing context，才不会让链路 ID 在网关这一跳断掉。" />
 
 ## 随堂检测
-<Quiz no="74-1" q="客户端设了 500 毫秒 deadline，服务端调用下游时却用 context.Background() 新建 ctx，会怎样？" :options='["下游继承 500 毫秒预算，一切正常","整条 deadline 链从 Background 处断开，下游可能无限等待","deadline 自动翻倍成 1 秒","gRPC 会直接报错并拒绝请求"]' answer="1" explain="用 Background 起新 ctx 等于抛弃父 ctx 的 deadline 与取消信号，下游不再受顶层预算约束，慢调用会一直挂到自身超时甚至更久。" />
+<Quiz no="074-1" q="客户端设了 500 毫秒 deadline，服务端调用下游时却用 context.Background() 新建 ctx，会怎样？" :options='["下游继承 500 毫秒预算，一切正常","整条 deadline 链从 Background 处断开，下游可能无限等待","deadline 自动翻倍成 1 秒","gRPC 会直接报错并拒绝请求"]' answer="1" explain="用 Background 起新 ctx 等于抛弃父 ctx 的 deadline 与取消信号，下游不再受顶层预算约束，慢调用会一直挂到自身超时甚至更久。" />
 
-<Predict no="74-2" q="代码 3.1 里顶层 500 毫秒、child 300 毫秒，grpcTimeout(child) 与 downstream(child) 的结果大致是？" :options='["约 300m，返回 context deadline exceeded","约 500m，返回 nil","不发 grpc-timeout，返回 nil","约 300m，返回 nil"]' answer="0" output="子调用 grpc-timeout: 300m 附近；下游结果: context deadline exceeded" explain="子 ctx 取父子中更早的 deadline，约 300 毫秒；downstream 的 select 先收到 ctx.Done，立即返回 ctx.Err，不会傻等满 2 秒。" />
+<Predict no="074-2" q="代码 3.1 里顶层 500 毫秒、child 300 毫秒，grpcTimeout(child) 与 downstream(child) 的结果大致是？" :options='["约 300m，返回 context deadline exceeded","约 500m，返回 nil","不发 grpc-timeout，返回 nil","约 300m，返回 nil"]' answer="0" output="子调用 grpc-timeout: 300m 附近；下游结果: context deadline exceeded" explain="子 ctx 取父子中更早的 deadline，约 300 毫秒；downstream 的 select 先收到 ctx.Done，立即返回 ctx.Err，不会傻等满 2 秒。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["拦截器是接收 handler 返回新 handler 的函数，反向组装成洋葱，前置与后置各执行一次","metadata 是挂在 context 上的 map[string][]string，网关必须显式把值再挂回 Outgoing context 才能逐跳透传","错误用 status 的稳定 Code 表达，按码判定并只对可恢复码重试，绝不比对错误字符串","deadline 永远用传入 ctx 派生，父子取更早者；gRPC 把它编码成 grpc-timeout 传给对端"]' :pitfalls='["中间层用 Background 重置 ctx，剪断 deadline 与 metadata 两条链","拦截器里放未加锁的共享状态，或忘记 recover 让 panic 击穿进程","对 InvalidArgument 这类确定性错误做无意义重试"]' summary="一句话记住：拦截器收横切、metadata 带上下文、status 定错误、ctx 传 deadline，四者共用同一条 context。" />

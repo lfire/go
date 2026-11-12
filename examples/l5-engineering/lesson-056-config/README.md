@@ -1,9 +1,9 @@
-# 第 56 讲 · 配置：flag / env / viper / 配置中心
+# 第 056 讲 · 配置：flag / env / viper / 配置中心
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：做到同一份镜像跑多套环境
 - **知识点**：十二要素与配置外置 / flag 与环境变量 / viper / 配置校验 / 热加载与灰度
-- **教程正文**：[第 56 讲 · 配置：flag / env / viper / 配置中心](/engineering/config)
+- **教程正文**：[第 056 讲 · 配置：flag / env / viper / 配置中心](/engineering/config)
 - **GitHub 目录**：[l5-engineering/lesson-056-config](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-056-config)
 
 ## 运行

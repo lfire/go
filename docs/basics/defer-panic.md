@@ -1,11 +1,11 @@
 ---
-title: 第 21 讲 · defer / panic / recover
+title: 第 021 讲 · defer / panic / recover
 description: 用 defer 保证清理动作一定执行，理解 LIFO 与参数求值时机，再用 panic 与 recover 为真正不可恢复的意外兜底。
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="35 分钟" goal="正确做资源清理与异常兜底" prereq="第 20 讲 · 错误处理：error、包装与错误链" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="35 分钟" goal="正确做资源清理与异常兜底" prereq="第 020 讲 · 错误处理：error、包装与错误链" />
 
-# 第 21 讲 · defer / panic / recover
+# 第 021 讲 · defer / panic / recover
 
 > 打开文件后要关、加锁后要解锁、拿到响应体后要释放、事务失败要回滚。这些收尾动作有个共同特点：只要函数中途 `return` 一次，写在末尾的那行清理就可能永远跑不到。与其在每条返回路径上都复制一遍，不如把「打开」和「收尾」绑在一起。Go 的 `defer` 就是为这件事生的；而 `panic` 与 `recover` 处理的是另一种情况——程序已经错到不该继续往下走。这一讲把两者一次讲清楚。
 
@@ -116,7 +116,7 @@ func main() {
 }
 ```
 
-<OutputBox title="运行结果" output="开始执行\ntrue\n主流程继续运行" note="panic 值不是 error，这里用 %v 把它转成文本；这是文本化，不是第 20 讲的错误链包装。" />
+<OutputBox title="运行结果" output="开始执行\ntrue\n主流程继续运行" note="panic 值不是 error，这里用 %v 把它转成文本；这是文本化，不是第 020 讲的错误链包装。" />
 
 把各种情形放在一起对照：
 
@@ -132,7 +132,7 @@ func main() {
 
 <Callout type="warn" title="易错点：参数快照、返回值与 recover 的位置" text="defer 的参数在声明时就求值，循环里注册 defer 还会把清理动作一直堆到函数结束才执行，长循环应拆成小函数或显式关闭。命名返回值会被 defer 改写，写库函数时优先用匿名返回值。recover 必须写在 defer 的函数体里且直接调用，包一层普通函数再调就失效了。" />
 
-关于性能只点一句结论：Go 1.14 起编译器对大多数 `defer` 做了开放编码优化，常见场景开销已很小，不必为了省一次 defer 而手动复制清理代码；它的实现细节属于 [第 34 讲](/core/defer-internals)，这里不展开。
+关于性能只点一句结论：Go 1.14 起编译器对大多数 `defer` 做了开放编码优化，常见场景开销已很小，不必为了省一次 defer 而手动复制清理代码；它的实现细节属于 [第 034 讲](/core/defer-internals)，这里不展开。
 
 ## 4. 工程实践
 
@@ -240,14 +240,14 @@ func main() {
 | --- | --- | --- |
 | Go 1.14 | 开放编码 defer 成为默认 | 常见 defer 不再堆分配，循环里动态注册的仍走堆 |
 | Go 1.21 | `panic(nil)` 改为抛出 `*runtime.PanicNilError` | `GODEBUG=panicnil=1` 可回旧行为；别用 `recover() == nil` 判「没有 panic」 |
-| Go 1.22 | 循环变量每轮新建，循环里 defer 读到的值也随轮变化 | 与第 15 讲衔接 |
+| Go 1.22 | 循环变量每轮新建，循环里 defer 读到的值也随轮变化 | 与第 015 讲衔接 |
 | 全版本 | LIFO、参数快照、recover 只在 defer 内有效、os.Exit 不跑 defer | 结论与版本无关 |
 
 适用边界还有两条：长循环里堆 defer 会把清理动作一直拖到函数结束，应拆成小函数或显式关闭；`recover` 只在同一 goroutine 的 defer 里有效，子 goroutine 里的 panic 不会传播到父 goroutine。
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 34 讲](/core/defer-internals) 会展开 `_defer` 链表、堆分配 defer 与开放编码的性能对比；[第 27 讲](/core/escape-analysis) 解释闭包捕获为何让变量逃逸到堆；[第 35 讲](/core/startup) 讲 `init` 里 panic 的表现。工程上，[第 61 讲](/server/net-http) 在请求最外层挂带 `recover` 的中间件兜底。实战里，[第 105 讲](/projects/net-shortlink) 的处理器同样靠这一层防止单请求拖垮进程，[第 112 讲](/projects/kv-2-network) 用 `defer` 保证连接与锁一定被释放。
+[第 034 讲](/core/defer-internals) 会展开 `_defer` 链表、堆分配 defer 与开放编码的性能对比；[第 027 讲](/core/escape-analysis) 解释闭包捕获为何让变量逃逸到堆；[第 035 讲](/core/startup) 讲 `init` 里 panic 的表现。工程上，[第 061 讲](/server/net-http) 在请求最外层挂带 `recover` 的中间件兜底。实战里，[第 105 讲](/projects/net-shortlink) 的处理器同样靠这一层防止单请求拖垮进程，[第 112 讲](/projects/kv-2-network) 用 `defer` 保证连接与锁一定被释放。
 
 ## 动手练一练
 
@@ -255,9 +255,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="21-1" q="关于 defer，下面哪项说法是正确的？" :options='["defer 按注册顺序依次执行","defer 的参数在函数返回那一刻才求值","defer 按后进先出执行，且参数在声明时求值","一个函数里最多只能写一个 defer"]' answer="2" explain="defer 用栈保存，后注册的先执行；参数在 defer 语句执行时就求值，与之后的变量变化无关。" />
+<Quiz no="021-1" q="关于 defer，下面哪项说法是正确的？" :options='["defer 按注册顺序依次执行","defer 的参数在函数返回那一刻才求值","defer 按后进先出执行，且参数在声明时求值","一个函数里最多只能写一个 defer"]' answer="2" explain="defer 用栈保存，后注册的先执行；参数在 defer 语句执行时就求值，与之后的变量变化无关。" />
 
-<Predict no="21-2" q="第二段代码里 plain() 与 named() 的输出依次是什么？" :options='["1 1","1 2","2 1","2 2"]' answer="1" output="1\n2" explain="plain 的返回值在 return 时已拷贝，defer 改的是局部变量；named 使用命名返回值，defer 把具名变量 n 加一后成了真正的返回结果。" />
+<Predict no="021-2" q="第二段代码里 plain() 与 named() 的输出依次是什么？" :options='["1 1","1 2","2 1","2 2"]' answer="1" output="1\n2" explain="plain 的返回值在 return 时已拷贝，defer 改的是局部变量；named 使用命名返回值，defer 把具名变量 n 加一后成了真正的返回结果。" />
 
 ## 一页纸速记
 

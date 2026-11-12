@@ -1,11 +1,11 @@
 ---
-title: 第 60 讲 · CI/CD、Makefile、代码生成与发布
+title: 第 060 讲 · CI/CD、Makefile、代码生成与发布
 description: 让构建、检查、测试、发布自动化，掌握 Makefile、GitHub Actions、go generate、版本与 changelog、制品与回滚
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="45 分钟" goal="让构建、检查、测试、发布自动化" prereq="第 59 讲 · 性能剖析：pprof / trace / 火焰图" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="45 分钟" goal="让构建、检查、测试、发布自动化" prereq="第 059 讲 · 性能剖析：pprof / trace / 火焰图" />
 
-# 第 60 讲 · CI/CD、Makefile、代码生成与发布
+# 第 060 讲 · CI/CD、Makefile、代码生成与发布
 
 > 前面十讲讨论的都是「代码本身好不好」，这一讲讨论「好代码怎么稳定地送到线上」。手工发版的典型剧本是：某个人在自己机器上 `go build`，scp 到服务器，出问题时说不清这是哪个版本、也找不回上一版。CI/CD 的价值不是多一个 yaml 文件，而是把「检查、测试、构建、发布」固化成**任何人、任何时间执行结果都一样**的一条线。
 
@@ -254,7 +254,7 @@ main.Count: cannot set with -X: not a var of type string (type:int)
 
 **边界与失效条件**：`-X` 对 `const`、非 string 类型、以及被链接器裁剪掉的未引用变量无效（配合 `-s -w` 时尤其要留意）；`go generate` 只是注释，命令写错只在执行时报错，且不会自动成为 `go build` 的一步；`-trimpath` 去掉编译机绝对路径、让不同目录编出的二进制一致；`go version -m` 的 `dep` 与 `vcs.*` 字段要 module 依赖与 git 仓库才出现，纯单文件程序没有。机制能证明「制品与哪份源码、哪套参数对应」，证明不了「制品行为正确」。
 
-**版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测；`-X` 与 `go version -m` 自 Go 1.13 起可用，VCS 信息自 1.18 起（`-buildvcs`）、`DefaultGODEBUG` 字段自 1.20 起、`tool` 指令自 1.24 起陆续加入构建信息；`stringer` 以 `v0.24.0` 为准。第 36 讲展开编译链接流程，第 11 讲展开 module 基础。
+**版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测；`-X` 与 `go version -m` 自 Go 1.13 起可用，VCS 信息自 1.18 起（`-buildvcs`）、`DefaultGODEBUG` 字段自 1.20 起、`tool` 指令自 1.24 起陆续加入构建信息；`stringer` 以 `v0.24.0` 为准。第 036 讲展开编译链接流程，第 011 讲展开 module 基础。
 
 ### go.sum 里的 h1 校验和如何拦下被换掉的依赖
 
@@ -297,7 +297,7 @@ This download does NOT match an earlier download recorded in go.sum.
 
 **边界与失效条件**：实测里篡改后 `go mod verify` 仍报 verified（它检查的是本地缓存目录内容），**真正触发 mismatch 的是下载/构建路径**，所以 CI 要用 `go build` / `go mod download` 配合 `-mod=readonly`，不能只靠 verify 一道；`replace` 指向本地目录、`GOPRIVATE` 下的私有模块会绕过 sumdb；`go.sum` 只校验模块内容完整性，不校验依赖是否存在漏洞（那是 `govulncheck` 的职责），也不锁间接依赖的间接依赖之外的行为。机制能证明「下载到的字节与首次记录一致」，证明不了「这份依赖写得好」。
 
-**版本前提**：`go.sum` 自 Go 1.11（modules）起存在，sumdb 默认开启自 1.13，`GONOSUMDB` / `GOPRIVATE` / `GOFLAGS=-mod=readonly` 同期提供；本实验在 Go 1.23.8 实测，用的 `rsc.io/quote/v3@v3.1.0` 只是演示，任何模块都一样。第 11 讲展开 `go.mod / go.sum` 基础，本讲补的是校验链在流水线里为什么必须闭合。
+**版本前提**：`go.sum` 自 Go 1.11（modules）起存在，sumdb 默认开启自 1.13，`GONOSUMDB` / `GOPRIVATE` / `GOFLAGS=-mod=readonly` 同期提供；本实验在 Go 1.23.8 实测，用的 `rsc.io/quote/v3@v3.1.0` 只是演示，任何模块都一样。第 011 讲展开 `go.mod / go.sum` 基础，本讲补的是校验链在流水线里为什么必须闭合。
 
 ### `go generate` 往子进程里塞了什么：七个变量、`-run` 匹配的是整行
 
@@ -367,7 +367,7 @@ go generate -run=alpha ./...  # 只跑名字含 alpha 的那条
 
 **边界与失效条件**：`//go:generate` 必须以「行首 `//go:generate` 紧跟一个空格」出现，写成 `// go:generate` 或缩进后都不被识别；`-run`/`-skip` 是正则，特殊字符要转义；生成器进程继承的是 `go generate` 当时的环境变量，`GOFLAGS`、`GO111MODULE` 等也会影响它内部再起的 `go` 命令；`go generate` 不解析 Go 语法、也不由 `go build` 自动触发（第二版已证），所以这些变量只在 `go generate` 这条路径里存在。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；七个注入变量与 `-run` 匹配整行自 `go generate`（Go 1.4）起稳定，`-skip` 自 Go 1.20 起、`GOWORK` 自 Go 1.18（workspace）起；`stringer` 以本讲 CI 段钉的 `v0.24.0` 为准。第 23 讲讲 `go generate` 基础用法，第二版讲它「停在编译前哪一步」，这里补的是**子进程环境与过滤协议**；第 58 讲 wire provider 图、第 53 讲 mockgen 生成物都靠这条链路落地。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测；七个注入变量与 `-run` 匹配整行自 `go generate`（Go 1.4）起稳定，`-skip` 自 Go 1.20 起、`GOWORK` 自 Go 1.18（workspace）起；`stringer` 以本讲 CI 段钉的 `v0.24.0` 为准。第 023 讲讲 `go generate` 基础用法，第二版讲它「停在编译前哪一步」，这里补的是**子进程环境与过滤协议**；第 058 讲 wire provider 图、第 053 讲 mockgen 生成物都靠这条链路落地。
 
 ### `-s -w` 裁掉的到底是哪张表：buildinfo 的 dep / vcs 与可复现构建
 
@@ -404,7 +404,7 @@ go version -m app | grep -E '^\s+(mod|dep)'
 	dep	example.com/lib	v0.0.0
 ```
 
-逐字段：`mod` 行是主模块、版本 `(devel)`（工作区代码无版本号）；`dep` 行是依赖模块路径与**被 replace 之前的版本** `v0.0.0`，而不是 `./lib`——这与第 50 讲 `go list -m -json` 里 `Replace.Dir` 指向本地目录正好构成「记录的版本」与「实际用的代码」的错位，是「联调态 / 发布态漂移」的根源。`debug.ReadBuildInfo().Deps` 里同一个依赖还带着 `Replace != nil` 的标记，程序内也能读到。
+逐字段：`mod` 行是主模块、版本 `(devel)`（工作区代码无版本号）；`dep` 行是依赖模块路径与**被 replace 之前的版本** `v0.0.0`，而不是 `./lib`——这与第 050 讲 `go list -m -json` 里 `Replace.Dir` 指向本地目录正好构成「记录的版本」与「实际用的代码」的错位，是「联调态 / 发布态漂移」的根源。`debug.ReadBuildInfo().Deps` 里同一个依赖还带着 `Replace != nil` 的标记，程序内也能读到。
 
 `vcs.*` 字段则由 `-buildvcs` 控制：默认（auto）在 git 仓库里把 `vcs=git`、`vcs.revision`（提交哈希）、`vcs.time`、`vcs.modified`（工作区是否脏）写进 buildinfo。这几个字段是**可复现构建的隐敌**——工作区一脏，二进制字节就变。实测：
 
@@ -433,7 +433,7 @@ vcs.modified=false → 第一次；vcs.modified=true → 第二次，两个 sha 
 
 **边界与失效条件**：`-s` 只关符号表、`-w` 只关 DWARF，不会移除 `runtime.modinfo`，所以 buildinfo 仍在，但它也让 `go tool nm` / `objdump` / delve 失去大部分符号；`-trimpath` 去的是编译机绝对路径，不改 `go.mod` 里的 module path；`-buildvcs=false` 会连带丢掉 `vcs.revision` 等追溯信息，安全要求高的场景要在「可复现」与「可追溯」之间权衡（可把提交号改用 `-X` 显式注入）；buildid 由内容哈希产生（第二版内容寻址缓存那节），跨 Go 版本、跨 `-gcflags` 都会变，所以「同一套工具链」是可复现的前提；`replace` 指向本地目录时 `dep` 行不反映真实代码，跨机器复现前必须先消除本地 replace。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`shasum` 为系统工具；`-s` / `-w` 自早期版本提供，`-trimpath` 自 Go 1.13、`-buildvcs` 自 Go 1.18（VCS 信息同期进 buildinfo）、`-X` 与 `go version -m` 自 Go 1.13 起，`DefaultGODEBUG` 自 1.20、`tool` 指令自 1.24 陆续加入构建信息（第二版已列）；`go generate -run/-skip` 见上一节。第 36 讲展开编译链接流程，第 11 讲展开 module 基础，第二版讲了 `-ldflags -X` 与 `go.sum` 校验链，这两节补的是「生成器的子进程协议」与「符号裁剪、buildinfo 字段、可复现构建到 SLSA」这条之前只停在 Makefile 一行的链路。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测，`shasum` 为系统工具；`-s` / `-w` 自早期版本提供，`-trimpath` 自 Go 1.13、`-buildvcs` 自 Go 1.18（VCS 信息同期进 buildinfo）、`-X` 与 `go version -m` 自 Go 1.13 起，`DefaultGODEBUG` 自 1.20、`tool` 指令自 1.24 陆续加入构建信息（第二版已列）；`go generate -run/-skip` 见上一节。第 036 讲展开编译链接流程，第 011 讲展开 module 基础，第二版讲了 `-ldflags -X` 与 `go.sum` 校验链，这两节补的是「生成器的子进程协议」与「符号裁剪、buildinfo 字段、可复现构建到 SLSA」这条之前只停在 Makefile 一行的链路。
 
 ### 三条最常见的误解
 
@@ -562,7 +562,7 @@ jobs:
 
 ### 与 L10 实战工程结构的呼应
 
-这一讲是 L5 的收口，也是 L10 的入口：`/projects/cli-todo` 的发布与安装、`/projects/cli-codegen` 的生成物入库、KV 贯穿线四讲每次架构演进后的回归验证、`/projects/micro-ecommerce` 的多服务构建，全都跑在同一条流水线上。前面十讲的工具——第 50 讲的结构、51 的 lint、52/53 的测试与 mock、54 的基准与 fuzz、55 的日志、56 的配置、57 的错误契约、58 的装配、59 的 pprof——最终都要由这一讲固化成「任何人、任何时间执行结果都一样」的门禁，才算真正落地。从第 61 讲起进入 L6 服务端，net/http 的中间件链会把日志、错误码、`trace_id` 串进真实请求路径，而守护它的仍是这条可重复、可追溯、可回退的交付线。
+这一讲是 L5 的收口，也是 L10 的入口：`/projects/cli-todo` 的发布与安装、`/projects/cli-codegen` 的生成物入库、KV 贯穿线四讲每次架构演进后的回归验证、`/projects/micro-ecommerce` 的多服务构建，全都跑在同一条流水线上。前面十讲的工具——第 050 讲的结构、51 的 lint、52/53 的测试与 mock、54 的基准与 fuzz、55 的日志、56 的配置、57 的错误契约、58 的装配、59 的 pprof——最终都要由这一讲固化成「任何人、任何时间执行结果都一样」的门禁，才算真正落地。从第 061 讲起进入 L6 服务端，net/http 的中间件链会把日志、错误码、`trace_id` 串进真实请求路径，而守护它的仍是这条可重复、可追溯、可回退的交付线。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -576,9 +576,9 @@ jobs:
 
 ## 随堂检测
 
-<Quiz no="60-1" q="CI 里 go generate ./... 之后紧跟 git diff --exit-code，目的是什么？" :options='["加快构建速度","确保生成物已提交、没有和源码漂移","自动打 tag","清理临时文件"]' answer="1" explain="一旦生成物没入库或在 CI 里被重新生成得不一样，diff 非空就会让流水线失败，避免构建出与仓库不一致的二进制。" />
+<Quiz no="060-1" q="CI 里 go generate ./... 之后紧跟 git diff --exit-code，目的是什么？" :options='["加快构建速度","确保生成物已提交、没有和源码漂移","自动打 tag","清理临时文件"]' answer="1" explain="一旦生成物没入库或在 CI 里被重新生成得不一样，diff 非空就会让流水线失败，避免构建出与仓库不一致的二进制。" />
 
-<Predict no="60-2" q="用 go build -ldflags -X main.Version=v1.4.0 构建后，程序里 Version 变量的值会是？" :options='["dev","v1.4.0","空字符串","编译报错"]' answer="1" output="v1.4.0" explain="-ldflags -X 在链接期覆盖包级字符串变量，源码里的 dev 只是本地运行的兜底值。" />
+<Predict no="060-2" q="用 go build -ldflags -X main.Version=v1.4.0 构建后，程序里 Version 变量的值会是？" :options='["dev","v1.4.0","空字符串","编译报错"]' answer="1" output="v1.4.0" explain="-ldflags -X 在链接期覆盖包级字符串变量，源码里的 dev 只是本地运行的兜底值。" />
 
 ## 一页纸速记
 

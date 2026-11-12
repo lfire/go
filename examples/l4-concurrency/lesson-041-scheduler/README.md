@@ -1,9 +1,9 @@
-# 第 41 讲 · 调度循环：抢占、窃取与 handoff
+# 第 041 讲 · 调度循环：抢占、窃取与 handoff
 
 - **阶段**：L4 · 并发编程
 - **目标**：理解调度器如何保持 CPU 忙碌
 - **知识点**：schedule 循环 / work stealing / 系统调用与 handoff / 异步抢占 / sysmon 职责
-- **教程正文**：[第 41 讲 · 调度循环：抢占、窃取与 handoff](/concurrency/scheduler)
+- **教程正文**：[第 041 讲 · 调度循环：抢占、窃取与 handoff](/concurrency/scheduler)
 - **GitHub 目录**：[l4-concurrency/lesson-041-scheduler](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-041-scheduler)
 
 ## 运行

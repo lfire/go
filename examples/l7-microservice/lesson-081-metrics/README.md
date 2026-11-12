@@ -1,9 +1,9 @@
-# 第 81 讲 · Prometheus / Grafana 与 RED 指标
+# 第 081 讲 · Prometheus / Grafana 与 RED 指标
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：让系统状态可量化、可告警
 - **知识点**：Counter/Gauge/Histogram / RED/USE 方法 / PromQL 入门 / 自定义指标 / 告警规则
-- **教程正文**：[第 81 讲 · Prometheus / Grafana 与 RED 指标](/microservice/metrics)
+- **教程正文**：[第 081 讲 · Prometheus / Grafana 与 RED 指标](/microservice/metrics)
 - **GitHub 目录**：[l7-microservice/lesson-081-metrics](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-081-metrics)
 
 ## 运行

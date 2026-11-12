@@ -1,9 +1,9 @@
-# 第 58 讲 · 设计模式与 Functional Options / wire
+# 第 058 讲 · 设计模式与 Functional Options / wire
 
 - **阶段**：L5 · 工程化与质量
 - **目标**：用 Go 的方式做解耦与装配
 - **知识点**：Functional Options / 工厂与单例 / 策略与中间件 / 依赖注入与 wire / 避免 Java 式套壳
-- **教程正文**：[第 58 讲 · 设计模式与 Functional Options / wire](/engineering/patterns-design)
+- **教程正文**：[第 058 讲 · 设计模式与 Functional Options / wire](/engineering/patterns-design)
 - **GitHub 目录**：[l5-engineering/lesson-058-patterns-design](https://github.com/lfire/go/tree/main/examples/l5-engineering/lesson-058-patterns-design)
 
 ## 运行

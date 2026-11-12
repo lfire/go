@@ -1,9 +1,9 @@
-# 第 25 讲 · 阶段综合：内存版 KV 存储
+# 第 025 讲 · 阶段综合：内存版 KV 存储
 
 - **阶段**：L2 · 语法核心
 - **目标**：用接口、错误、结构体搭一个可扩展的小系统
 - **知识点**：接口抽象 Storage / CRUD 与错误设计 / 并发保护 / 命令解析 / 为后续贯穿线埋点
-- **教程正文**：[第 25 讲 · 阶段综合：内存版 KV 存储](/basics/capstone)
+- **教程正文**：[第 025 讲 · 阶段综合：内存版 KV 存储](/basics/capstone)
 - **GitHub 目录**：[l2-basics/lesson-025-capstone](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-025-capstone)
 
 ## 运行

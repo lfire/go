@@ -1,11 +1,11 @@
 ---
-title: 第 72 讲 · RPC 原理与自研最小 RPC
+title: 第 072 讲 · RPC 原理与自研最小 RPC
 description: 从一次 HTTP 请求出发，亲手推导出桩、编解码、协议、超时与错误传递，得到一个能跑的最小 RPC
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="从 HTTP 一步步推导出 RPC 要解决什么，并写出可运行的最小实现" prereq="第 71 讲 文件、对象存储与断点续传" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="从 HTTP 一步步推导出 RPC 要解决什么，并写出可运行的最小实现" prereq="第 071 讲 文件、对象存储与断点续传" />
 
-# 第 72 讲 · RPC 原理与自研最小 RPC
+# 第 072 讲 · RPC 原理与自研最小 RPC
 
 > 我们已经会用 net/http 写服务，也知道怎么把数据序列化成 JSON 发来发去。可一旦方法变多、调用变频繁，你会发现自己在反复做同一堆体力活：拼 URL、选 HTTP 方法、塞 body、判状态码、解响应。RPC（Remote Procedure Call，远程过程调用）要消灭的正是这些样板，它让「调用另一台机器上的函数」看起来像调用本地函数一样自然。本讲不直接搬出 gRPC，而是从一段最普通的 HTTP 代码出发，一层层加上协议、编解码、桩与超时，最终得到一个你自己写得出来、也拆得开的最小 RPC。理解了这个推导过程，后面所有框架都只是同一套骨架的不同实现。
 
@@ -339,7 +339,7 @@ Previous write at 0x00c0000120a0 by goroutine 7:
 FAIL
 ```
 
-逐字段解释：`WARNING: DATA RACE` 说明检测器发现同一内存地址被两个 goroutine 无同步地写；`Write at 0x... by goroutine 8` 指出冲突写发生在第 11 行的 `c.seq++`；`Previous write ... by goroutine 7` 给出与它冲突的上一次访问；具体地址与 goroutine 编号每次运行都不同，属于正常现象；`FAIL` 表示竞态让测试以失败收场。注意 `-race` 只报告「确实跑到并被采样到」的冲突时序，所以循环起 100 个 goroutine 是为了提高复现概率——这也呼应第 49 讲的结论：抓不到竞态不等于代码正确。
+逐字段解释：`WARNING: DATA RACE` 说明检测器发现同一内存地址被两个 goroutine 无同步地写；`Write at 0x... by goroutine 8` 指出冲突写发生在第 11 行的 `c.seq++`；`Previous write ... by goroutine 7` 给出与它冲突的上一次访问；具体地址与 goroutine 编号每次运行都不同，属于正常现象；`FAIL` 表示竞态让测试以失败收场。注意 `-race` 只报告「确实跑到并被采样到」的冲突时序，所以循环起 100 个 goroutine 是为了提高复现概率——这也呼应第 049 讲的结论：抓不到竞态不等于代码正确。
 
 修复方向是把「读改写」换成一次原子操作，Go 1.19 起提供的 `atomic.Uint64` 最直白：
 
@@ -480,7 +480,7 @@ func main() {
 
 ### 4.4 与后续阶段的呼应
 
-本讲埋下的三颗种子会在后面反复发芽。「请求 ID」对应「响应与请求配对」，到 L8 会升级成幂等键与去重表，见 [/distributed/distributed-lock](/distributed/distributed-lock) 的 SETNX 租约与幂等键设计；「超时不等于未执行」正是 [/distributed/distributed-tx](/distributed/distributed-tx) 里消息最终一致要处理的老问题；而「部分失败」在理论上的名字就叫分区，[/distributed/cap-base](/distributed/cap-base) 会把它放进 CAP 框架里重新审视。到了 L10，[/projects/micro-seckill](/projects/micro-seckill) 的下单接口靠本讲的幂等键挡住重复请求，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把五段放大成跨服务调用，超时预算交给第 74 讲的 deadline 传播接手。
+本讲埋下的三颗种子会在后面反复发芽。「请求 ID」对应「响应与请求配对」，到 L8 会升级成幂等键与去重表，见 [/distributed/distributed-lock](/distributed/distributed-lock) 的 SETNX 租约与幂等键设计；「超时不等于未执行」正是 [/distributed/distributed-tx](/distributed/distributed-tx) 里消息最终一致要处理的老问题；而「部分失败」在理论上的名字就叫分区，[/distributed/cap-base](/distributed/cap-base) 会把它放进 CAP 框架里重新审视。到了 L10，[/projects/micro-seckill](/projects/micro-seckill) 的下单接口靠本讲的幂等键挡住重复请求，[/projects/micro-ecommerce](/projects/micro-ecommerce) 的订单链路则把五段放大成跨服务调用，超时预算交给第 074 讲的 deadline 传播接手。
 
 <Quiz q="RPC 协议里之所以必须引入请求 ID 字段，最直接对应五段链路里哪一段的什么问题？" :options='["编码段的类型不共享","传输段的队头阻塞","回传段多请求共用连接时响应乱序","解码段的版本错配"]' answer="2" explain="多个并发请求共用一条连接时，响应回来先后不定；ID 把每个响应与发出它的请求一一对应，避免串包。这是回传段独有的需求，本地调用靠栈帧天然配对。" />
 
@@ -490,11 +490,11 @@ func main() {
 <Exercise title="给最小 RPC 补上方法不存在与参数错误的处理" task="基于本讲的 Server，扩展 ServeHTTP：Method 未注册时返回明确错误，Params 无法解码时也返回错误而不是 panic。再用客户端桩分别触发这两种情况并打印错误。" :hints='["查方法表用 fn, ok := s.methods[req.Method]，!ok 时回写 method not found","json.Unmarshal 会返回 error，把它转成结构化错误回传","客户端 Call 已把非空 Error 还原成 error，直接判定即可"]' solution="要点一：解码 Request 失败时不要 panic，构造 Response 并写入 Error 回传。\n要点二：查表用 fn, ok := s.methods[req.Method]，!ok 时回写 method not found。\n要点三：客户端 Call 已把非空 Error 还原成 error，业务侧统一用 errors.Is 或错误码判定，而不是比对字符串。" explain="把所有失败都收敛成结构化 Error，调用方才能用统一方式判定与重试；panic 一旦越过网络边界，对端只会看到连接断开，问题反而更难查。" />
 
 ## 随堂检测
-<Quiz no="72-1" q="在最小 RPC 里，把「调用哪个方法」从 URL 路径改到消息体的 Method 字段，带来的最直接好处是什么？" :options='["所有方法共用一个端点，新增方法不必再写路由与样板代码","报文体积一定比 JSON 更小","不再需要序列化参数","HTTP 状态码会自动变成业务错误码"]' answer="0" explain="Method 让寻址从路径变成数据，服务端用一张注册表即可分发任意方法，这正是桩能收敛样板代码的前提。" />
+<Quiz no="072-1" q="在最小 RPC 里，把「调用哪个方法」从 URL 路径改到消息体的 Method 字段，带来的最直接好处是什么？" :options='["所有方法共用一个端点，新增方法不必再写路由与样板代码","报文体积一定比 JSON 更小","不再需要序列化参数","HTTP 状态码会自动变成业务错误码"]' answer="0" explain="Method 让寻址从路径变成数据，服务端用一张注册表即可分发任意方法，这正是桩能收敛样板代码的前提。" />
 
-<Predict no="72-2" q="代码 4 中服务端固定 sleep 3 秒才返回，客户端用 context.WithTimeout 设了 200 毫秒。运行结果会是什么？" :options='["正常打印 结果: 7, 错误: nil","打印 结果: nil 并带一个 rpc 传输失败 的超时错误","客户端一直阻塞到 3 秒后才返回","服务端 panic 导致进程退出"]' answer="1" output="结果: nil, 错误: rpc 传输失败: context deadline exceeded（由 ctx 与 http.Client 共同触发）" explain="deadline 通过 context 一路传到 http.Client.Do，2 秒客户端超时与 200 毫秒 ctx 中更短的先触发，请求被提前取消。这正是 RPC 必须把超时当一等公民、而非靠调用方自觉的原因。" />
+<Predict no="072-2" q="代码 4 中服务端固定 sleep 3 秒才返回，客户端用 context.WithTimeout 设了 200 毫秒。运行结果会是什么？" :options='["正常打印 结果: 7, 错误: nil","打印 结果: nil 并带一个 rpc 传输失败 的超时错误","客户端一直阻塞到 3 秒后才返回","服务端 panic 导致进程退出"]' answer="1" output="结果: nil, 错误: rpc 传输失败: context deadline exceeded（由 ctx 与 http.Client 共同触发）" explain="deadline 通过 context 一路传到 http.Client.Do，2 秒客户端超时与 200 毫秒 ctx 中更短的先触发，请求被提前取消。这正是 RPC 必须把超时当一等公民、而非靠调用方自觉的原因。" />
 
-<FillBlank no="72-3" tpl="客户端把远程调用伪装成本地函数的那层代码叫 ___ ；服务端负责解码并查表分发的那层叫 ___ 。" :answers='["桩~stub","骨架~skeleton"]' hint="一个在调用方，一个在服务方" explain="两者合起来才把编码、传输、解码、执行、回传五段包成一次函数调用的样子。" :explains='["调用方需要一段与本地函数同签名的替身，把入参编码、发请求、收解回复都包进去，屏蔽网络细节，这一层习惯称桩。","服务端要有对称的一层负责按协议解码、查表定位方法、调用后回写结果，它撑起整个处理框架，故与桩相对称为骨架。"]' />
+<FillBlank no="072-3" tpl="客户端把远程调用伪装成本地函数的那层代码叫 ___ ；服务端负责解码并查表分发的那层叫 ___ 。" :answers='["桩~stub","骨架~skeleton"]' hint="一个在调用方，一个在服务方" explain="两者合起来才把编码、传输、解码、执行、回传五段包成一次函数调用的样子。" :explains='["调用方需要一段与本地函数同签名的替身，把入参编码、发请求、收解回复都包进去，屏蔽网络细节，这一层习惯称桩。","服务端要有对称的一层负责按协议解码、查表定位方法、调用后回写结果，它撑起整个处理框架，故与桩相对称为骨架。"]' />
 
 ## 一页纸速记
 <KnowledgeCard :points='["RPC 不是黑科技：把函数调用拆成编码、传输、解码、执行、回传五段，再用桩包回函数形态","从 HTTP 推导的四步：手工 REST 到定义协议报文与编解码，再到注册表加反射分发，最后客户端桩加超时","Method 字段让所有方法共用端点，ID 让并发请求与响应一一对应","context 的 deadline 必须随调用链传播，错误要结构化回传而不是 panic"]' :pitfalls='["把远程调用当本地调用，忽略超时、重试与重复到达","协议里不带请求 ID，多路复用时响应会串包","用 panic 传递业务错误，越过网络后只剩连接断开"]' summary="一句话记住：RPC = 协议 + 编解码 + 桩与骨架 + 超时与错误契约，其余都是工程增强。" />

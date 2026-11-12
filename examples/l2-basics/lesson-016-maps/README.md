@@ -1,9 +1,9 @@
-# 第 16 讲 · map：哈希、遍历与 Set 技巧
+# 第 016 讲 · map：哈希、遍历与 Set 技巧
 
 - **阶段**：L2 · 语法核心
 - **目标**：会用 map 并知道它的边界
 - **知识点**：创建与 CRUD / comma-ok / 遍历无序 / map[string]struct{} 实现 Set / 并发不安全
-- **教程正文**：[第 16 讲 · map：哈希、遍历与 Set 技巧](/basics/maps)
+- **教程正文**：[第 016 讲 · map：哈希、遍历与 Set 技巧](/basics/maps)
 - **GitHub 目录**：[l2-basics/lesson-016-maps](https://github.com/lfire/go/tree/main/examples/l2-basics/lesson-016-maps)
 
 ## 运行

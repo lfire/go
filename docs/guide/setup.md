@@ -1,11 +1,11 @@
 ---
-title: 第 02 讲 · 装好环境：工具链、工作区与 Modules
+title: 第 002 讲 · 装好环境：工具链、工作区与 Modules
 description: 在本机跑通安装、模块初始化与 IDE 调试，把环境问题一次解决掉
 ---
 
-<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="在本机跑通安装、模块初始化与 IDE 调试" prereq="第 01 讲" />
+<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="在本机跑通安装、模块初始化与 IDE 调试" prereq="第 001 讲" />
 
-# 第 02 讲 · 装好环境：工具链、工作区与 Modules
+# 第 002 讲 · 装好环境：工具链、工作区与 Modules
 
 > 环境问题是学习路上最不划算的中断：它跟语法无关，却会在后面每一讲反复冒出来。很多人卡在"代码明明照抄却跑不起来"，最后发现只是模块没初始化、代理没配、或者照着一篇 2018 年的老教程去设 GOPATH。这一讲把安装、工作区、环境变量和调试器一次配齐，并且专门标注哪些做法已经过时。
 
@@ -19,7 +19,7 @@ description: 在本机跑通安装、模块初始化与 IDE 调试，把环境�
 
 <ConceptDiagram type="hello-flow" title="装好环境后，一次 go run 的完整链路" />
 
-注意图上这条链路：从源码到可执行文件再到进程，中间所有环节都由工具链自动完成。你不需要手工调用编译器，也不需要像解释型语言那样在目标机装运行时——这正是第 01 讲说的"编译型"，现在它变成了你机器上一条可以亲手敲的命令。
+注意图上这条链路：从源码到可执行文件再到进程，中间所有环节都由工具链自动完成。你不需要手工调用编译器，也不需要像解释型语言那样在目标机装运行时——这正是第 001 讲说的"编译型"，现在它变成了你机器上一条可以亲手敲的命令。
 
 <FlowTimeline :steps='[{"title":"安装工具链","desc":"安装包或包管理器，go version 验证","tone":"blue"},{"title":"初始化模块","desc":"任意目录执行 go mod init","tone":"green"},{"title":"配置环境","desc":"go env 查看，按需设置 GOPROXY","tone":"orange"},{"title":"接上调试器","desc":"装好 IDE 插件与 Delve，打断点","tone":"purple"}]' direction="vertical" />
 
@@ -35,7 +35,7 @@ Go Modules 用"每个工程自带一份 `go.mod`（声明要哪些模块、各�
 
 教程以 Go 1.21 及以上为基线，但线上老项目可能锁在 1.19；`golang.org/dl` 让多个工具链版本互不干扰地共存。为什么不用系统包管理器直接覆盖升级？因为 Go 的兼容承诺保证的是"旧代码在新版能编译"，但新版同时会改动 `gofmt` 对文档注释的排版（1.19 起）、`go vet` 的检查项、以及循环变量的语义（1.22 起）。覆盖式升级会让"昨天还通过的构建"今天行为悄悄变化，却找不到是哪行代码引起的。
 
-多版本共存于是和 Modules 锁依赖是同一个思路：让每个工程明确声明自己认哪一版，而不是全机共用一个"最新"。这也解释了为什么 CI 里要固定版本、不要写 `latest`（[第 04 讲](/guide/toolchain) 与 [第 60 讲](/engineering/cicd) 会再提）。
+多版本共存于是和 Modules 锁依赖是同一个思路：让每个工程明确声明自己认哪一版，而不是全机共用一个"最新"。这也解释了为什么 CI 里要固定版本、不要写 `latest`（[第 004 讲](/guide/toolchain) 与 [第 060 讲](/engineering/cicd) 会再提）。
 
 ### 三个立刻能跑的体检命令
 
@@ -75,11 +75,11 @@ go doc runtime.Version
 
 | 本讲埋下的点 | 后面在哪用到 |
 | --- | --- |
-| `go.mod` / `go.sum` | [第 04 讲](/guide/toolchain) 的 tidy、[第 11 讲](/foundation/packages) 的语义化版本与 replace、[第 90 讲](/distributed/docker) 的镜像构建 |
-| GOPROXY / GOPRIVATE / GOSUMDB | [第 60 讲](/engineering/cicd) 的 CI 拉取依赖与供应链校验 |
-| GOOS / GOARCH | [第 03 讲](/guide/hello) 与 [第 04 讲](/guide/toolchain) 的交叉编译 |
-| `runtime.Version` / `NumCPU` | [第 39 讲](/concurrency/goroutine) 的 GOMAXPROCS |
-| Delve 断点 | [第 59 讲](/engineering/profiling) 与阶段四排查并发问题的通用手段 |
+| `go.mod` / `go.sum` | [第 004 讲](/guide/toolchain) 的 tidy、[第 011 讲](/foundation/packages) 的语义化版本与 replace、[第 090 讲](/distributed/docker) 的镜像构建 |
+| GOPROXY / GOPRIVATE / GOSUMDB | [第 060 讲](/engineering/cicd) 的 CI 拉取依赖与供应链校验 |
+| GOOS / GOARCH | [第 003 讲](/guide/hello) 与 [第 004 讲](/guide/toolchain) 的交叉编译 |
+| `runtime.Version` / `NumCPU` | [第 039 讲](/concurrency/goroutine) 的 GOMAXPROCS |
+| Delve 断点 | [第 059 讲](/engineering/profiling) 与阶段四排查并发问题的通用手段 |
 
 ## 2. 语法与规则
 
@@ -245,11 +245,11 @@ go env GOPROXY GOMODCACHE GOROOT
 
 ## 随堂检测
 
-<Quiz no="2-1" q="关于 Go Modules，下面哪一项是正确的？" :options='["代码必须放在 GOPATH/src 目录下才能编译","每个工程的依赖版本写在 go.mod 与 go.sum 里，代码可以放在任意目录","go.sum 是编辑器生成的缓存，应当删掉不提交","模块路径必须是一个能真实访问的网址"]' answer="1" explain="Modules 让代码脱离 GOPATH 限制，go.mod 声明依赖，go.sum 记录校验和保证可复现构建，必须一起提交。" />
+<Quiz no="002-1" q="关于 Go Modules，下面哪一项是正确的？" :options='["代码必须放在 GOPATH/src 目录下才能编译","每个工程的依赖版本写在 go.mod 与 go.sum 里，代码可以放在任意目录","go.sum 是编辑器生成的缓存，应当删掉不提交","模块路径必须是一个能真实访问的网址"]' answer="1" explain="Modules 让代码脱离 GOPATH 限制，go.mod 声明依赖，go.sum 记录校验和保证可复现构建，必须一起提交。" />
 
-<Predict no="2-2" q="环境变量 GOPROXY 从未被设置过时，第二段代码会打印什么？" :options='["打印一串默认代理地址","打印 未显式设置，使用默认值","编译报错","什么也不打印"]' answer="1" explain="os.Getenv 读不到变量时返回空字符串，代码里的 if 分支正是用来处理这种情况；注意这和 go env 显示的默认值是两回事。" />
+<Predict no="002-2" q="环境变量 GOPROXY 从未被设置过时，第二段代码会打印什么？" :options='["打印一串默认代理地址","打印 未显式设置，使用默认值","编译报错","什么也不打印"]' answer="1" explain="os.Getenv 读不到变量时返回空字符串，代码里的 if 分支正是用来处理这种情况；注意这和 go env 显示的默认值是两回事。" />
 
-<FillBlank no="2-3" tpl="用命令 go mod ___ 初始化一个模块\npackage ___ 声明这个包会被编译成可运行程序" :answers='["init","main"]' hint="第一空是 go mod 后面的子命令，第二空和第 01 讲填的是同一个词。" explain="go mod init 在当前目录生成 go.mod；package main 则是可执行程序的固定包名，两个知识点在这里接上了。" :explains='["模块初始化要用 go mod 的子命令，它会生成 go.mod 写入模块路径与 Go 版本，后续依赖都挂在这份文件上。","可执行程序必须用固定的入口包名，编译器据此链接成二进制并约定从同名的入口函数开始执行，换成其它包名只会得到库文件。"]' />
+<FillBlank no="002-3" tpl="用命令 go mod ___ 初始化一个模块\npackage ___ 声明这个包会被编译成可运行程序" :answers='["init","main"]' hint="第一空是 go mod 后面的子命令，第二空和第 001 讲填的是同一个词。" explain="go mod init 在当前目录生成 go.mod；package main 则是可执行程序的固定包名，两个知识点在这里接上了。" :explains='["模块初始化要用 go mod 的子命令，它会生成 go.mod 写入模块路径与 Go 版本，后续依赖都挂在这份文件上。","可执行程序必须用固定的入口包名，编译器据此链接成二进制并约定从同名的入口函数开始执行，换成其它包名只会得到库文件。"]' />
 
 ## 一页纸速记
 

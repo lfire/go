@@ -1,9 +1,9 @@
-# 第 65 讲 · database/sql、连接池与事务
+# 第 065 讲 · database/sql、连接池与事务
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：写出不漏连接、不误用事务的数据层
 - **知识点**：驱动与 DSN / 连接池参数 / Query/Exec 选择 / 事务与隔离级别 / NULL 与扫描
-- **教程正文**：[第 65 讲 · database/sql、连接池与事务](/server/database-sql)
+- **教程正文**：[第 065 讲 · database/sql、连接池与事务](/server/database-sql)
 - **GitHub 目录**：[l6-server/lesson-065-database-sql](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-065-database-sql)
 
 ## 运行

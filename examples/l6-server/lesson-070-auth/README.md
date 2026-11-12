@@ -1,9 +1,9 @@
-# 第 70 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
+# 第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：设计安全且可演进的身份体系
 - **知识点**：认证与授权分离 / Session 与 JWT / 令牌刷新与吊销 / OAuth2 流程 / RBAC 与权限模型 / 常见漏洞
-- **教程正文**：[第 70 讲 · 认证授权：Session / JWT / OAuth2 / RBAC](/server/auth)
+- **教程正文**：[第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC](/server/auth)
 - **GitHub 目录**：[l6-server/lesson-070-auth](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-070-auth)
 
 ## 运行

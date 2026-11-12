@@ -1,11 +1,11 @@
 ---
-title: 第 45 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
+title: 第 045 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
 description: 在共享内存场景选对原语，掌握互斥锁、读写锁、WaitGroup、Once、Cond 的语义、粒度与常见死锁
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="45 分钟" goal="在共享内存场景选对原语" prereq="第 44 讲 · select、超时与多路复用" />
+<StageHeader stage="L4 · 并发编程" level="★★★☆☆" time="45 分钟" goal="在共享内存场景选对原语" prereq="第 044 讲 · select、超时与多路复用" />
 
-# 第 45 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
+# 第 045 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond
 
 > 计数器、缓存表、全局配置这类状态天生被共享修改，用 sync 包原语比 channel 更直接。本讲按「保护数据、协调进度、一次性初始化、条件等待」讲透五个原语，并拆开两个高频事故：WaitGroup 的 Add 放错位置与几类死锁。
 
@@ -294,8 +294,8 @@ go vet ./...                                           # 抓 copylocks 等静态
 <Exercise title="用 WaitGroup 等待一批任务" task="启动 5 个 goroutine 各打印编号，主协程等全部结束再退出，要求正确放置 Add、Done、Wait。" :hints='["Add 在 go 之前调用","函数体内 defer wg.Done()","循环结束再 wg.Wait()"]' solution="var wg sync.WaitGroup\nfor i := 0; i != 5; i++ {\n    wg.Add(1)\n    go func(id int) {\n        defer wg.Done()\n        fmt.Println(id)\n    }(i)\n}\nwg.Wait()" explain="先 Add 登记再启动，defer Done 保证计数，循环外 Wait 阻塞到归零。把 Add 挪进 goroutine 是最常见错误，会让主协程提前退出。" />
 
 ## 随堂检测
-<Quiz no="45-1" q="关于 RWMutex，下面说法正确的是？" :options='["多个写锁可同时持有","读锁互斥，读多时很差","读多写少时多个 RLock 可并发，写锁独占","同一协程可递归加两次 RLock"]' answer="2" explain="RWMutex 允许多读并存、写锁独占；读写都频繁时普通 Mutex 更快，且 Go 的锁都不可重入。" />
-<Predict no="45-2" q="5 个 goroutine 并发调用 sync.Once 保护的 loadConfig，『真正执行昂贵的初始化』打印几次？" :options='["1 次","5 次","0 次","取决于调度"]' answer="0" output="真正执行昂贵的初始化（恰好 1 次）" explain="sync.Once 用互斥与原子标志保证 Do 的函数体全局只执行一次，所有调用者都等首次初始化完成才返回。" />
+<Quiz no="045-1" q="关于 RWMutex，下面说法正确的是？" :options='["多个写锁可同时持有","读锁互斥，读多时很差","读多写少时多个 RLock 可并发，写锁独占","同一协程可递归加两次 RLock"]' answer="2" explain="RWMutex 允许多读并存、写锁独占；读写都频繁时普通 Mutex 更快，且 Go 的锁都不可重入。" />
+<Predict no="045-2" q="5 个 goroutine 并发调用 sync.Once 保护的 loadConfig，『真正执行昂贵的初始化』打印几次？" :options='["1 次","5 次","0 次","取决于调度"]' answer="0" output="真正执行昂贵的初始化（恰好 1 次）" explain="sync.Once 用互斥与原子标志保证 Do 的函数体全局只执行一次，所有调用者都等首次初始化完成才返回。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["Mutex 守临界区，RWMutex 适合读多写少","Add 必须在 go 之前，Done 配 defer，Wait 放循环外","sync.Once 保证初始化只跑一次","Cond 绑定锁，Wait 用 for 复查，Broadcast 唤醒全部","广播退出优先 close(channel)"]' :pitfalls='["Add 放进 goroutine 导致 Wait 提前返回","复制已用 Mutex、忘 Unlock、递归加锁","两把锁相反顺序造成 AB-BA 死锁"]' summary="按需求选原语：保护共享数据用锁，等一组任务用 WaitGroup，一次性初始化用 Once，等条件用 Cond" />

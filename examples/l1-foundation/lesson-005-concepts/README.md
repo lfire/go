@@ -1,9 +1,9 @@
-# 第 05 讲 · 程序、数据、值与类型
+# 第 005 讲 · 程序、数据、值与类型
 
 - **阶段**：L1 · 编程地基
 - **目标**：用零基础也能懂的方式建立类型直觉
 - **知识点**：程序=数据+处理 / 值与变量的区别 / 静态类型意味着什么 / 类型系统的价值
-- **教程正文**：[第 05 讲 · 程序、数据、值与类型](/foundation/concepts)
+- **教程正文**：[第 005 讲 · 程序、数据、值与类型](/foundation/concepts)
 - **GitHub 目录**：[l1-foundation/lesson-005-concepts](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-005-concepts)
 
 ## 运行

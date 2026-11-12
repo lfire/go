@@ -1,11 +1,11 @@
 ---
-title: 第 32 讲 · 内存分配器：mcache / mcentral / mheap
+title: 第 032 讲 · 内存分配器：mcache / mcentral / mheap
 description: 用 size class、span 与三级缓存拆解 mallocgc 的三条路径，并通过 MemStats 与 gctrace 验证分配行为
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="建立 Go 内存分配全景" prereq="第 31 讲 · 字符串底层与零拷贝转换" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="45 分钟" goal="建立 Go 内存分配全景" prereq="第 031 讲 · 字符串底层与零拷贝转换" />
 
-# 第 32 讲 · 内存分配器：mcache / mcentral / mheap
+# 第 032 讲 · 内存分配器：mcache / mcentral / mheap
 
 > 上一讲我们知道了变量何时逃逸到堆。但「堆」不是一整块随意切分的内存：申请 17 字节，运行时究竟占了多少？为什么高频分配小对象几乎没有锁竞争？这一讲把 `runtime.mallocgc` 的三条路径拆开，每个结论都指向具体的数据结构字段或可复现的命令。
 
@@ -343,7 +343,7 @@ sed -n '25,45p' "$(go env GOROOT)/src/runtime/mcentral.go"
 
 逐字段解释：`mheap.go:1489` 的 `CALL runtime.(*mheap).sysAlloc(SB)` 是「当前 arena 装不下」分支的入口，正是上面状态迁移里 `av, asize := h.sysAlloc(ask, &h.arenaHints, true)`；`mheap.go:1508` 的 `sysMap` 对应「新块不连续时把旧 arena 余量标为 released」；`mheap.go:1515` 的 `pageAlloc.grow` 更新页分配器，此后新页才可被切分；`mheap.go:1492` 那一串 print 调用就是 OOM 时 `runtime: out of memory: cannot allocate ...-byte block` 的打印路径。`go tool nm` 里 `runtime.sysMapOS` 的存在把路径一路接到 `mem_darwin.go` 的 `mmap`；`sed` 三段分别给出 `grow` 的 `ask/end/nBase` 算式、三个 mmap 标志组合、以及 `mcentral` 的 `partial [2]spanSet` 注释原文。注意 `go tool nm` 此处只用来确认符号**存在**，地址随构建变化、不作定量依据。
 
-边界：`sweepgen` 加 2、`sg/2%2`、`spanBudget=100`、`pallocChunkPages` 都是 Go 1.23 的实现细节，跨版本先对照 `mcentral.go` / `mheap.go`；两个 `spanSet` 的角色轮换依赖 `sweepgen` 单调加 2，手改模拟里的步长会破坏结论；`sysAllocOS`/`sysReserveOS`/`sysMapOS` 是 darwin 专用实现，Linux 走 `mmap` 但标志与 `MADV_*` 不同；`go tool objdump` 的地址与寄存器名随 GOARCH 变化，只比符号与源码行号；`heapArenaAlloc`、`arenaHints` 是运行时私有字段，`HeapSys` 上台阶还受 scavenger 回落影响，别把一次 `vmmap`/`MemStats` 快照当成稳态。这条链在第 33 讲（`assistWorkPerByte` 与调步）、第 96 讲（清扫与 span 归还）会继续展开。
+边界：`sweepgen` 加 2、`sg/2%2`、`spanBudget=100`、`pallocChunkPages` 都是 Go 1.23 的实现细节，跨版本先对照 `mcentral.go` / `mheap.go`；两个 `spanSet` 的角色轮换依赖 `sweepgen` 单调加 2，手改模拟里的步长会破坏结论；`sysAllocOS`/`sysReserveOS`/`sysMapOS` 是 darwin 专用实现，Linux 走 `mmap` 但标志与 `MADV_*` 不同；`go tool objdump` 的地址与寄存器名随 GOARCH 变化，只比符号与源码行号；`heapArenaAlloc`、`arenaHints` 是运行时私有字段，`HeapSys` 上台阶还受 scavenger 回落影响，别把一次 `vmmap`/`MemStats` 快照当成稳态。这条链在第 033 讲（`assistWorkPerByte` 与调步）、第 096 讲（清扫与 span 归还）会继续展开。
 
 ### 边界、常见误解与前后联系
 
@@ -355,7 +355,7 @@ sed -n '25,45p' "$(go env GOROOT)/src/runtime/mcentral.go"
 
 边界要点：32 位平台字长改变指针宽度与档位表（但 `maxSmallSize` 32 KB、页 8 KB 不变）；`GOMAXPROCS` 决定 P 与 mcache 的数量，P 销毁时由调度器回收其本地缓存；`BySize` 与 metrics 都是累计快照而非瞬时值；大对象以 `spanclass=0` 申请专用 span、不进 mcache；`needzero` 决定新槽位是否清零；Go 1.24 的 Swiss Table 改的是 map 内部结构，其内存仍走同一分配器，但 `class_to_size` 可能随版本微调；观测手段里只有 `go build -gcflags=-S` 与 `-gcflags=-m` 能看到「这次分配是否发生」，MemStats 类只能看总量。
 
-前后联系：第 27 讲（逃逸分析）决定对象是否进堆，本讲决定进堆后落在哪条路径，第 33 讲（GC）决定这些 span 何时被回收；第 96 讲（GC 源码与真实调优案例）会精读 `gcmarkBits`/`allocBits` 的交换与清扫如何按 span 归还 mcentral、以及辅助标记与调步算法，第 95 讲（调度器源码）解释 P 与 mcache 的绑定与回收，第 100 讲（极致性能优化）把「减分配次数 → 降指针密度 → 最后动 GOGC」列为标准闭环。
+前后联系：第 027 讲（逃逸分析）决定对象是否进堆，本讲决定进堆后落在哪条路径，第 033 讲（GC）决定这些 span 何时被回收；第 096 讲（GC 源码与真实调优案例）会精读 `gcmarkBits`/`allocBits` 的交换与清扫如何按 span 归还 mcentral、以及辅助标记与调步算法，第 095 讲（调度器源码）解释 P 与 mcache 的绑定与回收，第 100 讲（极致性能优化）把「减分配次数 → 降指针密度 → 最后动 GOGC」列为标准闭环。
 
 ## 4. 工程实践
 
@@ -422,8 +422,8 @@ GODEBUG=gctrace=1 go run alloc_hist.go
 
 ## 随堂检测
 
-<Quiz no="32-1" q="哪一个结构是每个 P 独占、因此分配小对象无需加锁？" :options='["mheap","mcentral","mcache","arena"]' answer="2" explain="mcache 挂在 P 上，alloc 数组按 size class 直接给出可用 span；只有它需要向 mcentral 补货时才引入锁。" />
-<Predict no="32-2" q="一个 1 字节、不含指针的对象，最可能走哪条路径？" :options='["大对象直达 mheap","按 8 字节 size class 单独分配","合并进 tiny allocator 的 16 字节 block","分配在栈上永不进堆"]' answer="2" output="由 tiny allocator 合并分配，平均占用远小于 8 字节" explain="小于 16 字节且 noscan 的对象由 mcache 的 tiny、tinyoffset 合并到同一个 block，专门消除小对象碎片。" />
+<Quiz no="032-1" q="哪一个结构是每个 P 独占、因此分配小对象无需加锁？" :options='["mheap","mcentral","mcache","arena"]' answer="2" explain="mcache 挂在 P 上，alloc 数组按 size class 直接给出可用 span；只有它需要向 mcentral 补货时才引入锁。" />
+<Predict no="032-2" q="一个 1 字节、不含指针的对象，最可能走哪条路径？" :options='["大对象直达 mheap","按 8 字节 size class 单独分配","合并进 tiny allocator 的 16 字节 block","分配在栈上永不进堆"]' answer="2" output="由 tiny allocator 合并分配，平均占用远小于 8 字节" explain="小于 16 字节且 noscan 的对象由 mcache 的 tiny、tinyoffset 合并到同一个 block，专门消除小对象碎片。" />
 
 ## 一页纸速记
 

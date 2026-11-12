@@ -1,9 +1,9 @@
-# 第 30 讲 · interface 底层：iface / eface 与 nil 陷阱
+# 第 030 讲 · interface 底层：iface / eface 与 nil 陷阱
 
 - **阶段**：L3 · 核心机制与运行时
 - **目标**：解释接口为何有成本以及经典 nil 问题
 - **知识点**：iface 与 eface / itab 与方法表 / 动态派发成本 / typed nil / 断言与反射
-- **教程正文**：[第 30 讲 · interface 底层：iface / eface 与 nil 陷阱](/core/interface-internals)
+- **教程正文**：[第 030 讲 · interface 底层：iface / eface 与 nil 陷阱](/core/interface-internals)
 - **GitHub 目录**：[l3-core/lesson-030-interface-internals](https://github.com/lfire/go/tree/main/examples/l3-core/lesson-030-interface-internals)
 
 ## 运行

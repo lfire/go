@@ -1,11 +1,11 @@
 ---
-title: 第 58 讲 · 设计模式与 Functional Options / wire
+title: 第 058 讲 · 设计模式与 Functional Options / wire
 description: 用 Go 的方式做解耦与装配，掌握 Functional Options、工厂与单例、策略与中间件、依赖注入与 wire，避免 Java 式套壳
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★★☆" time="45 分钟" goal="用 Go 的方式做解耦与装配" prereq="第 57 讲 · 错误码、错误栈与统一响应" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★★☆" time="45 分钟" goal="用 Go 的方式做解耦与装配" prereq="第 057 讲 · 错误码、错误栈与统一响应" />
 
-# 第 58 讲 · 设计模式与 Functional Options / wire
+# 第 058 讲 · 设计模式与 Functional Options / wire
 
 > 很多从别的语言转来的开发者，会把 Factory、Builder、Provider、Adapter 一整套照搬进 Go，结果三个字段的服务建了六层目录。Go 的接口、函数类型与组合已经足够表达绝大多数「模式」，多余的壳只会增加阅读成本。这一讲只讲四类真正用得上的装配手法，并把判断标准定在：**它有没有让依赖更清楚、让改动更局部**。
 
@@ -327,7 +327,7 @@ go build -gcflags=-m main.go
 
 **边界与失效条件**：`-gcflags=-m` 的结论依赖 Go 版本与是否开启优化，内联预算变化会让输出行不同；`sync.Once` 的 `Do` 里若初始化函数 panic，`done` 仍会被置 1、后续调用不再重试，且 `Once` 含 `Mutex` 不可复制；`Once` 保证的是「初始化执行一次且写入可见」，不保证「被初始化对象自身线程安全」。机制能证明「装配时序正确、闭包确有分配」，证明不了「装配出的配置合法」——那仍是上一节 `Validate` 的职责。
 
-**版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测；`sync.Once` 的原子 `done` 实现长期稳定，`sync.OnceFunc` / `OnceValue` / `OnceValues` 自 Go 1.21 起提供；`wire` 以 `v0.6.0` 为准，生成代码的可内联性随编译器版本变化。第 45 讲展开 `sync` 原语，第 27 讲展开逃逸分析。
+**版本前提**：本实验在 Go 1.23.8（darwin/arm64）实测；`sync.Once` 的原子 `done` 实现长期稳定，`sync.OnceFunc` / `OnceValue` / `OnceValues` 自 Go 1.21 起提供；`wire` 以 `v0.6.0` 为准，生成代码的可内联性随编译器版本变化。第 045 讲展开 `sync` 原语，第 027 讲展开逃逸分析。
 
 ### 把 `doSlow` 的完整源码摊开：那段被注释亲自否掉的 CAS 实现
 
@@ -406,7 +406,7 @@ f 实际执行次数 = 1
 
 逐字段：三次 `o.Do(...)` 只有第一次的 panic 被捕获并打印，`calls == 1` 证明后两次**连 `f` 都没进**——`done` 在第一次 panic 的 defer 里已被置 1，后续 `Do` 走 `Load() == 0` 为假的 fast path 直接返回。这补上了上一节「边界与失效条件」里只提到、没验证的那句「`Do` 里若初始化函数 panic，`done` 仍会被置 1、后续调用不再重试」。可证伪结论：`sync.Once` 保证的是「`f` 至多执行一次」，不是「`f` 成功执行一次」；把「初始化可能失败、失败要重试」的需求交给 `Once` 会踩坑，那种场景要自己维护状态机或改用 `sync.OnceValues`（Go 1.21 起，会在 panic 后保留错误）。这也和本讲误解二呼应：别把业务依赖藏进单例，尤其当初始化会失败时。
 
-**版本前提**：以上为 Go 1.23.8 的 `src/sync/once.go` 原文，`Once` 的 `done atomic.Uint32` + `m Mutex` 结构、`doSlow` 的 defer 置位自 Go 1.0 以来稳定；`sync.OnceFunc / OnceValue / OnceValues` 自 Go 1.21 起提供。第 45 讲展开 `sync` 原语，上一节讲 `doSlow` 的原子双检查，这里补的是**完整源码、被否掉的 CAS 实现与 panic 语义**，不是重复结论。
+**版本前提**：以上为 Go 1.23.8 的 `src/sync/once.go` 原文，`Once` 的 `done atomic.Uint32` + `m Mutex` 结构、`doSlow` 的 defer 置位自 Go 1.0 以来稳定；`sync.OnceFunc / OnceValue / OnceValues` 自 Go 1.21 起提供。第 045 讲展开 `sync` 原语，上一节讲 `doSlow` 的原子双检查，这里补的是**完整源码、被否掉的 CAS 实现与 panic 语义**，不是重复结论。
 
 ### wire 的 provider 是一张有向图：拓扑序、缺依赖与成环
 
@@ -495,13 +495,13 @@ func main() {
 
 **边界与失效条件**：上面 `resolve` 是教学用的等价模型，只演示「类型匹配 + 拓扑排序 + 环检测」这三件事，不覆盖 wire 真实实现里的 `wire.Struct` 字段注入、`wire.Value` 常量、`cleanup` 函数、接口绑定消歧与 provider 作用域；它的报错字符串是模型自己定义的，不是 wire 命令的输出；真实 wire 的图节点还带包路径与类型身份，同名不同类型不会误匹配。
 
-**版本前提**：本机 Go 1.23.8（darwin/arm64）实测等价模型；`wire` 以本讲 CI 段钉的 `v0.6.0` 为准（本机未安装该二进制，故不引用其命令输出），`sync.OnceFunc / OnceValue / OnceValues` 自 Go 1.21 起。第 35 讲展开包初始化顺序，本讲上一节讲 `sync.Once` 与 Option 逃逸，这两节补的是「`doSlow` 的完整源码与 panic 语义」和「wire provider 图的解析算法」；第 50 讲的 `cmd` 入口装配、第 60 讲的 `go generate` 生成物入库，都是这张图落地后的工程动作。
+**版本前提**：本机 Go 1.23.8（darwin/arm64）实测等价模型；`wire` 以本讲 CI 段钉的 `v0.6.0` 为准（本机未安装该二进制，故不引用其命令输出），`sync.OnceFunc / OnceValue / OnceValues` 自 Go 1.21 起。第 035 讲展开包初始化顺序，本讲上一节讲 `sync.Once` 与 Option 逃逸，这两节补的是「`doSlow` 的完整源码与 panic 语义」和「wire provider 图的解析算法」；第 050 讲的 `cmd` 入口装配、第 060 讲的 `go generate` 生成物入库，都是这张图落地后的工程动作。
 
 ### 三条最常见的误解
 
 **误解一：设计模式用得越多，架构越专业。** 反例：一个三个字段的 `Server` 建了 Factory、Builder、Provider、Adapter 四层，新增一个字段要动四处，依赖方向反而更模糊，新人找不到真正的实现在哪。Go 的接口隐式实现、函数是一等公民，多数「模式」几行就能表达。判断标准只有两条：有没有让依赖更清楚、有没有让改动更局部；两个都否，就是套壳。
 
-**误解二：单例方便共享，业务依赖也可以放进去。** 反例：把订单服务做成包级单例，单测想换成 fake 时无从下手，只能连真库；多个测试并发改它还会被 `go test -race` 报数据竞争。正确做法：单例只留给无状态、可共享的客户端（连接池、配置读取器），业务依赖一律通过构造函数注入（呼应第 50 讲）。
+**误解二：单例方便共享，业务依赖也可以放进去。** 反例：把订单服务做成包级单例，单测想换成 fake 时无从下手，只能连真库；多个测试并发改它还会被 `go test -race` 报数据竞争。正确做法：单例只留给无状态、可共享的客户端（连接池、配置读取器），业务依赖一律通过构造函数注入（呼应第 050 讲）。
 
 **误解三：函数类型永远比接口轻，策略一律用 func。** 反例：策略需要携带状态（缓存、计数、配置）或有几个相关方法时，硬用函数类型会逼出全局变量或闭包捕获一长串参数，既难测也难扩展。无状态、单一行为时用函数类型最轻；带状态或成组行为时，换成一两个方法的小接口反而更清楚。
 
@@ -523,7 +523,7 @@ Option 也不是完全免费：闭包里若直接改字段，就绕过了构造�
 2. 追装配链，发现 `New` 在两处被调用：一处带超时 Option、另一处只带地址 Option，最终注入到业务的是后者那个实例；
 3. 更隐蔽的是，同一处即便只调一次，两个 Option 的应用顺序也会让后写的覆盖先写的，而当时没有任何校验或日志能指出「最终生效的是哪份」；
 4. 根因是 Functional Options 的三个特性叠加——顺序敏感、可重复应用、绕过校验，再碰上装配没有集中在入口；
-5. 修复：`New` 末尾统一 `Validate` 并打印脱敏后的生效快照，装配收敛到 `cmd` 入口一次完成（呼应第 50 讲），让 Option 只收集配置值、由构造函数集中应用。
+5. 修复：`New` 末尾统一 `Validate` 并打印脱敏后的生效快照，装配收敛到 `cmd` 入口一次完成（呼应第 050 讲），让 Option 只收集配置值、由构造函数集中应用。
 
 替代做法与代价也摆在这里：长参数列表改签名很痛但顺序确定，Builder 多一层类型且仍要自己写校验，全局配置对象最省事却把依赖藏成隐式状态、测试无法替换。Options 换来的是扩展性与可读性，代价就是必须补上「集中装配 + 末尾校验 + 生效快照」这三件套。
 
@@ -543,11 +543,11 @@ Option 也不是完全免费：闭包里若直接改字段，就绕过了构造�
   run: go test -run 'TestNew|TestOptions' ./... -count=1
 ```
 
-版本锁定理由：`wire` 钉在 `v0.6.0`，否则不同版本生成的 `wire_gen.go` 风格不同，`git diff --exit-code` 会在没有任何人改动时误报；`go-version-file: go.mod` 让生成代码与编译用的 Go 版本一致；生成物必须入库，CI 才有「重跑生成再比 diff」的基准——这与第 53 讲 mockgen、第 60 讲 `go generate` 是同一条思路。`TestNew` 一类用例则专门守住「非法 Option 组合必须报错」，把上一节那个实验变成永久回归。
+版本锁定理由：`wire` 钉在 `v0.6.0`，否则不同版本生成的 `wire_gen.go` 风格不同，`git diff --exit-code` 会在没有任何人改动时误报；`go-version-file: go.mod` 让生成代码与编译用的 Go 版本一致；生成物必须入库，CI 才有「重跑生成再比 diff」的基准——这与第 053 讲 mockgen、第 060 讲 `go generate` 是同一条思路。`TestNew` 一类用例则专门守住「非法 Option 组合必须报错」，把上一节那个实验变成永久回归。
 
 ### 与 L10 实战工程结构的呼应
 
-这些装配手法在 L10 按规模逐级登场：`/projects/kv-1-memory` 用几个 Option 装配存储参数就够了，`/projects/micro-ecommerce`、`/projects/micro-seckill` 依赖树深、构造函数一大坨，才轮到 wire 生成装配链；`/projects/cli-codegen` 用函数类型做可插拔的生成策略；第 82 讲自研框架的 Options 装配更是把这些手法收成一套生命周期。再往前，第 50 讲强调「装配只在 `cmd` 入口做一次」，正是本讲那起故障的解药；第 52 讲的表驱动测试与第 53 讲的边界替身，也都依赖「依赖从构造函数进来、不藏在全局单例里」这个前提。
+这些装配手法在 L10 按规模逐级登场：`/projects/kv-1-memory` 用几个 Option 装配存储参数就够了，`/projects/micro-ecommerce`、`/projects/micro-seckill` 依赖树深、构造函数一大坨，才轮到 wire 生成装配链；`/projects/cli-codegen` 用函数类型做可插拔的生成策略；第 082 讲自研框架的 Options 装配更是把这些手法收成一套生命周期。再往前，第 050 讲强调「装配只在 `cmd` 入口做一次」，正是本讲那起故障的解药；第 052 讲的表驱动测试与第 053 讲的边界替身，也都依赖「依赖从构造函数进来、不藏在全局单例里」这个前提。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -561,9 +561,9 @@ Option 也不是完全免费：闭包里若直接改字段，就绕过了构造�
 
 ## 随堂检测
 
-<Quiz no="58-1" q="Functional Options 最主要的收益是什么？" :options='["让程序运行更快","在不改构造函数签名的前提下扩展可选配置","自动实现依赖注入","替代接口做抽象"]' answer="1" explain="新增可选字段只需加一个 WithXxx 函数，New 的签名与所有旧调用点都不用动。" />
+<Quiz no="058-1" q="Functional Options 最主要的收益是什么？" :options='["让程序运行更快","在不改构造函数签名的前提下扩展可选配置","自动实现依赖注入","替代接口做抽象"]' answer="1" explain="新增可选字段只需加一个 WithXxx 函数，New 的签名与所有旧调用点都不用动。" />
 
-<Predict no="58-2" q="连续两次调用 SharedStore()，第二次还会执行 once.Do 里的初始化吗？" :options='["会，每次都重新初始化","不会，sync.Once 只执行一次","会 panic","取决于 GC 是否回收"]' answer="1" output="（不会，返回同一个实例）" explain="sync.Once 内部用原子状态保证 Do 的函数在进程生命周期内仅执行一次，适合无状态共享客户端。" />
+<Predict no="058-2" q="连续两次调用 SharedStore()，第二次还会执行 once.Do 里的初始化吗？" :options='["会，每次都重新初始化","不会，sync.Once 只执行一次","会 panic","取决于 GC 是否回收"]' answer="1" output="（不会，返回同一个实例）" explain="sync.Once 内部用原子状态保证 Do 的函数在进程生命周期内仅执行一次，适合无状态共享客户端。" />
 
 ## 一页纸速记
 

@@ -1,9 +1,9 @@
-# 第 12 讲 · 阶段综合：CLI 单位换算器
+# 第 012 讲 · 阶段综合：CLI 单位换算器
 
 - **阶段**：L1 · 编程地基
 - **目标**：把地基知识串成一个能用的命令行程序
 - **知识点**：flag 解析 / 输入校验与错误返回 / 表格驱动测试 / 分层的小项目结构
-- **教程正文**：[第 12 讲 · 阶段综合：CLI 单位换算器](/foundation/capstone)
+- **教程正文**：[第 012 讲 · 阶段综合：CLI 单位换算器](/foundation/capstone)
 - **GitHub 目录**：[l1-foundation/lesson-012-capstone](https://github.com/lfire/go/tree/main/examples/l1-foundation/lesson-012-capstone)
 
 ## 运行

@@ -1,11 +1,11 @@
 ---
-title: 第 31 讲 · 字符串底层与零拷贝转换
+title: 第 031 讲 · 字符串底层与零拷贝转换
 description: 知道字符串转换的代价与安全边界：string 头部结构、不可变与共享、[]byte 转换拷贝、unsafe 零拷贝及风险
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="35 分钟" goal="知道字符串转换的代价与安全边界" prereq="第 08 讲 · 字符串、rune 与高效拼接" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="35 分钟" goal="知道字符串转换的代价与安全边界" prereq="第 008 讲 · 字符串、rune 与高效拼接" />
 
-# 第 31 讲 · 字符串底层与零拷贝转换
+# 第 031 讲 · 字符串底层与零拷贝转换
 
 > 字符串看起来最朴素，却是本阶段前半的收尾关键：它和切片一样是「小头 + 指向别处」，却多了一条铁律——**不可变**。正因不可变，子串才能安全地共享内存，也正因不可变，`string` 与 `[]byte` 每次互转都得老老实实拷贝一遍。想用 `unsafe` 省掉这次拷贝？先把代价算清楚。
 
@@ -112,7 +112,7 @@ func main() {
 
 这里有一处**版本差异**要记：编译器在能证明安全时会省略临时拷贝，例如 `m[string(b)]` 用字节切片当 map 键、`string(b) == "x"` 只做比较时，可能根本不分配。但这种优化随版本演进、且只在很窄的模式下生效，**不能拿来写业务逻辑**。另外，Go 1.20 才正式加入 `unsafe.String`、`unsafe.StringData`、`unsafe.SliceData`，让零拷贝有了官方（但仍属 unsafe）途径；更早的代码只能用 `reflect.StringHeader` 之类的镜像，风险更高。
 
-<Callout type="warn" title="unsafe 零拷贝的风险边界" text="它换掉的不是性能，是不变性契约：一，改写源 []byte 会穿透到字符串，让把它当 map 键、缓存键或比较基准的代码出错；二，字符串字面量常驻只读内存段，强转成可写切片再赋值可能直接 SIGSEGV；三，必须保证底层对象在指针使用期间存活，不能用 uintptr 跨语句保存（第 37 讲展开）；四，这类行为不是语言保证，跨编译器版本可能变化。" />
+<Callout type="warn" title="unsafe 零拷贝的风险边界" text="它换掉的不是性能，是不变性契约：一，改写源 []byte 会穿透到字符串，让把它当 map 键、缓存键或比较基准的代码出错；二，字符串字面量常驻只读内存段，强转成可写切片再赋值可能直接 SIGSEGV；三，必须保证底层对象在指针使用期间存活，不能用 uintptr 跨语句保存（第 037 讲展开）；四，这类行为不是语言保证，跨编译器版本可能变化。" />
 
 ### 推导链：从 runtime/string.go 推到「必须拷贝」与「优化省略」
 
@@ -265,7 +265,7 @@ sed -n '25,58p' "$(go env GOROOT)/src/runtime/string.go"
 
 量化一层：常量比较从「一次 `slicebytetostring`（可能分配 + `memmove`）加一次 `memequal`」降到 8 条整数/加载指令、0 次运行时调用、0 次分配；代价是这段展开只对编译期已知长度的常量有效，常量越长展开的指令越多，编译器会在超过一定长度时改回 `memequal`。拼接侧则是 `concatstring2..5` 免掉「调用方构造 `[]string` 描述符」，6 元以上多付一个切片头的构造与更大的栈帧。工程含义与第 4 节一致：热路径里把 `string(b) == 常量` 交给编译器是安全的，但别指望它对动态长度的两个字符串也生效；拼接大量字符串时，用 `strings.Builder` 一次写完，比让编译器按元数分派、反复 `copy` 更可控。
 
-边界：`concatstring2..5` 的名称、`tmpBuf`、`rawstringtmp` 都是 Go 1.23 的实现细节，跨版本先 `go version` 再对照 `runtime/string.go`；「6 个操作数」是本机实测分派点，随编译器改写可能变化；`go tool objdump` 的寄存器名与立即数编码随 GOARCH 变化（amd64 下 `25185` 会换成别的取字节方式），只比「有无运行时调用」；`//go:noinline` 是本实验前提，否则 `cat3`、`eqConst` 会被内联进 `main` 而失去独立 TEXT 段；`count == 1` 的省略还受 `stringDataOnStack` 判定约束，操作数在栈上时不会直接返回。这条链在第 36 讲（编译期降级与 SSA）与第 98 讲（walk 阶段）会再展开。
+边界：`concatstring2..5` 的名称、`tmpBuf`、`rawstringtmp` 都是 Go 1.23 的实现细节，跨版本先 `go version` 再对照 `runtime/string.go`；「6 个操作数」是本机实测分派点，随编译器改写可能变化；`go tool objdump` 的寄存器名与立即数编码随 GOARCH 变化（amd64 下 `25185` 会换成别的取字节方式），只比「有无运行时调用」；`//go:noinline` 是本实验前提，否则 `cat3`、`eqConst` 会被内联进 `main` 而失去独立 TEXT 段；`count == 1` 的省略还受 `stringDataOnStack` 判定约束，操作数在栈上时不会直接返回。这条链在第 036 讲（编译期降级与 SSA）与第 098 讲（walk 阶段）会再展开。
 
 ### 边界、常见误解与前后联系
 
@@ -277,7 +277,7 @@ sed -n '25,58p' "$(go env GOROOT)/src/runtime/string.go"
 
 边界要点：32 位下字符串头 8 字节；空字符串 `""` 的 `Data` 常指向运行时 `zerobase`；`unsafe.String(&b[0], len(b))` 在 `b` 为空时会 panic（不能对空切片取 `&b[0]`），应用 `unsafe.SliceData`；字符串字面量常在只读段，强转成可写切片后写入会 SIGSEGV；Go 1.20 才有 `unsafe.String`/`StringData`/`SliceData`，更早的 `reflect.StringHeader` 镜像风险更高；编译器省略拷贝是优化、随版本变化；并发下标准转换安全，`unsafe` 零拷贝因共享可写内存而不安全；`unsafe.Sizeof` 只测头部、`unsafe.StringData` 的返回值不能被长期保存成整数。
 
-前后联系：第 8 讲（字符串与拼接）、第 26 讲（描述符）与第 28 讲（切片头）在这里收束；第 98 讲（编译器源码：SSA、逃逸与内联）会看 `slicebytetostring` 系列在 `cmd/compile/internal/walk` 与 SSA 阶段如何被省略、以及逃逸分析怎样决定用不用 `tmpBuf`，第 100 讲（极致性能优化）把「先 profile 再决定零拷贝」作为典型案例，第 99 讲（Go 内存模型）说明只读共享为何无需同步、而 `unsafe` 结果为何必须自己保证 happens-before。
+前后联系：第 008 讲（字符串与拼接）、第 026 讲（描述符）与第 028 讲（切片头）在这里收束；第 098 讲（编译器源码：SSA、逃逸与内联）会看 `slicebytetostring` 系列在 `cmd/compile/internal/walk` 与 SSA 阶段如何被省略、以及逃逸分析怎样决定用不用 `tmpBuf`，第 100 讲（极致性能优化）把「先 profile 再决定零拷贝」作为典型案例，第 099 讲（Go 内存模型）说明只读共享为何无需同步、而 `unsafe` 结果为何必须自己保证 happens-before。
 
 ## 4. 工程实践
 
@@ -330,11 +330,11 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="31-1" q="执行 b := []byte(s); b[0] = 88 之后，原字符串 s 会怎样？" :options='["首字符被改写","完全不变","编译错误","取决于 s 是否为常量"]' answer="1" explain="[]byte(s) 会分配新数组并拷贝字节，b 是独立副本；改 b 不影响 s，这正是不可变性的保证。" />
+<Quiz no="031-1" q="执行 b := []byte(s); b[0] = 88 之后，原字符串 s 会怎样？" :options='["首字符被改写","完全不变","编译错误","取决于 s 是否为常量"]' answer="1" explain="[]byte(s) 会分配新数组并拷贝字节，b 是独立副本；改 b 不影响 s，这正是不可变性的保证。" />
 
-<Predict no="31-2" q="用 unsafe.String 把 []byte 零拷贝转成 string 后，再修改原 []byte，字符串内容会怎样？" :options='["保持不变","跟着一起变","panic","编译错误"]' answer="1" output="跟着一起变：字符串内容被改写，违反不可变约定" explain="零拷贝让两者共享同一块内存，写 []byte 会穿透到 string。依赖不可变的代码（map 键、缓存、比较）可能因此出错。" />
+<Predict no="031-2" q="用 unsafe.String 把 []byte 零拷贝转成 string 后，再修改原 []byte，字符串内容会怎样？" :options='["保持不变","跟着一起变","panic","编译错误"]' answer="1" output="跟着一起变：字符串内容被改写，违反不可变约定" explain="零拷贝让两者共享同一块内存，写 []byte 会穿透到 string。依赖不可变的代码（map 键、缓存、比较）可能因此出错。" />
 
-<FillBlank no="31-3" tpl="Go 1.20 起，unsafe 包提供了 unsafe.String 与 unsafe.___ 用于零拷贝构造字符串、取字符串数据指针；标准转换 string(b) 则一定会发生一次 ___。" :answers='["StringData","拷贝"]' hint="填一个函数名与一个动作" explain="unsafe.StringData 取字符串数据指针；标准的 []byte 与 string 互转会分配新数组并拷贝字节。" :explains='["该函数返回字符串底层字节的起始指针，与 unsafe.String 配合零拷贝构造；生命周期与不可变性须自行保证。","字符串是不可变值，而字节切片可写，两者语义冲突，所以标准转换必须新分配一段数组并复制全部字节，不能共享同一块底层内存。"]' />
+<FillBlank no="031-3" tpl="Go 1.20 起，unsafe 包提供了 unsafe.String 与 unsafe.___ 用于零拷贝构造字符串、取字符串数据指针；标准转换 string(b) 则一定会发生一次 ___。" :answers='["StringData","拷贝"]' hint="填一个函数名与一个动作" explain="unsafe.StringData 取字符串数据指针；标准的 []byte 与 string 互转会分配新数组并拷贝字节。" :explains='["该函数返回字符串底层字节的起始指针，与 unsafe.String 配合零拷贝构造；生命周期与不可变性须自行保证。","字符串是不可变值，而字节切片可写，两者语义冲突，所以标准转换必须新分配一段数组并复制全部字节，不能共享同一块底层内存。"]' />
 
 ## 一页纸速记
 

@@ -36,7 +36,7 @@ func (s *Server) Start(registrar func(string)) error {
 		return fmt.Errorf("already started")
 	}
 	for _, name := range s.services {
-		registrar(name) // 对接第 75 讲的注册中心
+		registrar(name) // 对接第 075 讲的注册中心
 	}
 	s.started = true
 	return nil

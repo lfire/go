@@ -1,9 +1,9 @@
-# 第 77 讲 · 配置中心与动态配置
+# 第 077 讲 · 配置中心与动态配置
 
 - **阶段**：L7 · RPC 与微服务
 - **目标**：做到配置变更不重启
 - **知识点**：配置模型与命名空间 / 长轮询/监听 / 热更新与回滚 / 灰度与审计 / 客户端容错
-- **教程正文**：[第 77 讲 · 配置中心与动态配置](/microservice/config-center)
+- **教程正文**：[第 077 讲 · 配置中心与动态配置](/microservice/config-center)
 - **GitHub 目录**：[l7-microservice/lesson-077-config-center](https://github.com/lfire/go/tree/main/examples/l7-microservice/lesson-077-config-center)
 
 ## 运行

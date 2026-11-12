@@ -1,11 +1,11 @@
 ---
-title: 第 27 讲 · 逃逸分析与编译器决策
+title: 第 027 讲 · 逃逸分析与编译器决策
 description: 看懂 -gcflags=-m 并写出少分配的代码：栈分配与逃逸、常见场景、指针返回与减少堆分配的实践
 ---
 
-<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="40 分钟" goal="看懂 -gcflags -m 并写出少分配的代码" prereq="第 26 讲 · 值语义深潜：赋值、传参、拷贝成本" />
+<StageHeader stage="L3 · 核心机制" level="★★★★☆" time="40 分钟" goal="看懂 -gcflags -m 并写出少分配的代码" prereq="第 026 讲 · 值语义深潜：赋值、传参、拷贝成本" />
 
-# 第 27 讲 · 逃逸分析与编译器决策
+# 第 027 讲 · 逃逸分析与编译器决策
 
 > 上一讲留了个尾巴：取地址可能让对象「搬到堆」。可变量到底住栈还是住堆，从来不由 `new` 或你写不写 `&` 决定，而是编译器在编译期做的一次推断——**逃逸分析**。读懂它，你才能解释「为什么这段代码每次调用都分配内存」「为什么接口传参比具体类型慢」，并用命令而不是猜测去优化。
 
@@ -151,7 +151,7 @@ func main() {
 
 <Callout type="warn" title="-m 的输出不是稳定契约" text="不同 Go 版本措辞不同：escapes to heap、moved to heap、leaking param 指的是同一类决策；分析精度也随版本提升，同一段代码升级编译器后输出可能变化。另外「逃逸到堆」不必然是坏事，先 profile 再优化。" />
 
-还要澄清一个流传很广的误解：**返回指针不比返回值慢，也不比它快，是两件事**。返回值可能触发大对象拷贝（见第 26 讲），返回指针则可能触发一次堆分配与后续 GC。哪个划算取决于对象大小、调用频率与是否真的需要共享，结论必须来自 `-gcflags=-m` 加基准测试，而不是口诀。
+还要澄清一个流传很广的误解：**返回指针不比返回值慢，也不比它快，是两件事**。返回值可能触发大对象拷贝（见第 026 讲），返回指针则可能触发一次堆分配与后续 GC。哪个划算取决于对象大小、调用频率与是否真的需要共享，结论必须来自 `-gcflags=-m` 加基准测试，而不是口诀。
 
 ### 推导链：逃逸分析在编译器里怎么判定
 
@@ -221,9 +221,9 @@ go build -gcflags=-m=2 -o /dev/null esc_dir.go 2>&1 | grep -E 'leaking param|doe
 
 逐字段解释：`parameter p leaks to ... with derefs=0` 是标签从形参流向返回值存储的一条边，`derefs=0` 说明外泄的是指针本身；紧随的 `leaking param: p` 是同一条边的最终判定措辞；`readOnly` 打出 `p does not escape`，因为 `*p` 只读值、没有任何指向 `heap` 的边，参数与调用方的 `x` 都留在栈上；`main` 里的 `x` 则因被 `leakToResult(&x)` 传参而出现 `flow: {heap} = &x` 与 `moved to heap: x`，说明标签会**沿调用边反向传播到实参**，这是「取地址给函数也可能让调用方上堆」的依据。
 
-**反直觉结论的证伪**：`-m=2` 里出现 `moved to heap: x` 并不等于这次调用一定发生堆分配。日志打印的是「函数被单独编译时的决策」，而内联发生在逃逸分析之前：`newIntA` 被内联进 `callerA` 后，`&x` 只在本帧内被立即解引用，不再有流向 `heap` 的边，分配点被改写回栈，实测 `0 allocs/op`；加上 `//go:noinline` 的 `newIntB` 无法内联，`x` 必须上堆，实测 `1 allocs/op`。所以「函数返回局部指针就一定分配」这句口诀，只在函数保持独立时成立；判断一次调用有没有分配，必须叠加调用点的 `-m=2` 诊断与 `testing.AllocsPerRun`，不能只看某一行 `moved to heap`。这也是第 36 讲内联预算、第 98 讲内联与逃逸顺序共同影响结论的地方：调预算、开 PGO、加 `-race` 改变函数形状，都可能让同一段代码的逃逸结论翻转。
+**反直觉结论的证伪**：`-m=2` 里出现 `moved to heap: x` 并不等于这次调用一定发生堆分配。日志打印的是「函数被单独编译时的决策」，而内联发生在逃逸分析之前：`newIntA` 被内联进 `callerA` 后，`&x` 只在本帧内被立即解引用，不再有流向 `heap` 的边，分配点被改写回栈，实测 `0 allocs/op`；加上 `//go:noinline` 的 `newIntB` 无法内联，`x` 必须上堆，实测 `1 allocs/op`。所以「函数返回局部指针就一定分配」这句口诀，只在函数保持独立时成立；判断一次调用有没有分配，必须叠加调用点的 `-m=2` 诊断与 `testing.AllocsPerRun`，不能只看某一行 `moved to heap`。这也是第 036 讲内联预算、第 098 讲内联与逃逸顺序共同影响结论的地方：调预算、开 PGO、加 `-race` 改变函数形状，都可能让同一段代码的逃逸结论翻转。
 
-边界：`leaking param` / `leaking param content` / `moved to heap` 都是 Go 1.23 的措辞，跨版本不稳定；`derefs` 的确切含义随编译器对间接赋值的建模微调；`AllocsPerRun` 只计堆分配，栈上大对象拷贝的成本要用 `go test -benchmem` 的 `ns/op` 与第 26 讲的 `unsafe.Sizeof` 一起看；结论与 `GOARCH` 无关（这是 IR 层分析），但内联决策随平台与版本变化，从而间接改变分配次数。
+边界：`leaking param` / `leaking param content` / `moved to heap` 都是 Go 1.23 的措辞，跨版本不稳定；`derefs` 的确切含义随编译器对间接赋值的建模微调；`AllocsPerRun` 只计堆分配，栈上大对象拷贝的成本要用 `go test -benchmem` 的 `ns/op` 与第 026 讲的 `unsafe.Sizeof` 一起看；结论与 `GOARCH` 无关（这是 IR 层分析），但内联决策随平台与版本变化，从而间接改变分配次数。
 
 ### `derefs` 的代数：为什么同一条日志会分出 `leaking param` 与 `leaking param content`
 
@@ -296,7 +296,7 @@ sed -n '63,75p' "$(go env GOROOT)/src/cmd/compile/internal/escape/leaks.go"
 
 逐字段解释：第一条 `derefs=1` 的 `flow: {heap} = *p` 与 `from *p (indirection)` 说明 heap 收到的是 `p` **指向的内容**（权重 -1 取址 + 2 解引用之类路径的净和），`reportLeaks` 走 `else` 分支打印 `leaking param content`；第二条 `derefs=0` 的 `flow: {heap} = p` 说明 heap 直接收到 `p` 本身，走 `x == 0` 分支打印 `leaking param`。`sed` 抽出的 `escape.go:471-486` 把这两个字符串的字面来源摆在眼前，`leaks.go:63-75` 给出 `get = int(l[i]) - 1` 与 `add` 取最小值的实现——所以「`derefs` 是最小权重和」不是推测，而是 `add` 里那行比较的直接结果。JSON 诊断的价值在于它把 `-m` 里散落在多行的 `flow` 收进一条 `relatedInformation`，且 `code`/`message` 是字段名而非自由文本，适合脚本核对。
 
-边界：`-json=0,目录` 的输出格式是编译器内部版本 0，跨版本可能变；`escflow` 措辞、`leaks` 的 `[8]uint8` 与 `numEscResults` 都是 Go 1.23 的实现细节；`derefs` 上界被 `set` 截到 `math.MaxUint8`；建模不分字段与下标，因此「只让 `x.f` 逃逸」也可能把整个 `x` 判为外泄，这是精度限制而非 bug；`-gcflags` 默认只作用于当前包，看标准库要加 `all=`。这套代数在第 98 讲（编译器源码）会与 location 图的完整实现合流。
+边界：`-json=0,目录` 的输出格式是编译器内部版本 0，跨版本可能变；`escflow` 措辞、`leaks` 的 `[8]uint8` 与 `numEscResults` 都是 Go 1.23 的实现细节；`derefs` 上界被 `set` 截到 `math.MaxUint8`；建模不分字段与下标，因此「只让 `x.f` 逃逸」也可能把整个 `x` 判为外泄，这是精度限制而非 bug；`-gcflags` 默认只作用于当前包，看标准库要加 `all=`。这套代数在第 098 讲（编译器源码）会与 location 图的完整实现合流。
 
 ### PGO 怎样把逃逸结论翻过来：从内联闸门到不动点重算
 
@@ -393,7 +393,7 @@ grep -h 'cost' off/pgofinal/lib.json on/pgofinal/lib.json
 
 逐字段解释：`cost 97 exceeds budget 80` 是 `-pgo=off` 下 `CanInline` 用基准预算 80 的拒绝措辞；`-d=pgodebug=1` 打印的 `hot-node enabled increased budget=2000 for func=pgofinal.helper` 证明 profile 把 `helper` 标进 `candHotCalleeMap`、`inlineBudget` 换成 `inlineHotMaxBudget`；紧随的 `canInlineFunction | cost: 97` 是同一个函数在放大预算后的通过决策。`hot-callsite-thres-from-CDF` 是 `hotNodesFromCDF` 算出的热边权重阈值，随 profile 波动，不必当作固定值。把这条链与前面的主流程顺序合起来就是完整推导：profile → 热点集合 → `inlineBudget` 由 80 变 2000 → 内联闸门翻转 → `DevirtualizeAndInlinePackage` 改写 IR → `escape.Funcs` 在**新的** location 图上重算最小 `derefs` → 调用点处的 `moved to heap` 可能被改写回栈。需要说清的是：单独编译的 `helper` 自身仍会被打印一次自己的逃逸标签，翻转的是**调用点**的分配结果，判断一次具体调用有没有分配必须叠加调用点的诊断，不能只看函数单独编译时的那一行。
 
-边界：`inlineMaxBudget=80` 与 `inlineHotMaxBudget=2000` 是 Go 1.23 的取值，历史上多次调整；`-d=pgodebug`、`-json=0`、`-pgo` 都是内部/版本相关开关；`default.pgo` 必须与构建的包路径匹配，profile 里没有热点边时不会放大预算；`-cpuprofile` 需要真实采样，空跑或 `-benchtime` 太小会生成无样本 profile；`interleaved.DevirtualizeAndInlinePackage` 是 Go 1.23 重构后的名字，旧版本流程不同；这条链在第 36 讲（内联预算与 PGO）与第 98 讲（编译器源码）会再展开。
+边界：`inlineMaxBudget=80` 与 `inlineHotMaxBudget=2000` 是 Go 1.23 的取值，历史上多次调整；`-d=pgodebug`、`-json=0`、`-pgo` 都是内部/版本相关开关；`default.pgo` 必须与构建的包路径匹配，profile 里没有热点边时不会放大预算；`-cpuprofile` 需要真实采样，空跑或 `-benchtime` 太小会生成无样本 profile；`interleaved.DevirtualizeAndInlinePackage` 是 Go 1.23 重构后的名字，旧版本流程不同；这条链在第 036 讲（内联预算与 PGO）与第 098 讲（编译器源码）会再展开。
 
 ### 边界、常见误解与前后联系
 
@@ -405,7 +405,7 @@ grep -h 'cost' off/pgofinal/lib.json on/pgofinal/lib.json
 
 边界要点：跨包调用、接口方法、反射、`unsafe` 与 cgo 会让编译器丧失上下文，判定偏保守；`escapes to heap`、`moved to heap`、`leaking param` 是同一类决策的不同措辞，**不是跨版本稳定的契约**，分析精度还随 Go 版本提升（同一段代码升级后可能少逃逸）；这是编译期 IR 分析，本身与 `GOARCH` 无关，但内联、PGO 与 `-race` 会改变函数形状从而间接改变结论；观测局限在于 `-m` 只看决策、不看运行时代价，必须叠加 `testing.AllocsPerRun`、`go test -benchmem` 与 `GODEBUG=gctrace=1` 才能闭环。
 
-前后联系：第 26 讲「取地址可能搬到堆」在这里得到机制解释，第 32 讲（分配器）接着讲堆分配具体落在哪个 size class；第 98 讲（编译器源码：SSA、逃逸与内联）会精读 `cmd/compile/internal/escape` 的数据流实现与内联如何改写逃逸结论，第 96 讲（GC 源码与真实调优案例）讲这些堆对象如何成为标记阶段的根与负担，第 100 讲（极致性能优化）把「先减分配次数」列为优化闭环第一环。
+前后联系：第 026 讲「取地址可能搬到堆」在这里得到机制解释，第 032 讲（分配器）接着讲堆分配具体落在哪个 size class；第 098 讲（编译器源码：SSA、逃逸与内联）会精读 `cmd/compile/internal/escape` 的数据流实现与内联如何改写逃逸结论，第 096 讲（GC 源码与真实调优案例）讲这些堆对象如何成为标记阶段的根与负担，第 100 讲（极致性能优化）把「先减分配次数」列为优化闭环第一环。
 
 ## 4. 工程实践
 
@@ -461,11 +461,11 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="27-1" q="func f() *int { x := 1; return &x } 里的 x 会分配到哪里？" :options='["一定在栈上","一定在堆上","由逃逸分析决定，这里会搬到堆","取决于调用方怎么用"]' answer="2" explain="x 的地址被返回，函数返回后栈帧失效，编译器必须让 x 逃逸到堆；用 go build -gcflags=-m 可看到 moved to heap。" />
+<Quiz no="027-1" q="func f() *int { x := 1; return &x } 里的 x 会分配到哪里？" :options='["一定在栈上","一定在堆上","由逃逸分析决定，这里会搬到堆","取决于调用方怎么用"]' answer="2" explain="x 的地址被返回，函数返回后栈帧失效，编译器必须让 x 逃逸到堆；用 go build -gcflags=-m 可看到 moved to heap。" />
 
-<Predict no="27-2" q="给局部变量取地址并传给函数，一定会导致堆分配吗？" :options='["一定会","不一定，编译器看指针是否逃出函数","只有用 new 才会","只有全局变量才会"]' answer="1" output="不一定：若指针没有离开当前函数，仍可留在栈上" explain="逃逸分析看的是「指针生命周期是否超出函数」，不是「有没有取地址」。仅在函数内使用的指针会留在栈上。" />
+<Predict no="027-2" q="给局部变量取地址并传给函数，一定会导致堆分配吗？" :options='["一定会","不一定，编译器看指针是否逃出函数","只有用 new 才会","只有全局变量才会"]' answer="1" output="不一定：若指针没有离开当前函数，仍可留在栈上" explain="逃逸分析看的是「指针生命周期是否超出函数」，不是「有没有取地址」。仅在函数内使用的指针会留在栈上。" />
 
-<FillBlank no="27-3" tpl="查看逃逸分析的常用命令是 go build -gcflags=___ main.go；复用临时对象可以用 ___ 包里的 Pool。" :answers='["-m","sync"]' hint="填编译选项与标准库包名" explain="-m 打印优化与逃逸决策；sync.Pool 用于复用临时对象，它与 GC 的关系在阶段四展开。" :explains='["-m 让编译器把逃逸与内联决策打到标准错误，经 -gcflags 传入后可见 moved to heap 等判定，是观测栈堆分配的入口。","临时对象池由标准库 sync 包提供，按处理器分桶减少竞争，复用短命对象以降低分配与 GC 压力，但其中对象可能被 GC 清空。"]' />
+<FillBlank no="027-3" tpl="查看逃逸分析的常用命令是 go build -gcflags=___ main.go；复用临时对象可以用 ___ 包里的 Pool。" :answers='["-m","sync"]' hint="填编译选项与标准库包名" explain="-m 打印优化与逃逸决策；sync.Pool 用于复用临时对象，它与 GC 的关系在阶段四展开。" :explains='["-m 让编译器把逃逸与内联决策打到标准错误，经 -gcflags 传入后可见 moved to heap 等判定，是观测栈堆分配的入口。","临时对象池由标准库 sync 包提供，按处理器分桶减少竞争，复用短命对象以降低分配与 GC 压力，但其中对象可能被 GC 清空。"]' />
 
 ## 一页纸速记
 

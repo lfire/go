@@ -1,9 +1,9 @@
-# 第 64 讲 · WebSocket / SSE 与实时推送
+# 第 064 讲 · WebSocket / SSE 与实时推送
 
 - **阶段**：L6 · 服务端与数据
 - **目标**：实现长连接场景与连接治理
 - **知识点**：协议握手 / gorilla/websocket / 心跳与断线重连 / SSE 取舍 / 广播与连接管理
-- **教程正文**：[第 64 讲 · WebSocket / SSE 与实时推送](/server/websocket)
+- **教程正文**：[第 064 讲 · WebSocket / SSE 与实时推送](/server/websocket)
 - **GitHub 目录**：[l6-server/lesson-064-websocket](https://github.com/lfire/go/tree/main/examples/l6-server/lesson-064-websocket)
 
 ## 运行

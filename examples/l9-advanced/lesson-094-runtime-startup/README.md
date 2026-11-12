@@ -1,9 +1,9 @@
-# 第 94 讲 · runtime 源码：进程启动与初始化
+# 第 094 讲 · runtime 源码：进程启动与初始化
 
 - **阶段**：L9 · 资深进阶与源码
 - **目标**：读懂 rt0_go 到 main 的路径
 - **知识点**：入口汇编 / 参数与栈初始化 / schedinit / 创建 main goroutine / mstart 与调度启动
-- **教程正文**：[第 94 讲 · runtime 源码：进程启动与初始化](/advanced/runtime-startup)
+- **教程正文**：[第 094 讲 · runtime 源码：进程启动与初始化](/advanced/runtime-startup)
 - **GitHub 目录**：[l9-advanced/lesson-094-runtime-startup](https://github.com/lfire/go/tree/main/examples/l9-advanced/lesson-094-runtime-startup)
 
 ## 运行

@@ -1,9 +1,9 @@
-# 第 40 讲 · GMP 调度模型全景
+# 第 040 讲 · GMP 调度模型全景
 
 - **阶段**：L4 · 并发编程
 - **目标**：画出 G、M、P 的关系图
 - **知识点**：G/M/P 各自职责 / 全局与本地队列 / P 的数量 / 调度上下文 / 一张图记住模型
-- **教程正文**：[第 40 讲 · GMP 调度模型全景](/concurrency/gmp)
+- **教程正文**：[第 040 讲 · GMP 调度模型全景](/concurrency/gmp)
 - **GitHub 目录**：[l4-concurrency/lesson-040-gmp](https://github.com/lfire/go/tree/main/examples/l4-concurrency/lesson-040-gmp)
 
 ## 运行

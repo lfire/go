@@ -1,9 +1,9 @@
-# 第 01 讲 · 开篇：Go 是什么，为什么值得学
+# 第 001 讲 · 开篇：Go 是什么，为什么值得学
 
 - **阶段**：L0 · 导学与学习路线
 - **目标**：建立 Go 的语言观与学习动机
 - **知识点**：Go 的诞生与设计哲学 / 静态类型与编译型 / 适用边界与典型雇主场景 / 与其他语言的取舍
-- **教程正文**：[第 01 讲 · 开篇：Go 是什么，为什么值得学](/guide/opening)
+- **教程正文**：[第 001 讲 · 开篇：Go 是什么，为什么值得学](/guide/opening)
 - **GitHub 目录**：[l0-guide/lesson-001-opening](https://github.com/lfire/go/tree/main/examples/l0-guide/lesson-001-opening)
 
 ## 运行

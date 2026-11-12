@@ -36,7 +36,7 @@ const loop = [
       <h1>把 <em>Go</em> 学成<br />你真正会用的语言</h1>
       <p>不假设你懂系统编程，也不停在「会写语法」。11 个递进阶段、118 讲，从第一行 <code>fmt.Println</code> 一路走到运行时源码、高并发架构与生产级工程 —— 每个难点都拆成能看懂、能动手、能自测的一小步。</p>
       <div class="hp-actions">
-        <a class="hp-btn main" :href="withBase('/guide/opening')">🚀 从第 01 讲开始</a>
+        <a class="hp-btn main" :href="withBase('/guide/opening')">🚀 从第 001 讲开始</a>
         <a class="hp-btn alt" :href="withBase('/guide/curriculum')">📖 118 讲完整目录</a>
         <a class="hp-btn alt" :href="withBase('/projects/')">🏗️ 直接看工程实战</a>
       </div>
@@ -92,7 +92,7 @@ const loop = [
 
     <section class="hp-cta">
       <h2>准备好写第一行 Go 了吗？</h2>
-      <p style="color:var(--go-muted);font-size:14px;line-height:1.8;margin-bottom:1.3rem">先花十分钟装好环境，第 03 讲就会带着你把每一行代码看明白。</p>
+      <p style="color:var(--go-muted);font-size:14px;line-height:1.8;margin-bottom:1.3rem">先花十分钟装好环境，第 003 讲就会带着你把每一行代码看明白。</p>
       <a class="hp-btn main" style="background:var(--go-brand)" :href="withBase('/guide/setup')">从装环境开始 →</a>
     </section>
 

@@ -1,11 +1,11 @@
 ---
-title: 第 19 讲 · 接口：隐式实现与组合
+title: 第 019 讲 · 接口：隐式实现与组合
 description: 建立 Go 独有的抽象方式：隐式实现、小接口、组合、any 与类型断言
 ---
 
-<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="建立 Go 独有的抽象方式" prereq="第 18 讲 · 方法与接收者：值还是指针" />
+<StageHeader stage="L2 · 语法核心" level="★★★☆☆" time="40 分钟" goal="建立 Go 独有的抽象方式" prereq="第 018 讲 · 方法与接收者：值还是指针" />
 
-# 第 19 讲 · 接口：隐式实现与组合
+# 第 019 讲 · 接口：隐式实现与组合
 
 > 有了结构体和方法，代码仍然容易写死：`save` 只认 `FileLogger`，换一种日志实现就得改函数签名。接口把「需要哪些行为」和「谁来实现」分开，让调用方只依赖一组方法签名。Go 的接口尤其特别：不需要 `implements`，类型只要有对应方法就自动满足。学完本讲，你能设计小接口、组合它们、安全地做类型断言，并躲开最经典的 `nil` 陷阱。
 
@@ -406,16 +406,16 @@ func main() {
 | 版本 | 变化 | 适用边界 |
 | --- | --- | --- |
 | Go 1.18 | `any` 别名与泛型同时引入 | `go` 指令低于 1.18 编译失败 |
-| Go 1.18 | 接口可含类型集（联合约束），但只能作约束、不能当变量类型 | 见第 22 讲 |
+| Go 1.18 | 接口可含类型集（联合约束），但只能作约束、不能当变量类型 | 见第 022 讲 |
 | Go 1.20 | `comparable` 放宽，普通接口值可满足 comparable | 影响以接口为键的泛型 |
-| Go 1.22 | 循环变量每轮新建，遍历 `[]any` 时闭包捕获更安全 | 与第 15 讲衔接 |
+| Go 1.22 | 循环变量每轮新建，遍历 `[]any` 时闭包捕获更安全 | 与第 015 讲衔接 |
 | 全版本 | 接口两个字、typed nil、隐式实现 | 结论与版本无关 |
 
 适用边界还有一条：接口变量只与 `nil` 可比，两个接口值之间若动态类型不可比较（如装了切片），用 `==` 会运行时 panic；判等前先确认动态类型可比较。
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 30 讲](/core/interface-internals) 会展开 `iface`/`eface`、`itab` 与动态派发成本，把这里「两个字」的模型落到结构；[第 26 讲](/core/value-semantics) 讲接口赋值的拷贝代价；[第 31 讲](/core/string-internals) 与反射一起解释空接口存值的布局。工程上，[第 53 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Storage` 是本讲「接受接口、返回结构体」的样板，[第 118 讲](/projects/ai-gateway) 的多供应商适配则把行为差异全收进接口。
+[第 030 讲](/core/interface-internals) 会展开 `iface`/`eface`、`itab` 与动态派发成本，把这里「两个字」的模型落到结构；[第 026 讲](/core/value-semantics) 讲接口赋值的拷贝代价；[第 031 讲](/core/string-internals) 与反射一起解释空接口存值的布局。工程上，[第 053 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Storage` 是本讲「接受接口、返回结构体」的样板，[第 118 讲](/projects/ai-gateway) 的多供应商适配则把行为差异全收进接口。
 
 ## 动手练一练
 
@@ -423,9 +423,9 @@ func main() {
 
 ## 随堂检测
 
-<Quiz no="19-1" q="关于 Go 接口，正确的是？" :options='["必须显式声明实现","接口由实现方定义","小接口更易复用","any 是 Go 1.0 引入的"]' answer="2" explain="隐式实现无需声明；接口由使用方定义；any 是 Go 1.18 引入的空接口别名。" />
+<Quiz no="019-1" q="关于 Go 接口，正确的是？" :options='["必须显式声明实现","接口由实现方定义","小接口更易复用","any 是 Go 1.0 引入的"]' answer="2" explain="隐式实现无需声明；接口由使用方定义；any 是 Go 1.18 引入的空接口别名。" />
 
-<Predict no="19-2" q="把 nil 的 *T 指针赋给 any 变量 i，判断 i == nil 的结果是？" :options='["true","false","编译失败","运行时 panic"]' answer="1" output="false" explain="接口含类型与数据两个字；装入 nil 的 *T 后类型字非空，整体不为 nil。" />
+<Predict no="019-2" q="把 nil 的 *T 指针赋给 any 变量 i，判断 i == nil 的结果是？" :options='["true","false","编译失败","运行时 panic"]' answer="1" output="false" explain="接口含类型与数据两个字；装入 nil 的 *T 后类型字非空，整体不为 nil。" />
 
 ## 一页纸速记
 

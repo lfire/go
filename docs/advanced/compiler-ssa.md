@@ -1,13 +1,13 @@
 ---
-title: 第 98 讲 · 编译器源码：SSA、逃逸与内联
+title: 第 098 讲 · 编译器源码：SSA、逃逸与内联
 description: 走一遍前端 IR、SSA 优化 pass、内联预算与逃逸分析实现，并用工具亲眼验证优化器做了什么
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="理解优化器替你做了什么" prereq="第 36 讲 · 编译、链接、SSA 与内联 / 第 27 讲 · 逃逸分析" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="理解优化器替你做了什么" prereq="第 036 讲 · 编译、链接、SSA 与内联 / 第 027 讲 · 逃逸分析" />
 
-# 第 98 讲 · 编译器源码：SSA、逃逸与内联
+# 第 098 讲 · 编译器源码：SSA、逃逸与内联
 
-> 第 27 讲和第 36 讲分别讲过逃逸现象与编译流程，但「编译器到底凭什么决定一个变量上不上堆」「为什么某个函数没被内联」这类问题，答案在 cmd/compile 的源码里。本讲把前端 IR、SSA 构造、优化 pass、内联预算与逃逸分析串成一条链，并给出三个可复现的观察手段：`-gcflags=-m`、`GOSSAFUNC` 与 `go tool compile -S`。源码位置以 Go 1.23.8 为准。
+> 第 027 讲和第 036 讲分别讲过逃逸现象与编译流程，但「编译器到底凭什么决定一个变量上不上堆」「为什么某个函数没被内联」这类问题，答案在 cmd/compile 的源码里。本讲把前端 IR、SSA 构造、优化 pass、内联预算与逃逸分析串成一条链，并给出三个可复现的观察手段：`-gcflags=-m`、`GOSSAFUNC` 与 `go tool compile -S`。源码位置以 Go 1.23.8 为准。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-98" title="本讲目标" :items='["说出从 AST 到 SSA 再到机器码的编译链", "用 -gcflags=-m 验证逃逸与内联决策", "用 GOSSAFUNC 与 compile -S 看懂一条优化 pass"]' />
@@ -217,8 +217,8 @@ go tool compile -S main.go
 <Exercise title="找出逃逸点" task="用 -gcflags=-m 跑观察一，找出 escapes to heap 那一行；再把它改成返回值版本，确认该行消失。" :hints='["-m=2 会打印更详细的决策链", "关注 moved to heap 与 escapes to heap 两种措辞"]' solution="func doesEscape() *int {\n    y := 42\n    return &y\n}\nfunc noEscape() int {\n    y := 42\n    return y\n}" explain="返回局部指针时编译器判定 y 被外部引用，必须堆分配；改成返回值后变量留在栈上。完整可编译版本见第一段代码。" />
 
 ## 随堂检测
-<Quiz no="98-1" q="Go 1.23 默认的内联代价预算 inlineMaxBudget 是多少？" :options='["40","80","200","2000"]' answer="1" explain="inline/inl.go 定义 inlineMaxBudget = 80；2000 是 PGO 热点的 inlineHotMaxBudget，别把两者混淆。" />
-<Predict no="98-2" q="给函数加上 //go:noinline 之后，-gcflags=-m 会怎么描述它？" :options='["仍显示 can inline", "显示 cannot inline 并注明 go:noinline", "完全不提这个函数"]' answer="1" output="cannot inline noInline: marked go:noinline" explain="编译器遵守指令，跳过内联并在 -m 输出里给出原因；这常用于写基准测试时保留真实调用开销。" />
+<Quiz no="098-1" q="Go 1.23 默认的内联代价预算 inlineMaxBudget 是多少？" :options='["40","80","200","2000"]' answer="1" explain="inline/inl.go 定义 inlineMaxBudget = 80；2000 是 PGO 热点的 inlineHotMaxBudget，别把两者混淆。" />
+<Predict no="098-2" q="给函数加上 //go:noinline 之后，-gcflags=-m 会怎么描述它？" :options='["仍显示 can inline", "显示 cannot inline 并注明 go:noinline", "完全不提这个函数"]' answer="1" output="cannot inline noInline: marked go:noinline" explain="编译器遵守指令，跳过内联并在 -m 输出里给出原因；这常用于写基准测试时保留真实调用开销。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["编译链：AST、IR、SSA、优化 pass、机器码", "内联预算默认 80，PGO 热点可到 2000", "-m 看逃逸与内联，GOSSAFUNC 看 pass"]' :pitfalls='["把内联预算当行数", "凭感觉判断逃逸而不跑 -gcflags=-m", "在 CI 里漏掉编译期回归检查"]' summary="优化器做的决定都能被工具复现，先验证再改动，别和编译器对赌。" />

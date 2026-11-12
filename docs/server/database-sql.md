@@ -1,11 +1,11 @@
 ---
-title: 第 65 讲 · database/sql、连接池与事务
+title: 第 065 讲 · database/sql、连接池与事务
 description: 讲清驱动与 DSN、连接池四个关键参数、Query 与 Exec 的选择、事务与隔离级别、NULL 扫描，写出不漏连接不误用事务的数据层
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="写出不漏连接、不误用事务的数据层" prereq="第 64 讲 · WebSocket / SSE" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="写出不漏连接、不误用事务的数据层" prereq="第 064 讲 · WebSocket / SSE" />
 
-# 第 65 讲 · database/sql、连接池与事务
+# 第 065 讲 · database/sql、连接池与事务
 
 > 数据层的事故往往不是「SQL 写错了」，而是「连接用错了」：`sql.Open` 放在 Handler 里、查完不关 `rows`、事务里混用 `db` 与 `tx`、把可空列扫进普通 `string` 然后线上连夜报 `converting NULL to string is unsupported`。这一讲把 `database/sql` 的心智模型摆正：`sql.DB` 从来不是一条连接，而是一个并发安全的连接池。看懂这一点，四个调优参数和一堆「连接耗尽」的线上问题就都解释得通了。
 
@@ -439,7 +439,7 @@ go test -race -run TestNullScanAndQueryContract -v ./...
 - 占位符、NULL 与隔离级别在 /server/orm 会被 ORM 重新包装一遍，但底层仍是同一套 `database/sql` 契约；/distributed/distributed-tx 处理跨库事务时，本讲的本地事务与 ACID 是理解 2PC / TCC / Saga 的起点。
 - L10 的 /projects/net-shortlink 读路径几乎全是单行主键查询，正是「短事务加连接池有上限」的典型受益者；/projects/data-sql-tool 要把 `EXPLAIN` 的执行计划做成通用查询工具，/projects/micro-ecommerce 的订单与库存则把事务边界当成正确性底线。
 
-把数据层接进服务时，有三个边界要守。第一，**context 一定从请求透传到查询**：用 `QueryRowContext(r.Context(), ...)`，客户端断开或超时，数据库查询才会随之取消，否则慢 SQL 会继续占着连接。第二，**所有 SQL 都参数化**，表名列名若必须动态拼接就用白名单，绝不把用户输入插进语句。第三，**把 `db` 收进结构体而不是散落全局**，但注意别把 `context.Context` 存进结构体字段长期持有——context 应当作为函数第一个参数显式传递（这一点在第 47 讲与第 61 讲都强调过）。
+把数据层接进服务时，有三个边界要守。第一，**context 一定从请求透传到查询**：用 `QueryRowContext(r.Context(), ...)`，客户端断开或超时，数据库查询才会随之取消，否则慢 SQL 会继续占着连接。第二，**所有 SQL 都参数化**，表名列名若必须动态拼接就用白名单，绝不把用户输入插进语句。第三，**把 `db` 收进结构体而不是散落全局**，但注意别把 `context.Context` 存进结构体字段长期持有——context 应当作为函数第一个参数显式传递（这一点在第 047 讲与第 061 讲都强调过）。
 
 <Compare title="sql.DB 该活多久" :panels='[{"label":"反模式 · 每次请求都 Open","code":"func handler(w, r) {\ndb, _ := sql.Open(driver, dsn)\ndefer db.Close()\ndb.Query(query)\n}","note":"每次新建一整套连接池，握手开销翻倍，旧池连接来不及释放，很快打满数据库连接数"},{"label":"正确 · 进程级单例","code":"var db *sql.DB\nfunc init() {\ndb, _ = sql.Open(driver, dsn)\ndb.SetMaxOpenConns(25)\n}","note":"sql.DB 并发安全且自建池，全进程复用一份，由池统一负责复用、限流与生命周期"}]' />
 
@@ -459,9 +459,9 @@ go test -race -run TestNullScanAndQueryContract -v ./...
 
 ## 随堂检测
 
-<Quiz no="65-1" q="关于 sql.Open，下列说法正确的是？" :options='["它会立即建立一条数据库连接","它只构造连接池，第一次 Ping/Query 时才建连","每个请求都应调用一次以保证隔离","返回的是单条连接，不是线程安全的"]' answer="1" explain="sql.Open 只解析 DSN 并注册驱动、返回并发安全的 *sql.DB 句柄；真正建连发生在首次需要连接时，因此启动探针要显式 PingContext。" />
+<Quiz no="065-1" q="关于 sql.Open，下列说法正确的是？" :options='["它会立即建立一条数据库连接","它只构造连接池，第一次 Ping/Query 时才建连","每个请求都应调用一次以保证隔离","返回的是单条连接，不是线程安全的"]' answer="1" explain="sql.Open 只解析 DSN 并注册驱动、返回并发安全的 *sql.DB 句柄；真正建连发生在首次需要连接时，因此启动探针要显式 PingContext。" />
 
-<Predict no="65-2" q="Handler 里查询后忘记 rows.Close()，且 MaxOpenConns=25，持续请求一段时间会怎样？" :options='["报错 sql: no rows","连接逐渐不归还，最终所有请求阻塞在等待队列","自动被 GC 回收，没有影响","数据库主动断开空闲连接"]' answer="1" output="InUse 逐渐逼近 25，WaitCount 持续上涨，后续请求延迟飙升直至超时" explain="连接只在 rows 关闭或耗尽后归还池中，漏关会慢慢吃光池容量；db.Stats 的 WaitCount 是排查这类问题的第一现场。" />
+<Predict no="065-2" q="Handler 里查询后忘记 rows.Close()，且 MaxOpenConns=25，持续请求一段时间会怎样？" :options='["报错 sql: no rows","连接逐渐不归还，最终所有请求阻塞在等待队列","自动被 GC 回收，没有影响","数据库主动断开空闲连接"]' answer="1" output="InUse 逐渐逼近 25，WaitCount 持续上涨，后续请求延迟飙升直至超时" explain="连接只在 rows 关闭或耗尽后归还池中，漏关会慢慢吃光池容量；db.Stats 的 WaitCount 是排查这类问题的第一现场。" />
 
 ## 一页纸速记
 
