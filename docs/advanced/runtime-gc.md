@@ -158,6 +158,46 @@ func main() {
 
 <Callout type="warn" title="MemoryLimit 不是硬上限" text="它是软目标：堆逼近上限时 GC 更卖力，但存活对象真超限时仍会增长，甚至因 GC 过频拖垮吞吐。应与 GOGC 一起调，别当 OOM 保险丝。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+一次 GC 的源码主线在 `src/runtime/mgc.go`。`func gcStart(trigger gcTrigger)` 是唯一入口，参数 `gcTrigger` 是个三字段结构：`kind gcTriggerKind` 取值 `gcTriggerHeap`、`gcTriggerTime`、`gcTriggerCycle`，分别对应堆增长到目标、sysmon 周期性强制与显式调用；`now` 与 `n` 供时间与轮次判断。函数先 `stopTheWorld` 做第一次 STW，切到 `_GCmark` 阶段、开启混合写屏障，再按 `gcControllerState` 算出的数量唤醒 `gcBgMarkWorker`。并发标记期间，全局 `work` 结构记录进度：`work.heap0`（标记开始时堆）、`work.heap1`（标记结束时堆）、`work.bytesMarked`（已标记字节）、`work.markrootDone`（根扫描是否完成）、`work.nproc` 与 `work.nwait`（参与与等待的 worker 数）。业务 goroutine 分配过快时，`newobject` 会走 `gcAssistAlloc`，按欠下的扫描量先帮忙标记再继续分配，这就是「分配反压」的源码落点。最后一个 worker 发现标记队列清空，调用 `gcMarkDone` 进入 `gcMarkTermination` 做第二次 STW，关闭写屏障、算出下一轮 `heapGoal`，再由 `gcSweep` 并发回收白色 span。
+
+调步与屏障分在另两个文件。`src/runtime/mgcpacer.go` 的 `gcControllerState` 用 `scanWork`、`bgScanCredit`、`assistTime`、`dedicatedMarkWorkersNeeded` 等字段记录扫描负债与 worker 预算，`findRunnableGCWorker` 决定本轮该唤醒多少 dedicated、fractional 与 idle worker，`gcController.heapGoal()` 给出目标堆。`src/runtime/mbarrier.go` 的混合写屏障在并发标记期间同时把旧值与新值标灰，保证业务改指针不漏标。一个可复现的观察实验：对第 2 节的分配程序跑 `GODEBUG=gctrace=1`，记录 `goal` 与 `MemStats.NextGC` 是否只差一个单位换算；再用 `GOGC=off` 跑同样负载，确认 `gc N` 不再增长、堆持续上涨，从而坐实「触发条件由 gcTrigger 控制」这一点。
+
+适用边界要写清：函数名与字段以 Go 1.21~1.23 为准，gctrace 的输出格式与分段数量每版都可能微调，判断时以本机实测为准；`goal` 是目标堆而非硬上限，存活对象真的超过它时堆仍会增长；`MemoryLimit` 与 GOGC 共同作用，不能单独当 OOM 保险丝；`gcTriggerTime` 的约两分钟阈值由 sysmon 检查，长时间空闲的程序 GC 次数本来就不该拿来和压测程序对比。
+
+一条命令把每轮 GC 的完整账单打出来：
+
+```bash
+GODEBUG=gctrace=1 ./aggregator 2> gc.log
+```
+
+```text
+gc 12 @3.214s 1%: 0.018+1.1+0.017 ms clock, 0.14+0.24/1.0/0+0.14 ms cpu, 4->5->3 MB, 5 MB goal, 0 MB stacks, 0 MB globals, 8 P
+gc 13 @3.502s 1%: 0.021+1.3+0.019 ms clock, 0.16+0.28/1.1/0+0.15 ms cpu, 5->6->3 MB, 5 MB goal, 0 MB stacks, 0 MB globals, 8 P
+```
+
+一行里每个数字都有落点：`gc 12` 是第 12 次回收，对应 `MemStats.NumGC`；`@3.214s` 是程序启动到本轮开始的时刻；`1%` 是自启动以来 GC 占用的 CPU 时间比例；`0.018+1.1+0.017 ms clock` 是三段墙钟耗时，依次为第一次 STW（清扫终止与标记准备）、并发标记、第二次 STW（标记终止），两段 STW 之和才是用户能感知的停顿；`0.14+0.24/1.0/0+0.14 ms cpu` 是对应的 CPU 时间，中间三项分别是 dedicated、fractional、idle 三类后台 worker 的标记开销；`4->5->3 MB` 是标记开始堆、标记结束堆与标记后存活堆；`5 MB goal` 是本轮目标堆，与 `NextGC` 是同一个目标、只是单位不同；`0 MB stacks` 与 `0 MB globals` 是栈与全局数据扫描量；`8 P` 是参与本轮标记的 P 数。排查时看两处就够：`1%` 长期偏高说明 GC 在抢 CPU，`goal` 随 GOGC 调大而抬高，正好解释第 4 节那张表里的吞吐变化。
+
+<SequenceDiagram title="一次 GC 的状态迁移与参与者" caption="从 gcStart 触发到 gcSweep 清扫，展示两次 STW 与并发标记的衔接" :actors='["mutator","gcStart","bgMarkWorker","gcAssistAlloc","gcMarkDone","gcSweep"]' :steps='[{"from":"mutator","to":"gcStart","label":"堆达到 NextGC","note":"gcTriggerHeap","kind":"call"},{"from":"gcStart","to":"gcStart","label":"STW 开写屏障","note":"切到 _GCmark","kind":"self"},{"from":"gcStart","to":"bgMarkWorker","label":"唤醒后台 worker","note":"按预算起 worker","kind":"call"},{"from":"bgMarkWorker","to":"mutator","label":"并发三色标记","note":"业务继续运行","kind":"async"},{"from":"mutator","to":"gcAssistAlloc","label":"分配过快帮标记","note":"先还扫描负债","kind":"call"},{"from":"gcAssistAlloc","to":"bgMarkWorker","label":"分担扫描 credit","note":"抑制分配速率","kind":"return"},{"from":"bgMarkWorker","to":"gcMarkDone","label":"标记队列清空","note":"最后一个 worker","kind":"call"},{"from":"gcMarkDone","to":"gcMarkDone","label":"二次 STW 收尾","note":"关屏障算 goal","kind":"self"},{"from":"gcMarkDone","to":"gcSweep","label":"进入并发清扫","note":"回收白色 span","kind":"call"},{"from":"gcSweep","to":"mutator","label":"归还内存恢复","note":"按需还给 OS","kind":"return"}]' />
+
+图中两次 `self` 正是两次 STW：第一次开屏障、第二次关屏障并定下一轮目标，中间的所有标记都与业务并发，这就是亚毫秒停顿的结构性来源。
+
+| gctrace 字段 | 示例 | 含义 | 调优时看什么 |
+| --- | --- | --- | --- |
+| `gc N` | `gc 12` | 第 N 次回收，等于 `NumGC` | 频率是否过高 |
+| `@T s` | `@3.214s` | 程序启动到本轮开始 | 相邻间隔是否骤缩 |
+| `1%` | `1%` | 累计 GC 占用 CPU 比例 | 是否长期偏高 |
+| `ms clock` 三段 | `0.018+1.1+0.017` | 一次 STW、并发标记、二次 STW 的墙钟时间 | 两段 STW 之和 |
+| `ms cpu` 中段 | `0.24/1.0/0` | dedicated、fractional、idle worker 的标记 CPU | 后台标记是否吃满 |
+| 三个堆值 | `4、5、3 MB` | 标记开始堆、结束堆、存活堆 | 存活堆与增长幅度 |
+| `goal` | `5 MB goal` | 本轮目标堆，等同 `NextGC` 的 MB 值 | GOGC 调大后是否抬高 |
+| `N P` | `8 P` | 参与标记的 P 数 | 与 `GOMAXPROCS` 是否一致 |
+
+表格把一行输出拆成速查项；真正调优时不要逐行盯，而是用 `benchstat` 比较改动前后多轮采样的 `1%` 与两段 STW 之和，才不会被单次抖动误导。
+
+<Callout type="tip" title="源码阅读建议" text="先读 mgc.go 的 gcTrigger 与 gcStart 理清触发和两次 STW，再读 mgcpacer.go 的 findRunnableGCWorker 看 worker 预算，最后才看 mbarrier.go 的写屏障；work 全局结构里的 heap0、heap1、bytesMarked 是串起各阶段的主线字段，别一上来就钻汇编屏障。" />
+
 ## 4. 工程实践
 一次在线服务调优这样闭环：先用 `GODEBUG=gctrace=1` 采集基线，记录每轮 GC 频率、标记占用 CPU 比例与 `goal`；再只改一个变量，用固定压测脚本复跑；最后用 `benchstat` 对比，确认收益不是噪声。下表是某 JSON 聚合服务在同样压测下的代表性数据。
 

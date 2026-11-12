@@ -196,6 +196,109 @@ func main() {
 
 <Callout type="tip" title="any 不是万能解" text="空接口把类型检查推迟到运行时，滥用会让编译期错误变成线上 panic；只在处理未知类型时用它。" />
 
+把两个字的模型再落到实处：接口变量要整体为 `nil`，必须「类型字」和「数据字」都为空。只要装进一个哪怕是 nil 的 `*T`，类型字就写着 `*T`，`i == nil` 便为 false。想验证不必读源码，用 `fmt.Printf("%T, %v\n", i, i)` 打印动态类型即可看到它并非空；`reflect.TypeOf(i)` 也会返回那个具体类型而不是 nil。这也是「返回接口的函数失败时要显式写 `return nil, err`」的硬理由：若图省事返回一个 `(*T)(nil)`，调用方 `if r != nil` 的判空会失效，紧接着 `r.Read()` 可能在 nil 接收者上崩掉。真实故障常出现在打开文件、建连接这类失败路径：错误返回了，接口却非空，兜底分支没进去。底层 `iface` / `eface` 与 `itab` 的定义在 `runtime/runtime2.go` 和 `runtime/iface.go`，动态派发为什么有成本是 L3 的话题，本讲只用到「两个字」这一层结论。
+
+版本差异里最容易被忽略的是 `any` 本身：它是 Go 1.18 才加入的预声明别名，等价于 `interface{}`。`go doc builtin.any` 能查到这句定义；而语言特性受 `go.mod` 的 `go` 指令约束——把模块写 `go 1.17`，源码里用 `any` 会直接编译失败，报 `predeclared any requires go1.18 or later`。所以维护老模块时看到满屏 `interface{}` 别急着全局替换成 `any`，先确认 `go` 指令升到了 1.18；反过来新项目统一用 `any` 更简洁。想确认接口组合长什么样，`go doc io.ReadWriter` 会显示它由 `Reader` 与 `Writer` 两个小接口拼成，正是本讲「小接口 + 组合」的标准范例。
+
+使用层还有三条坑值得提前挡住。单值断言 `i.(T)` 在类型不符时直接 panic，除非你百分百确定，否则一律写 `v, ok := i.(T)`；`type switch` 更稳妥，还能把某个接口（比如 `fmt.Stringer`）直接当成一个 case，让「有没有这个能力」而不是「是不是这个具体类型」来分支。`any` 也不能当万能参数到处传：它把类型检查从编译期推到运行期，代价是原本能编译报错的地方变成线上 panic，只在真正处理未知类型（解码、序列化、异构容器）时才用。最后，判断实现关系可以交给工具：`go/types` 的 `types.Implements` 能在静态分析里查出某类型是否满足某接口，比人工数方法可靠。
+
+<FlowTimeline title="一次安全类型断言" :steps='[{"title":"拿到 any","desc":"值带动态类型","tone":"blue"},{"title":"comma-ok","desc":"尝试取目标类型","tone":"orange"},{"title":"判 ok","desc":"为假走兜底分支","tone":"green"},{"title":"用值","desc":"为真才使用具体值","tone":"purple"}]' direction="horizontal" />
+
+下面两段代码把 typed nil 的修法与断言的错误分支写成能跑的例子。第一段是「打开阅读器」：失败时必须显式返回 nil 字面量，不能返回带类型的 nil 指针。
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Reader interface {
+	Read() string
+}
+
+type fileReader struct {
+	data string
+}
+
+func (f *fileReader) Read() string { return f.data }
+
+// openReader 失败时必须显式返回 nil 字面量，
+// 不能返回带类型的 nil 指针，否则接口整体不为 nil。
+func openReader(ok bool) (Reader, error) {
+	if !ok {
+		return nil, errors.New("打开失败") // 显式 nil，接口整体才为 nil
+	}
+	return &fileReader{data: "hello"}, nil
+}
+
+func main() {
+	r, err := openReader(true)
+	if err == nil {
+		fmt.Println("读到 =", r.Read())
+	}
+
+	bad, err := openReader(false)
+	fmt.Println("失败时接口为 nil =", bad == nil, "出错 =", err != nil)
+}
+```
+
+<OutputBox title="运行结果" output="读到 = hello\n失败时接口为 nil = true 出错 = true" />
+
+第二段用 `any` 加 `type switch` 做安全的字符串化：遇到 nil、未知类型都返回错误而不是 panic，还演示了把一个标准库小接口 `fmt.Stringer` 直接当 case。
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// stringify 只接受能转成字符串的值，遇到未知类型返回错误而不是 panic。
+func stringify(v any) (string, error) {
+	switch x := v.(type) {
+	case nil:
+		return "", errors.New("空值")
+	case string:
+		return x, nil
+	case int:
+		return fmt.Sprintf("%d", x), nil
+	case fmt.Stringer: // 接口也能作为 type switch 的 case
+		return x.String(), nil
+	default:
+		return "", fmt.Errorf("不支持的类型 %T", v)
+	}
+}
+
+type Code int
+
+func (c Code) String() string { return fmt.Sprintf("CODE-%d", int(c)) }
+
+func main() {
+	for _, v := range []any{"go", 42, Code(7), nil, 3.14} {
+		if s, err := stringify(v); err == nil {
+			fmt.Println("结果 =", s)
+		} else {
+			fmt.Println("被挡住 =", err != nil)
+		}
+	}
+}
+```
+
+<OutputBox title="运行结果" output="结果 = go\n结果 = 42\n结果 = CODE-7\n被挡住 = true\n被挡住 = true" />
+
+| 场景 | 现象 | 根因与修法 |
+| --- | --- | --- |
+| 失败时返回 `*T(nil)` | 接口判等不为 nil | 显式返回 `nil` 字面量 |
+| 单值断言 `i.(T)` 类型不符 | panic | 改 `v, ok := i.(T)` |
+| 把 `any` 当参数到处传 | 编译期错误变线上 panic | 只在处理未知类型时用 |
+| 实现方预先定义大接口 | 调用方被迫依赖多余方法 | 接口由使用方按需要定义 |
+| 在包内给外部类型加方法 | 编译失败 | 只能给本包类型加方法 |
+
+<Predict no="19-3" q="openReader(false) 失败时若图省事 return (*fileReader)(nil), err，调用方 r, _ := openReader(false) 后判断 r == nil 的结果是？" :options='["true，判空生效","false，判空失效","编译失败","panic"]' answer="1" output="false，判空失效" explain="接口含类型与数据两个字；装入 nil 的 *fileReader 后类型字写着该指针类型，整体不为 nil。正确写法是失败时显式 return nil, err，让两个字都为空。" />
+
 ## 动手练一练
 
 <Exercise title="定义并实现小接口" task="声明只含 Size() int 的接口 Sizer，让 Box 实现并用断言确认。" :hints='["接口只列一个方法","方法签名要一致"]' solution="type Sizer interface {\n    Size() int\n}\ntype Box struct{ n int }\nfunc (b Box) Size() int { return b.n }\nvar _ Sizer = Box{}" explain="签名一致即自动实现；签名不符时断言会在编译期报错。" />

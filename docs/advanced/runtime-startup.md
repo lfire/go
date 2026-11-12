@@ -112,6 +112,50 @@ func main() {
 
 <Callout type="warn" title="别背行号，也别在 init 里放飞" text="行号每个版本都变，记调用关系更可靠。init 阶段 main G 还没被调度，后台任务依赖的全局状态可能未就绪；重活放进 init 还会阻塞启动且难观测。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+读启动源码建议按「一条汇编、一个自举函数、一个结构体」的顺序对照 GOROOT。第一步看 `src/runtime/asm_amd64.s` 的 `TEXT runtime·rt0_go(SB)`：它把 `argc`、`argv` 从栈搬到全局变量，给 `m0` 与它的 `g0` 设好栈边界，做 CPU 特性检测，再依次 `CALL runtime·schedinit(SB)`、把 `runtime·mainPC(SB)` 交给 `newproc`、最后 `CALL runtime·mstart(SB)`。arm64 的入口在 `asm_arm64.s`，这里只以 amd64 为例。第二步看 `src/runtime/proc.go` 的 `func schedinit()`：它不创建任何用户 G，只铺地基——`mallocinit` 初始化堆与 `mcache`，`mcommoninit` 初始化当前 M，`gcinit` 准备 GC 参数，`procresize(procs)` 按 `GOMAXPROCS` 分配包级 `allp []*p` 并把空闲 P 串进 `sched.pidle`。函数签名多年未变，但内部调用清单每版都可能增删，读的时候盯住 `procresize` 一个即可。
+
+第三步看 `src/runtime/runtime2.go`：用户 main 被包装成 G 后，执行现场存在 `g.sched` 这个 `gobuf` 里，字段 `sp`（栈顶）、`pc`（下一条指令地址）、`g`（回溯指针）由 `newproc` 经 `gostartcallfn` 填好；`mstart` 起来后 `schedule` 选中这个 G，`gogo(&g.sched)` 才把 `pc` 装进 CPU 跳进 `runtime.main`。`runtime.main` 内部再跑 `doInit(runtime_inittasks)`、`gcenable()`，并用 `newm(sysmon, nil, -1)` 提前拉起监控线程，最后才调用 `main.main`。一个可复现的观察实验：先用 `go tool nm` 记下 `runtime.main` 的地址，再 `go tool objdump -s runtime.schedinit ./startup` 看函数体前几条 `CALL` 是否指向 `mallocinit` 或 `procresize`；然后把默认环境与 `GOMAXPROCS=1` 各跑一次 `GODEBUG=inittrace=1`，对比各包 init 的 `clock` 列，会发现 P 的个数影响并发 init 的调度，却不改变「包级变量 → init → main」的相对次序。
+
+结论的适用边界要写清：上述函数名与字段以 Go 1.21~1.23 的 linux/amd64、darwin/arm64 为准，行号与内部调用每版都可能变；`rt0_go` 是汇编入口，Windows 与 plan9 走另一套 `rt0` 文件；`inittrace` 只统计包 init，不含更早期的 `mallocinit`、`procresize` 耗时，不能当完整启动时长，量全貌得配合 `runtime/trace` 或外部计时；带 cgo 的二进制还会在这些步骤之前先跑 C 运行时初始化，顺序与纯 Go 不同。
+
+把上面的符号与账单坐实，两条命令都不用改代码：
+
+```bash
+go build -o startup ./cmd/startup
+GODEBUG=inittrace=1 ./startup 2> init.log
+go tool nm ./startup | grep -E 'rt0_go|runtime.main|main.main|schedinit'
+```
+
+```text
+init github.com/me/startup/internal/config @0.15 ms, 0.21 ms clock, 120 bytes, 3 allocs
+init net @1.02 ms, 0.44 ms clock, 4184 bytes, 13 allocs
+init main @1.61 ms, 0.03 ms clock, 208 bytes, 2 allocs
+  401000 T runtime.rt0_go
+  43a2c0 T runtime.schedinit
+  43af40 T runtime.main
+  44dd80 T main.main
+```
+
+`inittrace` 每行四段数字各有含义：`@0.15 ms` 是进程启动到该包 init 开始的时刻；`0.21 ms clock` 是这段 init 自己消耗的 CPU 时间；`120 bytes` 与 `3 allocs` 是期间累计的堆分配字节数与分配次数。判断哪个包最贵要看 `clock` 与 `bytes` 两列，`@` 靠后只说明排得晚，不代表跑得久。`go tool nm` 的三列是符号地址、`T`（代码段里的全局函数）与符号全名；`runtime.rt0_go` 地址最低，因为它是入口汇编，`runtime.main` 是运行时的 main，`main.main` 才是用户入口。用 `go tool objdump` 反汇编 `rt0_go`，能对上那几条 `CALL` 确实依次指向 `schedinit`、`newproc`、`mstart`。
+
+<SequenceDiagram title="从 rt0_go 到用户 main 的调用链" caption="以 Go 1.21~1.23 amd64 为准：入口汇编完成自举后，由 mstart 把 main G 调度起来" :actors='["rt0_go","schedinit","newproc","mstart","runtime.main","main.main"]' :steps='[{"from":"rt0_go","to":"schedinit","label":"调用 schedinit","note":"设 g0 栈与参数","kind":"call"},{"from":"schedinit","to":"schedinit","label":"procresize 建 P","note":"mallocinit 与 allp","kind":"self"},{"from":"schedinit","to":"rt0_go","label":"返回自举结果","note":"运行时地基就绪","kind":"return"},{"from":"rt0_go","to":"newproc","label":"newproc 建主 G","note":"取 runtime.mainPC","kind":"call"},{"from":"newproc","to":"rt0_go","label":"返回并入队","note":"主 G 进 runq","kind":"return"},{"from":"rt0_go","to":"mstart","label":"调用 mstart","note":"M 绑定 P","kind":"call"},{"from":"mstart","to":"runtime.main","label":"schedule 选中","note":"gogo 读 g.sched","kind":"call"},{"from":"runtime.main","to":"runtime.main","label":"跑 init 与 GC","note":"newm 起 sysmon","kind":"self"},{"from":"runtime.main","to":"main.main","label":"调用户 main","note":"参数已就绪","kind":"call"},{"from":"main.main","to":"runtime.main","label":"返回并退出","note":"执行 exit hook","kind":"return"}]' />
+
+这张图把第 2 节的三条 `CALL` 展开成了完整的责任交接：自举（`schedinit`）与主 G 创建（`newproc`）都在 `runtime.main` 执行之前完成，因此用户 main 一登场就已经是被调度出来的 G，而不是被直接调用的函数。
+
+| 结构（runtime2.go / proc.go） | 关键字段 | 启动期写入者 | 字段含义 |
+| --- | --- | --- | --- |
+| `gobuf`（即 `g.sched`） | `sp` / `pc` / `g` | `newproc` 经 `gostartcallfn` | main G 首次被调度时的栈顶、入口指令地址与回溯 G |
+| `m`（m0） | `g0` / `curg` / `p` | `rt0_go`、`mstart` | 调度用栈、当前用户 G、绑定的 P |
+| `p` | `runq` / `runnext` / `status` | `procresize` | 本地队列、优先 G 与 `_Pidle` 等状态位 |
+| `schedt`（即 `sched`） | `runq` / `goidgen` / `nmspinning` | `schedinit`、`newproc` | 全局队列、G 的 id 分配器、自旋 M 计数 |
+| 包级 `allp` | `[]*p` | `procresize` | 按 `GOMAXPROCS` 建立的全部 P，供 sysmon 与窃取遍历 |
+
+把上表和第 2 节的可观测数字对上：`GOMAXPROCS(0)` 读的就是 `allp` 的长度，`runtime.Stack` 能打印栈正是 `g.sched.sp` 与 `pc` 被填好的结果，而 `NumGoroutine` 的最小值为 1，对应 `newproc` 只创建了一个用户 G。
+
+<Callout type="tip" title="源码阅读建议" text="先在 GOROOT 里搜 runtime.mainPC 定位入口符号，再顺 schedinit、procresize、newproc、mstart 四个函数读一遍，最后回 runtime2.go 对字段；不要一上来逐行啃 asm_amd64.s，先记调用关系，行号留给编辑器帮你找。" />
+
 ## 4. 工程实践
 排查「服务启动慢」时，第一件事不是靠打点猜，而是让运行时自己报账。`GODEBUG=inittrace=1` 会在每个包 init 结束时打印耗时与内存分配，直接指出哪个包最贵；配合 `go build -gcflags=-m` 还能看到全局变量是否被放到了堆上。生产环境建议把这项输出接到启动日志里做长期对比。
 

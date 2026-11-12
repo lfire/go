@@ -166,6 +166,45 @@ Mutex 的 `state` 是一个 int32 位图：低位是 `mutexLocked`，另有 `mut
 
 <Callout type="warn" title="先减临界区，再谈换锁" text="看到锁竞争别急着换无锁结构：先缩短临界区、把 I/O 移出锁外，再考虑分片或 atomic。自旋只在多核且临界区极短时划算。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+把第 2 节的行为对回源码，先从 `src/runtime/chan.go` 的 `type hchan struct` 读起：`qcount` 与 `dataqsiz` 是当前元素数与容量，`buf` 指向环形缓冲区，`sendx` 与 `recvx` 是读写下标，`recvq` 与 `sendq` 是 `waitq`（里面挂着 `sudog`），`lock mutex` 保护所有字段，`closed` 与 `elemtype` 记录关闭状态与元素类型。`func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool` 的顺序是：`recvq` 非空则走 `send` 直接把值拷给队首 `sudog` 并 `goready` 唤醒它；无等待接收者且缓冲未满就入 `buf` 并递增 `sendx`、`qcount`；否则把自己包装成 `sudog` 挂到 `sendq` 并 `gopark`。`chanrecv` 与它对称，先查 `sendq`、再取 `buf`、最后挂 `recvq`。`src/runtime/select.go` 的 `selectgo(cas0 *scase, order0 *uint16, pc0 *uintptr, nsends, nrecvs int, block bool)` 用 `pollorder` 随机打乱 case 查就绪，全不就绪时按 `lockorder`（channel 地址顺序）加锁挂入各等待队列，避免多 case 加锁死锁。
+
+`src/sync/mutex.go` 里 `type Mutex struct { state int32; sema uint32 }` 的两个字段分工明确：`state` 是位图，低位 `mutexLocked`，另有 `mutexWoken`、`mutexStarving` 与高位存储的等待者计数（由 `mutexWaiterShift` 决定移位数）；`sema` 是休眠与唤醒用的信号量。`lockSlow` 先 CAS 抢锁，失败后若 `runtime_canSpin` 成立（多核、临界区短、当前 G 未耗尽时间片）就空转 `active_spin` 轮，否则经 `semacquire` 睡下；`unlockSlow` 在检测到等待超 `starvationThresholdNs`（1ms）后置 `mutexStarving`，此后锁直接交给队首、新来者不许自旋，直到队列清空或队首等待回落到 1ms 以内才切回普通模式。一个可复现的观察实验：把第 3 段程序改成 Benchmark 后用 `go test -mutexprofile` 采一次，再在临界区里加一次阻塞调用重采，对比 `contentions` 与 `delay` 两列，能直观看到临界区变长如何把竞争放大。
+
+适用边界要写清：以上字段与函数名以 Go 1.21~1.23 为准，位图布局与自旋常量每版都可能调整；`selectgo` 的随机 `pollorder` 是语言规范要求的公平性，不是实现偶然；mutex profile 默认采样率很低，`GODEBUG=mutexprofilefraction=1` 或 `-mutexprofile` 会明显增加开销，只能短窗口使用；单核环境下 `runtime_canSpin` 直接返回 false，自旋路径根本不会走，别拿单核机器的数据推断多核表现。
+
+下面这组命令把「哪把锁最热」变成可复现的读数，比手工打点更省事：
+
+```bash
+go test -run='^$' -bench=BenchmarkLock -mutexprofile=mutex.prof -count=1
+go tool pprof -top -sample_index=contentions,delay mutex.prof
+```
+
+```text
+Type: delay
+Showing nodes accounting for 1.62s, 100% of 1.62s total
+      flat  flat%   sum%        cum   cum%
+   1.62s   100%   100%      1.62s   100%  main.(*Counter).Inc
+       0     0%   100%      1.62s   100%  sync.(*Mutex).Lock
+```
+
+`Type: delay` 说明当前按累计阻塞时长排序，mutex profile 其实有两个 sample_index：`contentions` 是竞争发生次数，`delay` 是累计等待时间，上面的 `-sample_index=contentions,delay` 就是让两者都可用。`Showing nodes accounting for 1.62s` 表示列出的节点合计占 1.62s、占全部采样 100%。`flat` 是函数自身（不含子调用）累计的等待时间，`flat%` 是它占总量的比例，`sum%` 是自上而下累加比例，`cum` 是含整个调用栈的累计等待，`cum%` 同理。关键读数是 `main.(*Counter).Inc` 的 flat 为 1.62s，而 `sync.(*Mutex).Lock` 的 flat 为 0、cum 却是 1.62s：等待被记在调用方的临界区上，Lock 只是把阻塞转嫁出去。判断优化方向时配合 `contentions` 列看——次数极高但单次 delay 很短，说明是海量短竞争，适合分片；次数不多但 delay 很长，多半是临界区里做了 I/O。
+
+<SequenceDiagram title="无缓冲 channel 的一次收发配对" caption="发送者先挂到 sendq，接收者到达时直接拷贝并唤醒它" :actors='["sender","chansend","hchan","chanrecv","receiver","scheduler"]' :steps='[{"from":"sender","to":"chansend","label":"发送一个值","note":"执行发送语句","kind":"call"},{"from":"chansend","to":"hchan","label":"先查 recvq","note":"持 c.lock","kind":"call"},{"from":"hchan","to":"chansend","label":"无等待接收者","note":"recvq 为空","kind":"return"},{"from":"chansend","to":"hchan","label":"包装 sudog 入队","note":"挂到 sendq","kind":"call"},{"from":"chansend","to":"scheduler","label":"gopark 让出 P","note":"G 进入等待","kind":"call"},{"from":"receiver","to":"chanrecv","label":"请求接收","note":"执行接收语句","kind":"call"},{"from":"chanrecv","to":"hchan","label":"查 sendq","note":"取队首 sudog","kind":"call"},{"from":"hchan","to":"chanrecv","label":"命中等待发送者","note":"sendq 非空","kind":"return"},{"from":"chanrecv","to":"sender","label":"直接拷贝并唤醒","note":"send 后 goready","kind":"async"},{"from":"sender","to":"scheduler","label":"唤醒回 runq","note":"重新可运行","kind":"return"}]' />
+
+图中第 9 步是 `chansend` 快速路径的反面：值从发送方的 `sudog` 直接拷给接收方，全程不进 `buf`，这正是无缓冲 channel 少一次拷贝的原因。
+
+| 模式 | 进入条件 | 锁所有权移交 | 新来者行为 | 退出条件 |
+| --- | --- | --- | --- | --- |
+| 普通模式 | 默认状态 | 唤醒的等待者与新来者 CAS 竞争 | 可自旋、可抢锁 | 维持到出现等待超 1ms |
+| 自旋 | `runtime_canSpin` 且多核、临界区短 | 尚未入队，仅在用户态空转 | 空转至多 `active_spin` 轮 | 抢到锁或转 `semacquire` 休眠 |
+| 饥饿模式 | 某等待者超 `starvationThresholdNs`（1ms） | Unlock 直接交给队首 | 不自旋、直接排到队尾 | 队首等待回落到 1ms 以内或队列为空 |
+
+三行其实是一条随时间退化的路径：先无锁 CAS，再短暂自旋，最后才用严格排队换公平；看到 `contentions` 飙升时，先按这张表判断卡在哪个模式，再决定缩短临界区还是分片。
+
+<Callout type="tip" title="源码阅读建议" text="读 chan.go 先抄一遍 hchan 的字段清单，再顺着 chansend 的三种分支读，最后看 selectgo 的 pollorder 与 lockorder；mutex.go 的 lockSlow 和 unlockSlow 要对着 state 位图读，把 mutexLocked、mutexWoken、mutexStarving 三个位圈出来，状态机就清楚了。" />
+
 ## 4. 工程实践
 定位锁竞争有两把尺子：`GODEBUG=mutexprofilefraction=1` 打开 mutex profile，配合 `go tool pprof` 看 `contentions` 与 `delay`；`go tool trace` 的 Synchronization 视图则能看到 goroutine 因阻塞在锁上的时间线。判断拐点的办法是固定 worker 数逐级加压，记录每级 QPS 与 p99，一旦 QPS 不增而 p99 陡升，多半就是锁或 channel 的配对点成了瓶颈。
 

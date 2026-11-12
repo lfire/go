@@ -159,6 +159,106 @@ func main() {
 
 <Callout type="tip" title="容量提示不是限制" text="make 的第二个参数只是初始容量提示，map 会自动扩容；它不会限制能存多少键，只是减少前期搬桶的次数。" />
 
+先补一条最容易忽略的原理：map 变量本身是个轻量的描述符，赋值或传参拷的是这个描述符，底层那张哈希表仍是同一份。所以在函数里 `delete(m, k)`，调用方也能看到键没了——这和切片改元素会互相看见是同一类「共享」问题，却比切片更隐蔽，因为 map 连「子切片」这种明显的截取动作都不需要。想确认直接写个小例子 `go run`，或者更干脆：给一个结构体做纯读快照时，别把内部 map 直接返回出去，先 `make` 一份再逐键拷贝。真正存储键值对的 `hmap` 结构在 `runtime/map.go`，桶怎么分裂、怎么渐进搬迁是 L3 的内容；本讲只要建立「map 是引用、不是值」的直觉。
+
+由这个结构还能推出两个编译期边界。`&m[k]` 会直接编译失败，报 `cannot take address of m[k]`：因为扩容会搬动元素，地址根本不稳定，语言干脆禁止取址，逼你「取出—改字段—整体赋值回去」。用 `go build` 就能复现这条错误，比背规则牢。另一条是版本差异：Go 1.21 才加入内置 `clear(m)`，一行清空所有键且对 nil map 是空操作；在此之前只能 `for k := range m { delete(m, k) }` 或者干脆重新 `make`。读老代码看到手写清空循环，先查 `go.mod` 的 `go` 指令再决定要不要改。
+
+并发场景最值得跑的一条命令是 `go test -race`。多个 goroutine 同时 `m[k]++` 即便不触发 `fatal error: concurrent map writes`，也会丢失更新——读改写不是原子的，`-race` 会明确报出 `DATA RACE`，`sync.RWMutex` 或 `sync.Map` 才是正解。真实踩坑里有一类特别安静：把 map 当长期缓存用却从不清理，键只增不减，`runtime.ReadMemStats` 里 `HeapInuse` 一路涨，最后 OOM；定期 `clear` 或加 TTL 才收得住。还有人把 `sync.Map` 当普通 map 写 `m[k] = v`，直接编译失败——它只有 `Store`/`Load` 方法，没有下标赋值。
+
+<FlowTimeline title="一次取值该不该信 ok" :steps='[{"title":"算哈希","desc":"定位到桶","tone":"blue"},{"title":"比键","desc":"找到则返回 v, true","tone":"orange"},{"title":"未命中","desc":"返回零值, false","tone":"green"},{"title":"判定","desc":"只看 ok，不看 v 是否为零","tone":"purple"}]' direction="horizontal" />
+
+下面两段代码把「版本差异」与「并发安全」落成能跑的形式。第一段用 Go 1.21 的 `clear` 清空 map，并验证 nil map 传进去也不会 panic、清空后依然可写。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	m := map[string]int{"a": 1, "b": 2}
+	clear(m) // Go 1.21 起的内置函数，一行清空所有键
+	fmt.Println("清空后 len =", len(m))
+	m["c"] = 3 // 清空后依然可写
+	fmt.Println("重新写入后 len =", len(m))
+
+	var nilMap map[string]int
+	clear(nilMap) // 对 nil map 是空操作，不会 panic
+	fmt.Println("nil map 清空后 len =", len(nilMap))
+}
+```
+
+<OutputBox title="运行结果" output="清空后 len = 0\n重新写入后 len = 1\nnil map 清空后 len = 0" />
+
+第二段用 `sync.RWMutex` 把读写都保护起来：读多写少时多个读可并行，查不到时返回明确错误而不是把零值误当成命中，最后用 50 个 goroutine 并发写入验证安全性。
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+// SafeIndex 用读写锁保护 map：读多写少时多个读可并行。
+type SafeIndex struct {
+	mu sync.RWMutex
+	m  map[string]int
+}
+
+func NewSafeIndex() *SafeIndex {
+	return &SafeIndex{m: make(map[string]int)}
+}
+
+func (s *SafeIndex) Set(k string, v int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[k] = v
+}
+
+// Get 查不到时返回明确错误，不把零值误当成命中
+func (s *SafeIndex) Get(k string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.m[k]; ok {
+		return v, nil
+	}
+	return 0, errors.New("键不存在")
+}
+
+func main() {
+	idx := NewSafeIndex()
+	idx.Set("a", 0) // 值恰好为 0 但键真实存在
+	v, err := idx.Get("a")
+	fmt.Println("命中零值 =", v, "出错 =", err != nil)
+
+	_, err = idx.Get("missing")
+	fmt.Println("缺失时出错 =", err != nil, "提示 =", err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) { // 把循环变量作参数传入，避开闭包捕获
+			defer wg.Done()
+			idx.Set(fmt.Sprintf("k%d", n), n)
+		}(i)
+	}
+	wg.Wait()
+	v, err = idx.Get("k7")
+	fmt.Println("并发写后取 k7 =", v, "出错 =", err != nil)
+}
+```
+
+<OutputBox title="运行结果" output="命中零值 = 0 出错 = false\n缺失时出错 = true 提示 = 键不存在\n并发写后取 k7 = 7 出错 = false" />
+
+| 方案 | 适用场合 | 代价 | 注意点 |
+| --- | --- | --- | --- |
+| `sync.Mutex` | 读写都频繁、逻辑简单 | 读也串行 | 临界区尽量短，别忘解锁 |
+| `sync.RWMutex` | 读多写少 | 写会阻塞所有读 | 读锁内不要再做写操作 |
+| `sync.Map` | 键集合稳定、读远多于写 | 内存占用更高 | 只有 Store / Load，没有下标赋值 |
+
+<Predict no="16-3" q="var m map[string]int 是 nil map，对它调用 Go 1.21 的 clear(m) 后再 len(m)，结果是？" :options='["panic: assignment to entry in nil map","编译失败","0，且不会 panic","1"]' answer="2" output="0，不会 panic" explain="clear 对 nil map 是空操作，len 仍为 0；这和「nil map 写入会 panic」并不矛盾，clear 只清已有键，没有就什么都不做。" />
+
 ## 动手练一练
 
 <Exercise title="用 Set 保序去重" task="对含重复元素的字符串切片 src 去重并保持首次出现的顺序，打印结果切片。" :hints='["用 map[string]struct{} 记录已出现","结果可以复用 src 的前半段"]' solution="seen := map[string]struct{}{}\nout := src[:0]\nfor _, s := range src {\n    if _, ok := seen[s]; ok {\n        continue\n    }\n    seen[s] = struct{}{}\n    out = append(out, s)\n}\nfmt.Println(out)" explain="seen 判重，out 只追加首次出现的元素，输出 [go java rust]。" />

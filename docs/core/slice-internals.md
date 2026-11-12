@@ -132,6 +132,24 @@ GOARCH=386 go run main.go
 
 <Callout type="warn" title="append 的三条铁律" text="一，结果一定要接住并传回给所有持有方；二，把切片传进函数后 append，不会改变调用方的 len——头是值拷贝（回看第 26 讲）；三，从大数组切一小片长期持有，会拖住整块底层数组无法回收，是常见的内存泄漏。" />
 
+### 深入一步：growslice 源码、实验与生产观测
+
+以下路径以 Go 1.21~1.23 的 `$GOROOT/src/runtime` 为准，跨版本函数名会变，动手前先 `go version`。切片头在反射包的公开镜像是 `reflect.SliceHeader`，字段为 `Data uintptr`、`Len int`、`Cap int`；运行时内部等价布局里 `Data` 其实是 `unsafe.Pointer`。关键区别在于：`uintptr` 只是整数，不参与 GC 存活判定，把它取出来长期保存，底层数组可能在你仍使用它时就被回收。所以别手工拼头，构造切片用 Go 1.17 起的 `unsafe.Slice` 与 Go 1.20 起的 `unsafe.SliceData`。
+
+扩容在 `runtime/slice.go` 的 `growslice`：Go 1.18 把阈值从 1024 降为 256 并改平滑增长，Go 1.21 又把容量计算抽成 `nextslicecap`。它先按元素大小把目标容量换算成字节，再经 `runtime/msize.go` 的 `roundupsize` 对齐到 size class，最后交 `mallocgc` 分配并搬移旧元素；元素含指针时还要走写屏障辅助路径，这正是 `growslice` 里 `et.Pointers() != 0` 分支存在的原因。
+
+三个实验可自行复现：`go build -gcflags=-m slice.go 2>&1 | grep -E 'makeslice|growslice|escapes'` 看逃逸与扩容调用，`go tool compile -S slice.go | grep growslice` 能看到 `CALL runtime.growslice`，`GODEBUG=gctrace=1 go run slice.go` 则显示频繁 append 时堆规模逐轮上台阶。生产里 pprof 中 `runtime.growslice` 进热点前列，几乎就是没预估容量的信号；`go test -bench=. -benchmem` 的 `allocs/op` 会把扩容次数直接量化。调优按代价从小到大：`make([]T, 0, n)` 一次预留、Go 1.21 `slices.Grow` 主动扩容、把临时缓冲收进更短的小函数。常见误用是把 `reflect.SliceHeader` 当公开 API 来回转换，或以为 `cap` 必等于公式值而忽略 `roundupsize`。
+
+把源码与现象对起来更清楚：观察程序里 512 之后跳到 848，不是公式算错，而是平滑公式先给出 832 个元素、832×8=6656 字节，经 `roundupsize` 向上对齐到 6784 字节档位后再除回 8，得到 848。`growslice` 用 `memmove` 按元素大小乘旧长度搬数据，含指针时改走带写屏障的路径，返回全新的头，旧数组等引用归零后由 GC 回收，这解释了扩容后 `Data` 地址必然变化。生产里 `go build -gcflags='-m -m'` 能看到 `makeslice` 的逃逸判定，配合 `go test -benchmem` 的 `B/op`：它明显大于元素总字节时，差值就是历次扩容累计分配与档位取整之和。另一个高频误用是给 `unsafe.Slice` 传负长度或指向已释放内存的指针，二者都会在运行时崩，且绕过了编译器边界检查。
+
+| 字段 | 类型 | 含义 | 使用时的注意 |
+| --- | --- | --- | --- |
+| `Data` | `uintptr` | 底层数组首元素地址 | 不参与 GC 存活判定，别当整数长期持有 |
+| `Len` | `int` | 当前可见元素个数 | `append` 只改头里的 `Len`，不改调用方的头 |
+| `Cap` | `int` | 从 `Data` 起可用的槽位数 | 经 `roundupsize` 对齐，常大于公式值 |
+
+<SequenceDiagram title="append 触发扩容时的调用链" caption="从容量判断到新数组返回，每一步都对应一个可查证的运行时函数" :actors='["用户代码","append","growslice","roundupsize","mallocgc"]' :steps='[{"from":"用户代码","to":"append","label":"append(s, x)","kind":"call"},{"from":"append","to":"growslice","label":"cap 不足触发扩容","kind":"call"},{"from":"growslice","to":"growslice","label":"按 256 阈值算","kind":"self"},{"from":"growslice","to":"roundupsize","label":"对齐字节数","kind":"call"},{"from":"roundupsize","to":"mallocgc","label":"申请新 span","kind":"call"},{"from":"mallocgc","to":"growslice","label":"返回新数组","kind":"return"},{"from":"growslice","to":"append","label":"拷贝并返回新头","kind":"return"},{"from":"append","to":"用户代码","label":"交还新三元组","kind":"return"}]' />
+
 ## 4. 工程实践
 
 `full slice expression`（三索引切片）把 `cap` 锁死，从而强制 `append` 另分配，是规避别名写的标准手法；`copy` 则能把数据搬到独立数组，彻底切断共享。顺带一提，Go 1.21 起标准库 `slices.Clip` 能把容量收缩到长度，效果等价于三索引切片，适合在处理完数据后主动切断共享。
@@ -165,6 +183,51 @@ func main() {
 <Compare :panels='[{"label":"不带 max","code":"alias := big[:3]","note":"cap 继承到底，append 可能覆盖 big 后续元素"},{"label":"full slice expr","code":"part := big[:3:3]","note":"cap 被锁成 3，append 必然另分配"}]' title="两种切法，两种后果" />
 
 落地建议：构造切片时尽量 `make([]T, 0, n)` 预估容量，既省扩容又少一次堆分配（第 27 讲）；函数若可能扩容，就把新切片作为返回值传回，别指望调用方「自动看见」；需要把子切片交给缓存、队列或 goroutine 长期持有时，先 `copy` 或复用三索引表达式，避免把整个大数组钉在内存里。排查线上「数据被莫名改写」时，先画一遍 `Data` 指向与 `cap`，八成是别名写在作祟。
+
+### 用基准测试把扩容次数量化
+
+把下面代码存成 `slice_bench_test.go` 跑基准，用包级 `sink` 承接结果，避免循环被优化掉。
+
+```go
+package main
+
+import "testing"
+
+var sink []int
+
+// 不预估容量：append 反复触发 growslice，产生多次分配与旧元素拷贝
+func BenchmarkNoCap(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		s := make([]int, 0)
+		for j := 0; j < 1024; j++ {
+			s = append(s, j)
+		}
+		sink = s
+	}
+}
+
+// 预估容量：一次 make 到位，循环内只写不扩容
+func BenchmarkWithCap(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		s := make([]int, 0, 1024)
+		for j := 0; j < 1024; j++ {
+			s = append(s, j)
+		}
+		sink = s
+	}
+}
+```
+
+```bash
+# -run=^$ 跳过单测只跑基准，-benchmem 追加内存指标
+go test -bench='NoCap|WithCap' -benchmem -run=^$ ./...
+```
+
+<OutputBox title="实测样例（Go 1.23 / darwin arm64，数值随机型波动）" output="goos: darwin  goarch: arm64\nBenchmarkNoCap-8     128374   9183 ns/op   25208 B/op   12 allocs/op\nBenchmarkWithCap-8   512906   2312 ns/op    8192 B/op    1 allocs/op" note="差距在 allocs/op：12 次对 1 次。" />
+
+三列要会读：`ns/op` 是每次迭代耗时，`B/op` 是每次迭代分配的字节，`allocs/op` 是分配次数。`WithCap` 的 `B/op` 恰好是 1024×8=8192，说明一次到位；`NoCap` 多出来的分配次数正是 `growslice` 被调用的次数，也是 pprof 里该函数的命中次数。容量接近真实规模即可把扩容压到个位数。
+
+<Predict no="28-4" q="把 WithCap 里的 make([]int, 0, 1024) 改成 make([]int, 0, 512)，循环仍 append 1024 次，allocs/op 最接近多少？" :options='["仍是 1 次","约 2 次","仍是 12 次","降到 0 次"]' answer="1" output="约 2 次：容量写满 512 时再扩容一次即可容纳 1024 个元素" explain="预留 512 后写满时触发一次 growslice，分配次数从 12 降到 2；容量接近真实规模即可大幅减少拷贝。" />
 
 ## 动手练一练
 

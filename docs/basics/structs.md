@@ -178,6 +178,102 @@ func main() {
 
 <Callout type="tip" title="空结构体的用途" text="struct{} 不占内存，常作无数据的通道信号或 Set 的值类型；零大小值可比较且相等。" />
 
+把对齐讲透一点，就能自己算 Sizeof，而不是死记 16 和 24。规则只有两条：每个字段必须放在「自身对齐数」的整数倍地址上，不给就插 padding；整个结构体的大小再向上补齐到「最大字段对齐数」的整数倍。`int64` 的对齐数是 8，`bool` 是 1，所以 `bool/int64/bool` 得在第一个 bool 后补 7 字节、末尾再补 7 字节，合 24；换成 `int64/bool/bool` 只在尾部补 6 字节，得 16。想逐个字段核对，用 `unsafe.Offsetof(u.Count)`、`unsafe.Alignof(u.Count)`、`unsafe.Sizeof(u)` 三个函数打印一遍，每个字段的起点一目了然——这比背结论可靠。还要注意结果和平台绑定：同一段代码用 `GOARCH=386 go run` 跑，int64 的对齐数变成 4，A 与 B 的差距会缩小；谈 Sizeof 时先说清是多少位平台。
+
+标签这一层也有可验证的依据。`reflect.StructField.Tag` 就是反引号里那串元信息，`reflect.TypeOf(User{}).Field(0).Tag.Get("json")` 能把它读回来；编译期只把它当字符串存着，完全不校验内容，所以 `json:"prot"` 拼错不会有任何编译错误，只会在序列化时悄悄把键写成错的那个。`cmd/compile/internal/types` 负责计算字段偏移与对齐，`encoding/json` 在运行时通过反射读标签——本讲不展开序列化的完整规则，那是 JSON 一讲的事。
+
+真实踩坑里最贵的一类是「小字段夹在大字段中间」：一个高频创建的结构体平白多出 8 字节，量到百万级就是近 8MB 常驻，用 `go build -gcflags=-m` 还能看到这类大对象更容易被判定为逃逸到堆。修法不是到处重排，而是先用 `unsafe.Sizeof` 或压测确认它真是热点，再动手，别为省几个字节把字段按大小硬排得没法读。另一类安静的坑是嵌入指针没初始化：把 `*Logger` 嵌进 `Service` 却忘了赋值，直接访问提升上来的 `s.Prefix` 就是 nil 解引用 panic，先判空兜住才稳。
+
+<FlowTimeline title="结构体字段排布的四步" :steps='[{"title":"定顺序","desc":"按声明先后排","tone":"blue"},{"title":"查对齐","desc":"每类有自己的对齐数","tone":"orange"},{"title":"补空隙","desc":"不满足就插 padding","tone":"green"},{"title":"尾部对齐","desc":"整体补到最大对齐倍数","tone":"purple"}]' direction="horizontal" />
+
+下面两段代码分别把「错误分支」和「嵌入指针的 nil 边界」写成能跑的例子。第一段给带标签的配置结构加一个 load 函数：非法 JSON 与 nil 目标指针都要在 json.Unmarshal 之前挡住并返回错误。
+
+```go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type Config struct {
+	Port int    `json:"port"`
+	Name string `json:"name"`
+}
+
+func load(data []byte, dst *Config) error {
+	// 真边界：调用方可能传 nil 指针，或给一段非法 JSON
+	if dst == nil {
+		return fmt.Errorf("目标指针不能为 nil")
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("解析配置失败: %v", err)
+	}
+	return nil
+}
+
+func main() {
+	var c Config
+	if err := load([]byte(`{"port":8080,"name":"svc"}`), &c); err == nil {
+		fmt.Println("配置 =", c.Port, c.Name)
+	}
+
+	if err := load([]byte(`{"port":`), &c); err != nil {
+		fmt.Println("非法 JSON 被挡住 =", err != nil)
+	}
+
+	if err := load([]byte(`{}`), nil); err != nil {
+		fmt.Println("nil 目标被挡住 =", err != nil)
+	}
+}
+```
+
+<OutputBox title="运行结果" output="配置 = 8080 svc\n非法 JSON 被挡住 = true\nnil 目标被挡住 = true" />
+
+第二段演示嵌入指针：字段提升照样生效，但嵌入的 `*Logger` 没初始化时访问提升字段会崩，先在函数里判空就能优雅兜底。
+
+```go
+package main
+
+import "fmt"
+
+type Logger struct {
+	Prefix string
+}
+
+type Service struct {
+	*Logger // 嵌入指针：字段提升照样生效，但可能是 nil
+	Name    string
+}
+
+func logMsg(s Service, msg string) {
+	if s.Logger == nil { // 真边界：忘了初始化嵌入指针
+		fmt.Println("[默认]", s.Name, msg)
+		return
+	}
+	fmt.Println("["+s.Prefix+"]", s.Name, msg)
+}
+
+func main() {
+	s1 := Service{Logger: &Logger{Prefix: "INFO"}, Name: "api"}
+	logMsg(s1, "started")
+
+	s2 := Service{Name: "job"} // 忘了初始化嵌入指针
+	logMsg(s2, "started")      // 走判空分支，不 panic
+}
+```
+
+<OutputBox title="运行结果" output="[INFO] api started\n[默认] job started" />
+
+| 标签写法 | 含义 | 易错点 |
+| --- | --- | --- |
+| `json:"port"` | 键改名为 port | 拼错（如 prot）不报错，键名就按错的来 |
+| `json:"-"` | 该字段跳过编码 | 只是不编码，字段本身仍在结构体里 |
+| 不写标签 | 用字段名原样 | 未导出字段编码时不可见 |
+| 反引号包裹 | 编译期附在字段上的元信息 | 内容靠运行期反射读取，编译期不校验 |
+
+<Predict no="17-3" q="调用 load(一段非法 JSON, &c) 时 err 不为 nil；改成 load(合法 JSON, nil) 把目标指针传成 nil，会怎样？" :options='["正常解析，c 被填充","panic: nil pointer","返回错误，不会 panic","编译失败"]' answer="2" output="返回错误，不会 panic" explain="load 开头先判 dst == nil 直接返回错误，把边界挡在 json.Unmarshal 之前；若不判空，nil 目标交给 Unmarshal 会返回 InvalidUnmarshalError，同样不该让调用方以为解析成功。" />
+
 ## 动手练一练
 
 <Exercise title="重排字段省内存" task="把含 bool、int64、bool 的结构体重排，让 64 位平台 Sizeof 从 24 降到 16 并打印验证。" :hints='["int64 需 8 字节对齐","让两个 bool 相邻"]' solution="type T struct {\n    Count int64\n    Flag  bool\n    Tail  bool\n}\nfmt.Println(unsafe.Sizeof(T{}))" explain="int64 放首位，两个 bool 相邻，输出 16。" />

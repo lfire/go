@@ -131,6 +131,47 @@ func main() {
 
 <Callout type="tip" title="输出倒逼输入" text="写清一篇源码笔记会逼你补齐没读懂的细节；做一次分享会逼你把结论组织成别人能反驳的形式。把输出当成学习闭环的验证环节，比多读几章更扎实。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+「可验证的产物」不是口号，背后都有工具链源码撑着。`src/testing/testing.go` 定义 `T`、`B`、`M` 三个核心类型与 `t.Run`、`b.ResetTimer` 等方法，`src/testing/benchmark.go` 的 `Benchmark` 负责自适应 `b.N`；`src/cmd/cover/` 是覆盖率改写工具，`go test -cover` 时它给源码插入计数器，`src/runtime/coverage/`（Go 1.20 起）在运行期累计命中，`src/cmd/go/internal/test/` 负责把结果汇总成 `coverprofile` 文件，`go tool cover -func` 再按函数聚合。`go vet` 的主程序在 `src/cmd/vet/`，分析器基于 `go/analysis` 框架，逐个跑 printf、copylocks 一类检查；`-race` 的插桩与 `src/runtime/race/` 则已在第 99 讲讲过。这几处串起来，正好说明第 3 节表里「测试、CI、p99 报告」为什么能被量化、又能被自动化。
+
+一个可复现的观察实验：对任意小项目跑 `go test -race -coverprofile=cover.out ./...` 与 `go tool cover -func=cover.out`，把总覆盖率、race 是否报告、`go vet` 是否静默三项记进第 3 段那样的输出台账；再跑第 2 段四维自评程序给「工程质量」打分，用这三项客观证据校准自评——若覆盖率只有三成、CI 也没接门禁，就不该给自己打 4 分。接着用第 1 段加权矩阵做一次选型，把结论写成 ADR，一个月后回看权重是否需要修正，这就把「列约束、定权重、试点、记录」闭环从方法变成了留痕。
+
+适用边界要写清：以上路径与 API 以 Go 1.21~1.23 为准，覆盖率工具链在 Go 1.20 前后换过实现，细节每版可能变；语句覆盖率高不等于分支、边界与并发路径都被覆盖，`-race` 只发现本次执行碰到的竞争，`go vet` 也只覆盖内置分析器，三者都不是正确性的证明；四维评分是主观自评，只适合定位个人短板，不适合做跨人绩效比较；加权选型的权重服务于单次目标，换业务就得重定；开源贡献从修文档、补测试、报可复现 issue 起步，别一上来挑大特性。
+
+三条命令把「工程质量」这一维变成可复现的读数：
+
+```bash
+go test -race -coverprofile=cover.out ./...
+go tool cover -func=cover.out
+go vet ./...
+```
+
+```text
+ok  github.com/me/svc/internal/order  1.834s  coverage: 85.7% of statements
+github.com/me/svc/internal/order/service.go:12:  Create   85.7%
+github.com/me/svc/internal/order/repo.go:9:     Save     92.3%
+github.com/me/svc/internal/order/price.go:20:   Get      60.0%
+total:                                        (statements)  78.4%
+```
+
+`ok` 后面依次是包路径、耗时与 `coverage: 85.7% of statements`，即该包按语句计的覆盖率；`-race` 若发现竞争会在这里额外打印 `WARNING: DATA RACE` 并让退出码非零。`go tool cover -func` 每行是 `文件:行`、函数名与该函数覆盖率，例如 `service.go:12` 的 `Create` 覆盖 85.7%，`price.go:20` 的 `Get` 只有 60.0%，一眼就能定位该补哪块测试；最后 `total: (statements) 78.4%` 是全项目按语句加权的总覆盖率，比包级数字更适合当趋势指标。`go vet ./...` 静默无输出即表示全部分析器通过，一旦有 `copylocks` 一类问题会直接列出文件与行号。把覆盖率、`-race`、`go vet` 三项一起接进 CI，就是第 4 节那条命令的完整版；但记住 78.4% 只说明语句被跑到过，不说明边界与并发路径正确。
+
+<SequenceDiagram title="一次可追溯的技术选型闭环" caption="约束、权重、试点、ADR、复盘五步让结论可解释也可修正" :actors='["约束","候选","加权矩阵","试点","ADR","复盘"]' :steps='[{"from":"约束","to":"候选","label":"列硬约束筛候选","note":"期限成本能力","kind":"call"},{"from":"候选","to":"加权矩阵","label":"送候选清单","note":"不先定结论","kind":"call"},{"from":"加权矩阵","to":"加权矩阵","label":"定权重算总分","note":"权重服务本次目标","kind":"self"},{"from":"加权矩阵","to":"试点","label":"选出最优候选","note":"分数最高者","kind":"call"},{"from":"试点","to":"试点","label":"小范围压测验证","note":"验最不确定项","kind":"self"},{"from":"试点","to":"ADR","label":"回写验证结果","note":"含试点数据","kind":"call"},{"from":"ADR","to":"ADR","label":"记结论与理由","note":"放弃理由更重要","kind":"self"},{"from":"ADR","to":"复盘","label":"归档供日后回看","note":"带背景与约束","kind":"call"},{"from":"复盘","to":"约束","label":"修正权重经验","note":"回流到下次选型","kind":"return"}]' />
+
+最后一条 `return` 是这套方法区别于「凭感觉选型」的地方：复盘得到的经验要回流成下一次的权重与约束，闭环才真的闭上，而不是每次都从头拍脑袋。
+
+| 维度 | 1 分（能上手） | 3 分（能独立） | 5 分（能带动他人） | 可验证证据 |
+| --- | --- | --- | --- | --- |
+| 语言与源码 | 会查标准库文档 | 能复现运行时行为 | 能定位并解释源码实现 | 源码笔记、可复现实验 |
+| 工程质量 | 会写单测 | 有 CI 与 p99 报告 | 能定质量门禁并推广 | 覆盖率、race、bench 门禁 |
+| 系统与架构 | 按模板搭模块 | 能独立拆边界 | 能主导绞杀者重构 | ADR、拆分方案、复盘 |
+| 影响力与协作 | 参与评审 | 能做内部分享 | 有开源贡献与对外输出 | PR、分享记录、issue |
+
+评分时刻意用「能上手 / 能独立 / 能带动他人」三档而不是连续分数，是为了逼自己给出行为证据：拿不出对应产物，就不该往高一档填。
+
+<Callout type="tip" title="源码阅读建议" text="从 testing/testing.go 的 T 与 B 两个类型读起，再看 cmd/cover 与 runtime/coverage 怎么配合生成 coverprofile，就能明白覆盖率数字从哪来；读 vet 时挑 copylocks 一个分析器跟着走一遍，比通读全部检查器更容易形成可迁移的阅读方法。" />
+
 ## 4. 工程实践
 把成长做成节奏：每周一条源码笔记，每月一次分享，每个项目留一条 ADR 与复盘；参与开源从修文档、补测试、报可复现 issue 开始，再逐步提交 PR。选型坚持「列约束、定权重、小步验证」，并把判断结果回写到权重经验里。
 

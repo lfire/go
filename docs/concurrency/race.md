@@ -145,6 +145,91 @@ func main() {
 
 <Callout type="tip" title="工程化建议" text="把 go test -race ./... 接进 CI。读报告抓 Read at 与 Previous write at 两段栈，定位哪两个 goroutine 缺同步。修复优先级：先用 channel 消除共享，再按不变式复杂度选 Mutex 或 atomic。" />
 
+### 再深一层：happens-before 的形式化、-race 的向量时钟与盲区
+
+官方内存模型文档（本机 `$GOROOT/doc/go_mem.html`）的定义是：数据竞争为「对同一内存位置的一次写与另一次读或写并发发生，且这些访问不全是对 `sync/atomic` 的原子访问」；`synchronized before` 是同步操作上的偏序——「若同步型读 r 观察到同步型写 w，则 w synchronized before r」；happens-before 是 `sequenced before`（单 goroutine 内的程序顺序）与 `synchronized before` 并集的传递闭包。文档还有一句最关键的承诺：无数据竞争的程序表现得像所有 goroutine 被复用到单处理器上，即 DRF-SC（data-race-free 程序顺序一致）。反之存在竞争时结果不受任何顺序约束：编译器可重排、CPU 可乱序、可见性无保证，`counter++` 少算只是最温和的后果。这也说明「这次跑对了」不能证明正确。
+
+`-race` 把这套判据变成了可执行的检测。开启后编译器在每次内存读写前后插入 `runtime.racewrite`/`raceread` 调用，运行时用影子内存为每个 8 字节应用内存维护若干向量时钟槽，每个 G 带自己的时钟；当一次访问发现同一地址上存在「至少一写、且向量时钟互不相序」的先前访问，就打印 `WARNING: DATA RACE`。报告给两段冲突栈（`Write at` / `Previous read at`）及创建点，读法是顺着栈找缺同步的访问。它是纯动态检测：只覆盖本次执行到的交错，没跑到的分支、cgo 与汇编访问会漏报；`GORACE="halt_on_error=1"` 可命中即停，`history_size` 调大保留更多历史。至于「误报」：严格说它不产生误报，报出的都是运行时观测到的真实竞争；所谓误报多半是「这次恰好跑对但代码仍有竞争」。真正的盲区是逻辑竞态：TOCTOU、死锁、goroutine 泄漏、跨服务时序，`-race` 一概不查。
+
+本讲给的 `publishBad` 是教科书级的「未同步发布」：写方 `data = 42; ready = true`，读方自旋等 `ready` 再读 `data`。`go` 语句只建立「main 在 go 之前的动作」到「goroutine 起点」的 happens-before，而 main 的自旋读与 goroutine 的 `ready = true` 之间没有任何同步边，向量时钟判为并发：可能永远看不到 true，也可能看到 true 却读到旧 `data`。`go test -race -run=TestPublish -v ./...` 让 channel 发布版本全绿；`SHOW_RACE=1 go test -race -run=TestPublishBadRace ./...` 则精确打印上述两段栈。生产里怀疑偶发计数不准，先把 `go test -race ./...` 接进 CI、配合 `go test -count=100` 放大交错，读报告定位变量后再决定用 channel 消除共享，还是按不变式复杂度选 Mutex 或 atomic；别只求报告消失，否则竞争常被从变量 A 挪到 B。
+
+```go
+package main
+
+import (
+	"os"
+	"sync"
+	"testing"
+)
+
+// 错误对照：用普通 bool 发布数据，写方与读方无 happens-before
+func publishBad() int {
+	var data int
+	var ready bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		data = 42
+		ready = true // 与读方的读无同步
+	}()
+	for i := 0; i < 1000 && !ready; i++ {
+	}
+	wg.Wait()
+	return data
+}
+
+// 正确：用 channel 发布，收发生成 happens-before
+func publishOK() int {
+	ready := make(chan int, 1)
+	go func() {
+		ready <- 42
+	}()
+	return <-ready
+}
+
+func TestPublish(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		if got := publishOK(); got != 42 {
+			t.Fatalf("期望 42，实际 %d", got)
+		}
+	}
+}
+
+// 反面实验：设 SHOW_RACE=1 并配合 -race，可看到 bool 发布的 DATA RACE
+func TestPublishBadRace(t *testing.T) {
+	if os.Getenv("SHOW_RACE") == "" {
+		t.Skip("反面实验：设 SHOW_RACE=1 并加 -race 运行")
+	}
+	_ = publishBad()
+}
+```
+
+```bash
+go test -race -run=TestPublish -v ./...                    # 正确发布：全绿
+SHOW_RACE=1 go test -race -run=TestPublishBadRace ./...      # 反面实验：打印两段冲突栈
+GORACE="halt_on_error=1" go test -race ./...                # 命中首个竞态即停，便于读栈
+```
+
+把各检测手段的「依据、能抓、不能抓」分开列：
+
+| 检测手段 | 依据 | 能抓 | 不能抓与边界 |
+| --- | --- | --- | --- |
+| `go test -race`（ThreadSanitizer） | 插桩加影子内存加向量时钟 | 运行时观测到的、无 happens-before 的冲突读写 | 未执行分支、cgo 与汇编访问、逻辑竞态、死锁、goroutine 泄漏 |
+| `go vet` | 静态分析 | copylocks、lostcancel、部分明显误用 | 绝大多数并发 bug，无运行时信息 |
+| `go test -count=100` 压力 | 放大交错概率 | 偶发结果错、漏关 channel 的表现 | 不报原因，可能仍复现不了 |
+| `runtime.NumGoroutine` 与 goleak | G 数量 | goroutine 泄漏 | 数据竞争、逻辑竞态 |
+| `go tool pprof -mutex` 与 block profile | 争用与阻塞采样 | 锁热点、阻塞时长 | 正确性，只给性能线索 |
+| 评审时明确「谁保护哪个变量」 | happens-before 设计 | 从源头消除共享 | 依赖规范落地执行 |
+
+下面这张时序图把 `publishBad` 里两步写与两步读的交错、以及检测器为何判为并发画出来：
+
+<SequenceDiagram title="未同步发布的竞态交错" caption="main 的自旋读与 writer 的 ready 写之间无同步边，向量时钟无序，检测器报 DATA RACE" :actors='["main","writer G","ready","data","检测器"]' :steps='[{"from":"main","to":"writer G","label":"go 启动","note":"HB 只到 goroutine 起点","kind":"call"},{"from":"writer G","to":"data","label":"写 42","note":"普通写非原子发布","kind":"call"},{"from":"writer G","to":"ready","label":"写 true","note":"与读无同步","kind":"call"},{"from":"main","to":"ready","label":"自旋读","note":"无锁检查","kind":"call"},{"from":"ready","to":"main","label":"读到 true","note":"两访问无排序","kind":"return"},{"from":"main","to":"data","label":"读 data","note":"可能仍是旧值","kind":"call"},{"from":"data","to":"main","label":"返回 0","note":"发布失败","kind":"return"},{"from":"检测器","to":"main","label":"DATA RACE","note":"向量时钟无序","kind":"async"}]' />
+
+<Predict no="49-3" q="对 publishBad（普通 bool 发布）跑 go test -race，最可能看到什么？" :options='["正常输出 42，无任何提示","WARNING: DATA RACE，指出 ready 的读写无同步","编译报错","fatal error: all goroutines are asleep"]' answer="1" output="WARNING: DATA RACE 及两段冲突调用栈" explain="main 的自旋读与 writer 的 ready=true 之间没有 happens-before，向量时钟判定二者并发；go test -race 会打印 Write at 与 Previous read at 两段栈。改成 channel 发布后收发建立同步，报告消失。" />
+
+<Quiz no="49-4" q="关于 -race 的『误报』与『漏报』，下面说法正确的是？" :options='["它会静态分析出所有潜在竞态，没有漏报","运行正确的访问被报出属于误报，应加抑制","它只在运行时观测到无排序的冲突访问才报，没跑到的分支与被碰巧掩盖的竞争会漏报","开启后应长期挂在进程里做线上监控"]' answer="2" explain="-race 基于本次执行的动态检测，报告的都是真实数据竞争而非误报；漏报来自未执行路径、cgo 与汇编访问以及有限的历史槽，逻辑竞态（检查后使用、死锁、泄漏）它本来就不查。开销数倍，只适合测试与 CI。" />
+
 ## 4. 工程实践
 线上数据竞争常伪装成「偶发计数不准」。怀疑时先用 -race 复跑，而不是加日志猜；race 构建改变时序，有的 bug 反而不出现，需配合压力多次运行。修复别只求「让它不报」，要把锁粒度、channel 所有权理清，否则可能把竞争从变量 A 挪到 B。团队规范应写明共享变量由谁保护。
 

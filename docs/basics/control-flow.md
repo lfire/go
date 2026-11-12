@@ -182,6 +182,92 @@ DONE:
 
 <Callout type="tip" title="格式即语法" text="else 必须紧跟 if 的右花括号，否则自动插入分号导致编译失败；这些由 gofmt 统一保证。" />
 
+为什么 Go 敢把三种循环压成一个 `for`？因为编译器眼里它们本就是同一套控制流：初始化、条件、循环体、后置语句四个块，缺哪块就留空，`for cond` 相当于初始化和后置为空，`for {}` 相当于条件恒为真。可用 `go build -gcflags=-S` 编译两段等价代码，会发现生成的跳转指令几乎一样，差别只在条件块是否为空。同理 `switch` 命中即结束也不是特例，而是把每个 `case` 编译成一段带隐式跳转的代码；想看它长什么样，`go vet` 会顺带报出 `unreachable code`——在 `goto` 之后或无限 `for` 之后写的语句，工具能直接替你查出来。想从语法层确认结构，可以 `go doc go/ast.IfStmt`、`go doc go/ast.ForStmt` 看抽象语法树的字段：`if` 的 `Init` 字段正是那条初始化语句，所以它的作用域被设计成覆盖整条 `if/else` 链，等价于编译器在外层悄悄包了一个块。
+
+真实踩坑里最高频的是分号：`else` 必须紧跟 `if` 的右花括号，另起一行时 Go 的自动分号插入会在 `}` 后补一个分号，`else` 就成了没有归属的语句，直接编译失败——`gofmt` 会强制把它拉回来，这也是「格式即语法」的由来。另一类坑更隐蔽：`for {}` 里漏写可达的 `break`，程序会占满一个 CPU 核，用 `top` 能看到进程 100%；这类死循环 `go vet` 不一定报得出来，只能靠循环条件会变化的自检。还有一个 C 转过来的习惯要戒：在 `case` 末尾习惯性写 `break`，Go 里它只会跳出包住 switch 的那层 `for`（如果有的话），并不会结束 switch——不写反而才是想要的。
+
+<FlowTimeline title="if 初始化语句的生命周期" :steps='[{"title":"初始化","desc":"n, err := 求值","tone":"blue"},{"title":"条件","desc":"err == nil ?","tone":"orange"},{"title":"分支体","desc":"n 与 err 都可见","tone":"green"},{"title":"链结束","desc":"变量随之失效","tone":"purple"}]' direction="horizontal" />
+
+把两条边界写成可运行的代码。第一段用 `strconv.Atoi` 配 `if` 初始化语句，展示错误分支里变量依然可见、出链即失效。
+
+```go
+package main
+
+import (
+	"fmt"
+	"strconv"
+)
+
+func main() {
+	// if 初始化语句最典型的用途：先取值和错误，再按错误分支
+	if n, err := strconv.Atoi("42"); err == nil {
+		fmt.Println("解析成功，n =", n)
+	} else {
+		fmt.Println("解析失败，n 取零值 =", n)
+	}
+
+	// 错误分支里 n、err 依然可见；出了整条链就失效
+	if n, err := strconv.Atoi("abc"); err != nil {
+		fmt.Println("非法输入被挡住，n =", n, "有错 =", err != nil)
+	}
+}
+```
+
+<OutputBox title="运行结果" output="解析成功，n = 42\n非法输入被挡住，n = 0 有错 = true" />
+
+第二段用带标签的 `break` 一次跳出两层循环，比 `goto` 更好读；同时把「没找到」当成明确结果返回，而不是把零值下标误当成命中，并验证 nil 输入不会 panic。
+
+```go
+package main
+
+import "fmt"
+
+// find 在二维表里找 target，返回行列与是否命中。
+// 用标签 break 一次跳出两层循环，比 goto 更清晰；
+// 没命中要靠第三个返回值明确区分，别把 0 行列当成功。
+func find(grid [][]int, target int) (int, int, bool) {
+	ri, rj := -1, -1
+FOUND:
+	for i, row := range grid {
+		for j, v := range row {
+			if v == target {
+				ri, rj = i, j
+				break FOUND
+			}
+		}
+	}
+	if ri == -1 {
+		return 0, 0, false
+	}
+	return ri, rj, true
+}
+
+func main() {
+	grid := [][]int{{1, 2}, {3, 4}}
+	if i, j, ok := find(grid, 4); ok {
+		fmt.Println("找到于", i, j)
+	}
+	if _, _, ok := find(grid, 99); !ok {
+		fmt.Println("没找到 99，别把零值下标当成命中")
+	}
+	if _, _, ok := find(nil, 1); !ok { // nil 表格也安全
+		fmt.Println("nil 输入也安全")
+	}
+}
+```
+
+<OutputBox title="运行结果" output="找到于 1 1\n没找到 99，别把零值下标当成命中\nnil 输入也安全" />
+
+| 语句 | 作用范围 | 常见坑 |
+| --- | --- | --- |
+| `break` | 跳出最近一层 for / switch / select | 嵌套循环里只跳一层，跳多层得用标签 |
+| `continue` | 跳到最近一层 for 的下一轮 | 写在 switch 里不会跳出 for，需要标签 |
+| `fallthrough` | 进入紧邻的下一个 case | 不判断下一 case 条件，也不能放最后 |
+| `goto Label` | 跳到本函数内的标签 | 不能跳过变量声明、不能跨函数 |
+| `break Label` | 跳出标签所指的那一层循环 | 标签必须紧贴被跳的循环 |
+
+<Predict no="14-3" q="用 if 初始化语句解析一个非法数字字符串，err 不为 nil 时进入对应分支，此时同名变量 n 的值和可见性是？" :options='["n 为 0 且只在链内可见","n 为解析前的值且函数内都可见","编译失败，err 分支里不能用 n","n 为 0 且函数内都可见"]' answer="0" output="n = 0，且 n 与 err 只在整条 if/else 链内可见" explain="Atoi 失败时返回 int 零值 0；初始化语句声明的 n、err 作用域覆盖整条链，离开右花括号即失效，这正是它不污染外层的价值。" />
+
 ## 动手练一练
 
 <Exercise title="跳过偶数求和" task="用 for 与 continue 求 1 到 10 中所有奇数的和并打印。" :hints='["用一个 sum 累加","偶数时 continue"]' solution="sum := 0\nfor _, i := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {\n    if i%2 == 0 {\n        continue\n    }\n    sum += i\n}\nfmt.Println(sum)" explain="偶数被跳过，只累加 1、3、5、7、9，输出 25。" />

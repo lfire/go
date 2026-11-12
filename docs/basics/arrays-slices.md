@@ -126,6 +126,102 @@ func main() {
 
 <Callout type="tip" title="nil 切片可直接用" text="var s []int 的 len 与 cap 都是 0，可安全 append 与 range；只有 nil map 需要先 make。" />
 
+把镜头再推近一层，先回答「描述符到底便宜在哪」。切片变量在 64 位机器上只占三个机器字：指向底层数组的指针、`len`、`cap`，用 `unsafe.Sizeof([]int{})` 量出来恒为 24 字节，和里面装了多少元素毫无关系；`[1024]int` 却是 8192 字节，赋值或传参一次就是整块 8KB 拷贝。这就是「数组是值、切片是描述符」在机器层面的依据，也解释了标准库里几乎看不到拿大数组当参数的函数。写十几行 `main` 打印两个 `unsafe.Sizeof`，再对传数组的函数跑 `go build -gcflags=-m`，输出里的 `escapes to heap` 就是逃逸分析留下的现场证据。
+
+再说版本差异。Go 1.21 才把 `slices` 包收进标准库，带来 `Clone`、`Contains`、`Sort` 等一批泛型函数；在此之前，克隆切片得自己 `make` 加 `copy`。所以读老项目先翻 `go.mod` 里的 `go` 指令：`slices` 包要求 1.21 及以上。`slices.Clone` 还顺手固定了 nil 语义——传 nil 得 nil，传非 nil 的空切片得非 nil 的空切片，比手写 `make` 更不容易混淆「nil」与「空」。至于 `append` 究竟何时换数组，由 `runtime/slice.go` 里的 `growslice` 决定，新容量怎么算属于 L3 话题；本讲只需记住那条使用层结论：因为它可能返回一块全新数组，`append` 的结果必须接住。
+
+真实踩坑案例来自日志和网络缓冲：有人写 `return buf[:n]`，把一个只用到前 64 字节的子切片返回出去，而 `buf` 是从池里取出的 1MB 大数组。子切片仍引用整块底层数组，GC 便不敢回收那 1MB，长生命周期地挂着这个返回值就等于把整块内存钉住。修法很朴素：`small := make([]byte, n); copy(small, buf[:n]); return small`，用一次拷贝换回可回收。可以用 `runtime.ReadMemStats` 前后对比 `HeapInuse` 验证：隔离前反复调用内存居高不下，隔离后明显回落。
+
+<ConceptDiagram type="slice-grow" title="append 的两条分支" caption="cap 够用时就地写回共享数组，不够时分配新数组并复制，返回新的描述符" />
+
+下面两段代码把上面几条边界落到可运行的形式。第一段演示 `copy` 会静默截断、越界要显式报错、以及 nil 输入如何安全返回。
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// clonePrefix 复制 src 的前 n 个元素，返回互不影响的独立切片。
+// 三个真实边界：n 越界要报错、copy 可能静默截断、nil 输入要安全返回。
+func clonePrefix(src []int, n int) ([]int, error) {
+	if n < 0 || n > len(src) {
+		return nil, fmt.Errorf("前缀长度 %d 超出 0~%d", n, len(src))
+	}
+	if src == nil {
+		return nil, nil // nil 进，nil 出，调用方 range/append 都安全
+	}
+	out := make([]int, n)
+	if copied := copy(out, src[:n]); copied != n {
+		return nil, errors.New("复制数量不足")
+	}
+	return out, nil
+}
+
+func main() {
+	ok, err := clonePrefix([]int{1, 2, 3}, 2)
+	fmt.Println("克隆 =", ok, "出错 =", err != nil)
+	ok[0] = 99
+	fmt.Println("改克隆 =", ok)
+
+	_, err = clonePrefix([]int{1}, 5)
+	fmt.Println("越界提示 =", err)
+
+	empty, err := clonePrefix(nil, 0)
+	fmt.Println("nil 输入得到 =", empty, "出错 =", err != nil, "append 后 =", append(empty, 7))
+
+	// copy 只搬 min(len(dst), len(src)) 个，dst 偏小会静默截断
+	small := make([]int, 2)
+	n := copy(small, []int{10, 20, 30})
+	fmt.Println("只搬了", n, "个 =", small)
+}
+```
+
+<OutputBox title="运行结果" output="克隆 = [1 2] 出错 = false\n改克隆 = [99 2]\n越界提示 = 前缀长度 5 超出 0~1\nnil 输入得到 = [] 出错 = false append 后 = [7]\n只搬了 2 个 = [10 20]" />
+
+第二段对比 Go 1.21 才进标准库的 `slices` 包：用 `Clone` 与 `Contains` 替掉手写循环，并确认它对 nil 与空切片的处理。
+
+```go
+package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+func main() {
+	// nil 切片
+	var nilSlice []int
+	// 非 nil 的空切片
+	emptySlice := make([]int, 0)
+
+	c1 := slices.Clone(nilSlice)
+	c2 := slices.Clone(emptySlice)
+	fmt.Println("克隆 nil 后仍是 nil =", c1 == nil)
+	fmt.Println("克隆空切片后仍是 nil =", c2 == nil)
+
+	src := []int{1, 2, 3}
+	c3 := slices.Clone(src)
+	c3[0] = 99 // 改副本，原切片不受影响
+	fmt.Println("c3 =", c3, "src =", src)
+	fmt.Println("包含 2 =", slices.Contains(src, 2))
+}
+```
+
+<OutputBox title="运行结果" output="克隆 nil 后仍是 nil = true\n克隆空切片后仍是 nil = false\nc3 = [99 2 3] src = [1 2 3]\n包含 2 = true" />
+
+| 观察项 | nil 切片 `var s []int` | 空切片 `make([]int, 0)` |
+| --- | --- | --- |
+| `len(s)` / `cap(s)` | 0 / 0 | 0 / 0 |
+| `s == nil` | true | false |
+| 直接 `range s` | 安全，循环零次 | 安全，循环零次 |
+| 直接 `append(s, 1)` | 安全，会分配 | 安全，会分配 |
+| `slices.Clone(s) == nil` | true | false |
+
+<Predict no="13-3" q="dst := make([]int, 2) 后 n := copy(dst, []int{10,20,30})，打印 n 与 dst 的结果是？" :options='["3 [10 20 30]","2 [10 20]","2 [10 20 0]","编译失败"]' answer="1" output="2 [10 20]" explain="copy 只搬 min(len(dst), len(src)) 个元素，dst 只有两格，第三个数被静默丢弃；所以要检查返回值、别假设全量复制。" />
+
 ## 动手练一练
 
 <Exercise title="安全截取前缀" task="由 src := []int{1, 2, 3, 4, 5} 造出长度 3、内容相同但互不影响的 dst，改 dst[0] 为 9 后打印两者。" :hints='["别用 src[0:3]，仍共享数组","make 分配新切片，再 copy"]' solution="dst := make([]int, 3)\ncopy(dst, src)\ndst[0] = 9\nfmt.Println(src, dst)" explain="make 分配独立数组，copy 只搬元素，改 dst 不回写 src。输出 [1 2 3 4 5] [9 2 3]。" />

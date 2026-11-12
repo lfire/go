@@ -143,6 +143,44 @@ findRunnable 的真实顺序比上面四行更长：它先照顾 trace reader �
 
 <Callout type="warn" title="GOMAXPROCS 的默认值会随版本变化" text="Go 1.23 默认取 NumCPU；后续版本在容器环境里会参考 CPU limit 做自动调整，可用 GODEBUG 相关开关关闭。不要凭记忆下结论，一律用 runtime.GOMAXPROCS(0) 实测。另外，把值调到远大于物理核只会增加切换开销。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+把 GMP 落到代码，主线在 `src/runtime/proc.go` 的 `func schedule()`：它是一个带 `top:` 标签的死循环，每次先 `findRunnable()` 拿到一个可运行的 `*g`，交给 `execute(gp, inheritTime)` 切到该 G 的栈，直到它主动让出、被抢占或结束才回到 `top`。`findRunnable` 的返回签名是 `(gp *g, inheritTime, tryWakeP bool)`，第一个返回值是目标 G，后两个分别决定「是否继承上一轮剩余时间片」与「是否顺便唤醒一个空闲 P」。它内部的顺序按代价从低到高排：先照顾 GC worker 与 trace reader，再 `runqget(pp)` 查本地队列（命中 `runnext` 几乎零成本），接着 `globrunqget(pp, 0)` 取加锁的全局队列，然后查 `netpoll` 就绪的网络 G，最后才 `runqsteal` 从随机另一个 P 偷一半。越靠前的路径越局部、越不加锁，这正是「先本地、再全局、后窃取」的工程理由。
+
+`src/runtime/runtime2.go` 里的几个字段决定了 sysmon 怎么判断「谁卡住了」：`p.runqhead`、`p.runqtail` 与 `runq [256]guintptr` 构成无锁环形本地队列，`p.runnext` 是优先继承时间片的 G；`schedt.runq` 是加锁的全局队列；`p.sysmontick` 记录上次观察时的 `schedtick` 与 `syscalltick`。`sysmon()` 是独立于 P 的监控 M，它循环调用 `retake()`：若某个 P 的 `schedtick` 长时间没变，说明有 G 跑超过 `forcePreemptNS`（10ms），就 `preemptone` 把该 G 的 `g.stackguard0` 置成 `stackPreempt` 并置 `g.preempt`，由 `asyncPreempt` 在下一个安全点插入调用把它换下；若 P 卡在系统调用里，则 `handoffp` 把 P 转交给别的 M。一个可复现的观察实验：把第 2 节的紧循环程序先正常跑一次，再用 `GODEBUG=asyncpreemptoff=1` 跑一次，后者在 `GOMAXPROCS(1)` 下 main 可能长期拿不到 CPU，反过来就证明异步抢占确实由 sysmon 驱动；再配合 `GODEBUG=schedtrace=1000,scheddetail=1` 观察 `runqueue` 在 600 个 G 同时就绪时的峰值。
+
+适用边界要写清：以上函数名与字段以 Go 1.21~1.23 为准，行号与内部顺序每版都可能调整；10ms 是触发抢占检查的上限而非「每个 G 恰好跑 10ms」，实际换下时刻取决于安全点密度；Go 1.14 之前纯计算循环无法被异步抢占，结论只对 1.14 及以后成立；容器环境里 `GOMAXPROCS` 默认值在不同版本会参考 CPU limit，一律以 `runtime.GOMAXPROCS(0)` 实测为准；`schedtrace` 是周期采样，短于采样间隔的抖动会被抹平，要精确延迟得用 `go tool trace`。
+
+一条命令就能把队列状态从猜测变成读数：
+
+```bash
+GODEBUG=schedtrace=1000,scheddetail=1 ./myserver 2> sched.log
+```
+
+```text
+SCHED 1000ms: gomaxprocs=8 idleprocs=2 threads=10 spinningthreads=1 idlethreads=3 runqueue=12 gcwaiting=0 nmidlelocked=0 stopwait=0 sysmonwait=0
+  P0: status=1 schedtick=8421 syscalltick=312 m=3 runqsize=1 gfreecnt=2 timerslen=1
+  P1: status=0 schedtick=8102 syscalltick=290 m=-1 runqsize=0 gfreecnt=5 timerslen=0
+```
+
+首行 `SCHED 1000ms` 是采样周期，由 `schedtrace=1000` 指定；`gomaxprocs` 是 P 总数，`idleprocs` 是空闲 P 数，`threads` 是 M 总数（含 sysmon），`spinningthreads` 是正在自旋找活的 M 数，`idlethreads` 是休眠 M 数，`runqueue` 是全局队列里积压的 G 数——第 2 节 600 个 G 同时就绪时，这个字段就会明显大于 0，正是本地队列 256 装不下后溢出的证据。`gcwaiting`、`stopwait` 与 `sysmonwait` 反映 GC 与 sysmon 的等待状态。`scheddetail=1` 才有的 `P0` 行里，`status=1` 表示 `_Prunning`（0 是 `_Pidle`），`schedtick` 是该 P 累计调度次数，`syscalltick` 是系统调用次数，`runqsize` 是本地队列长度，`gfreecnt` 是空闲 G 缓存数，`timerslen` 是定时器数，`m=-1` 表示这个空闲 P 当前没绑定 M。排查时若 `runqueue` 持续偏高而 `idleprocs` 也高，多半是唤醒不及时；若 `spinningthreads` 长期为 0 且各 `runqsize` 都满，则说明 P 已经忙不过来。
+
+<SequenceDiagram title="findRunnable 一次取 G 的调用链" caption="演示本地与全局都未命中、最终靠窃取拿到 G 的路径" :actors='["schedule","findRunnable","runqget","globrunqget","runqsteal","execute"]' :steps='[{"from":"schedule","to":"findRunnable","label":"请求下一个 G","note":"从 top 标签进入","kind":"call"},{"from":"findRunnable","to":"runqget","label":"查本地队列","note":"优先看 runnext","kind":"call"},{"from":"runqget","to":"findRunnable","label":"未命中返回","note":"本地队列为空","kind":"return"},{"from":"findRunnable","to":"globrunqget","label":"取全局队列","note":"需加 sched.lock","kind":"call"},{"from":"globrunqget","to":"findRunnable","label":"仍为空返回","note":"全局无就绪 G","kind":"return"},{"from":"findRunnable","to":"runqsteal","label":"随机窃取","note":"挑另一个 P","kind":"call"},{"from":"runqsteal","to":"findRunnable","label":"偷到一半 G","note":"保持各 P 忙碌","kind":"return"},{"from":"findRunnable","to":"schedule","label":"返回可运行 G","note":"附带 inheritTime","kind":"return"},{"from":"schedule","to":"execute","label":"切栈执行","note":"gogo 装 g.sched","kind":"call"},{"from":"execute","to":"schedule","label":"时间片用尽","note":"回到 top 重选","kind":"return"}]' />
+
+图中特意选了「本地、全局都没中」这条最坏路径，好把三层取 G 的代价差异一次看清：越往后越要加锁或跨 P，所以 `runqget` 必须排在最前。
+
+| 观测手段 | 能看到什么 | 关键字段或视图 | 开销与采样窗口 |
+| --- | --- | --- | --- |
+| `GODEBUG=schedtrace=1000` | 每秒 P、M、队列的全局快照 | `runqueue`、`idleprocs`、`spinningthreads` | 低，可长窗口常开 |
+| `scheddetail=1` | 每个 P 的本地队列与调度计数 | `P0` 行的 `runqsize`、`schedtick` | 输出量大，短窗口 |
+| `go tool trace` | 微秒级调度延迟与 P 占用 | Proc 视图、Synchronization | 中，采集几十秒 |
+| `runtime/trace.Start` | 程序内自定义区间的精确埋点 | 用户区域与事件 | 中，需代码配合 |
+| `GODEBUG=asyncpreemptoff=1` | 关掉异步抢占作对照 | 紧循环是否卡住 main | 仅用于本地实验 |
+
+五项手段从粗到细：`schedtrace` 常开看趋势，`go tool trace` 短期抓长尾，`asyncpreemptoff` 只在验证抢占机制时临时使用，别带到线上。
+
+<Callout type="tip" title="源码阅读建议" text="读 proc.go 先定位 schedule 的 top 标签与 findRunnable 的返回签名，再顺着 runqget、globrunqget、runqsteal 三个函数看队列；sysmon 单独最后读，重点看 retake 里 schedtick 与 syscalltick 怎么比对，别和取 G 主循环混在一起。" />
+
 ## 4. 工程实践
 线上出现「CPU 没跑满但延迟高」时，先看是不是 P 闲置或 G 排队。`GODEBUG=schedtrace=1000,scheddetail=1` 每秒打印一次各 P 的 `runq` 长度、全局 `runqueue` 与 `nmspinning`；若要精确到微秒级的调度延迟，再用 `runtime/trace` 采集后交给 `go tool trace` 看 Proc 视图。这两者都是只读观测，采样窗口控制在几十秒内即可。
 

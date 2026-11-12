@@ -133,6 +133,27 @@ func main() {
 
 <Callout type="warn" title="易错点：把 lint 当审美警察" text="一上来启用全部 linter，再靠满屏的 nolint 注释压掉告警，会让真正的错误淹没在噪音里。正确做法是先开 errcheck、govet、staticcheck、goimports 少数几条，全绿之后再按痛点逐条加。" />
 
+### 深入一步：规则集、误报与可复现实验
+
+以下以 golangci-lint v1.59~v1.61 为准：它是团队用得最多的 v1 分支，配置用 `linters.disable-all: true` 加 `enable` 白名单；v2（2024 年起）把这套改成 `linters.default: none` 并把 `linters-settings` 扁平化，升级时必须迁移，别直接套旧文件。规则大致分四层：正确性问题（errcheck、govet、staticcheck）优先全开且不放宽，风格一致性（goimports、revive）按团队约定配参数，性能与坏味道（ineffassign、gocritic）逐步加，实验性规则先观察再启用。
+
+误报要分类处理，不能一律 `//nolint`。真 bug 就改代码；风格争议改规则参数，例如 revive 的 `var-naming` 允许特定缩写、goimports 用 `local-prefixes` 指定本仓库前缀；第三方生成代码或历史遗留按 `issues.exclude-rules` 的 path 精确排除；确实要压制时写成 `//nolint:errcheck // 关闭只读文件，失败可忽略`，并开启 `nolintlint` 要求带具体 linter 名与理由，防止一行 nolint 压掉全部检查。
+
+可复现实验有四条：`golangci-lint linters` 列出本机可用规则，`golangci-lint run --enable-only=errcheck ./...` 单跑一条看噪声，`golangci-lint config verify`（v1.57 起）校验配置是否合法，`golangci-lint run --new-from-rev=HEAD~1 ./...` 只对相对上一提交新增的行报问题，这是给存量老仓库渐进引入 lint 最有效的手段。生产里让本地与 CI 执行同一条命令、同一个版本，用 `--timeout` 和缓存目录 `~/.cache/golangci-lint` 控制耗时。常见误用是：nolint 不带理由、本地与 CI 版本不一致导致结果漂移、把格式检查与单测混在一个 step 难以定位、以及忘了 `run.tests: true` 漏掉测试文件。
+
+再补两条落地经验。`//nolint` 的作用域是所在行或紧邻的代码块，写成 `//nolint:errcheck` 只压这一条规则，裸 `//nolint` 会把整行所有告警一起吞掉，所以 `nolintlint` 的 `require-specific` 必须开。`issues.exclude-rules` 的 `path` 是正则，按目录排除生成代码时锚定前缀比宽泛匹配安全；`golangci-lint run --fix` 能自动修 goimports 一类问题，但别放进 CI 让它改文件，只用于本地批量整理。`run.skip-dirs` 跳过整个目录，`issues.exclude-dirs` 只压制该目录的告警，二者语义不同别混用。把 `--new-from-rev` 与 `only-new-issues` 配合，可让老仓库 lint 平滑落地。
+
+| 规则 | 负责检查 | 常见误报 / 噪声 | 推荐处理 |
+| --- | --- | --- | --- |
+| errcheck | 被丢弃的 error | `defer f.Close()` 未检查 | 显式处理或带理由的 nolint |
+| govet | Printf 动词、copylocks | 自定义 printf 包装不认识 | 用 printf.funcs 注册 |
+| staticcheck | 弃用 API、无效分支 | SA1019 对旧依赖告警 | 升级依赖或按路径排除 |
+| revive | 命名、导出注释 | 缩写与注释风格争议 | 配参数，不逐行压制 |
+| goimports | import 增删分组 | 与本地前缀冲突 | 设 local-prefixes |
+| ineffassign | 无效赋值 | 噪声极少 | 直接修 |
+
+<SequenceDiagram title="一次 PR 的 CI 检查链" caption="格式、静态检查、lint、单测逐道过关，结果回写后才允许合并" :actors='["开发者","GitHub","Actions","gofmt/vet","golangci-lint","go test"]' :steps='[{"from":"开发者","to":"GitHub","label":"git push 或开 PR","kind":"call"},{"from":"GitHub","to":"Actions","label":"触发 workflow","kind":"call"},{"from":"Actions","to":"gofmt/vet","label":"跑格式与 vet","kind":"call"},{"from":"gofmt/vet","to":"Actions","label":"返回结果","kind":"return"},{"from":"Actions","to":"golangci-lint","label":"跑规则集","kind":"call"},{"from":"golangci-lint","to":"golangci-lint","label":"汇总各规则告警","kind":"self"},{"from":"golangci-lint","to":"Actions","label":"报告问题","kind":"return"},{"from":"Actions","to":"go test","label":"跑单测与竞态","kind":"call"},{"from":"go test","to":"Actions","label":"通过","kind":"return"},{"from":"Actions","to":"GitHub","label":"回写检查状态","kind":"async"},{"from":"GitHub","to":"开发者","label":"允许或阻断合并","kind":"return"}]' />
+
 ## 4. 工程实践
 
 规范只有在 CI 里强制才成立。下面是一份克制的 `.golangci.yml`：只开必要规则，并允许测试文件里放宽 errcheck。
@@ -177,6 +198,128 @@ issues:
 <Compare title="靠评审，还是靠工具" :panels='[{"label":"写法 A · 人肉保证","code":"// 评审里反复争论缩进\nf, _ := os.Open(path)\n// 错误被丢弃，线上静默失败","note":"风格靠记忆，错误靠自觉，问题往往到线上才暴露"},{"label":"写法 B · 工具 + CI","code":"f, err := os.Open(path)\nif err != nil {\n    return err\n}\ndefer f.Close()","note":"errcheck 卡住丢弃，gofmt 统一排版，合入前必过"}]' />
 
 `test -z "$(gofmt -l .)"` 是常被忽视的一招：`gofmt -l` 会列出所有未格式化的文件，全部合规时输出为空，于是这条命令天然成为一道断言。注意 Go 1.22 起循环变量语义有变化，staticcheck 等工具对旧版本与新版本的提示会不同，升级工具链时最好连 linter 版本一起锁定，避免 CI 结果突然漂移。
+
+### 一份可直接运行的配置与 CI 接入
+
+下面这份配置比入门版多了 printf 注册、nolint 约束与生成代码排除。
+
+```yaml
+# .golangci.yml（golangci-lint v1.59+，保存后可直接 golangci-lint run）
+run:
+  timeout: 5m
+  tests: true
+  go: '1.22'
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - goimports
+    - revive
+    - nolintlint
+linters-settings:
+  govet:
+    settings:
+      printf:
+        funcs:
+          - logf
+  errcheck:
+    check-type-assertions: true
+  goimports:
+    local-prefixes: github.com/your-org/your-repo
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+    - path: ^internal/generated/
+      linters:
+        - revive
+```
+
+```yaml
+# .github/workflows/lint.yml（完整可运行）
+name: lint
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59.1
+          args: --timeout 5m
+      - name: 单测与竞态
+        run: go test -race ./...
+```
+
+```bash
+# 本地与 CI 锁定同一版本、执行同一条命令
+GOLANGCI_LINT_VERSION=v1.59.1
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@$GOLANGCI_LINT_VERSION
+golangci-lint config verify                     # 校验 .golangci.yml 是否合法
+golangci-lint run --timeout 5m ./...            # 与 CI 完全一致
+golangci-lint run --new-from-rev=HEAD~1 ./...   # 存量仓库只卡新增行
+```
+
+用一段故意留隐患的代码验证门禁：它能编译，但 `defer f.Close()` 没检查返回值，`logf` 又是 vet 默认不认识的 printf 包装。
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+// logf 是自定义的 printf-like 包装，go vet 默认不认识它
+func logf(format string, args ...any) {
+	fmt.Printf("[app] "+format+"\n", args...)
+}
+
+func readConfig(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // errcheck 会关注 Close 的错误是否被忽略
+	logf("opened %s", path)
+	return nil
+}
+
+func main() {
+	if err := readConfig("config.yaml"); err != nil {
+		logf("config error: %v", err)
+	}
+}
+```
+
+```bash
+go vet -printf.funcs=logf ./...
+golangci-lint run --enable-only=errcheck ./...
+```
+
+<OutputBox title="golangci-lint run 的真实告警" output="main.go:18:2: Error return value of f.Close is not checked (errcheck)" note="文件:行:列 + linter 名 + 消息，足够定位。" />
+
+告警行按 `文件:行:列` 定位，括号里的 `errcheck` 是命中的 linter 名；`--enable-only` 可单独复现一条规则。三类误报按上表分流：真 bug 就写成 `if err := f.Close(); err != nil { return err }`；只读文件关闭可忽略时用带理由的 `//nolint:errcheck`，由 `nolintlint` 卡住无理由压制；自定义 `logf` 交给 govet 的 `printf.funcs` 注册，而非关掉整条规则。
+
+<Quiz no="51-3" q="给存量老仓库首次接入 lint，哪条命令能只检查新增代码？" :options='["run --fast","run --new-from-rev=HEAD~1","run --disable-all","run --fix"]' answer="1" explain="--new-from-rev 只报告相对基准提交新增行的问题，让老代码先不阻塞合入；--fast 只减耗时、--fix 自动修、--disable-all 关掉全部规则，都不解决存量噪声。" />
 
 ## 动手练一练
 

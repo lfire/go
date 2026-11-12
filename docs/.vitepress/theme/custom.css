@@ -120,13 +120,13 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 }
 .vp-doc hr { border-color: var(--go-line); }
 
-/* 表格：撑满正文宽度，不出现横向滚动条，超宽内容自动换行 */
+/* 表格：窄表自适应铺满；宽表由 optimizeTables() 包一层横向滚动容器，
+   按各列理想宽度保留可读列宽，而不是把内容挤成一列列竖排文字。 */
 .vp-doc table {
   display: table;
   width: 100%;
   table-layout: auto;
   border-collapse: collapse;
-  overflow: visible;
   margin: 1.25rem 0;
   border-radius: 10px;
   font-size: 14px;
@@ -139,22 +139,71 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
   line-height: 1.7;
   hyphens: auto;
 }
-/* 短内容列：由 optimizeTables() 按列长自动标注，优先保证不换行；
-   内容多的列保持正常换行，吃剩余宽度。 */
+/* 短内容列：由 optimizeTables() 按列长自动标注，优先保证不换行 */
 .vp-doc :is(th, td).go-nowrap {
   white-space: nowrap;
   overflow-wrap: normal;
   word-break: normal;
 }
-/* 极窄屏空间不足：固定列宽 + 紧凑排版，让多列表格靠换行容纳内容，
-   而不是撑出容器或出现横向滚动条（五条路径表有 6 列，最考验这一点）。 */
+
+/* ---- 宽表横向滚动容器 ---- */
+.go-table-frame { position: relative; margin: 1.25rem 0; }
+.go-table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--go-line);
+  border-radius: 12px;
+  background: var(--go-surface);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--go-brand) 55%, transparent) transparent;
+}
+.go-table-scroll::-webkit-scrollbar { height: 10px; }
+.go-table-scroll::-webkit-scrollbar-track { background: transparent; }
+.go-table-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--go-brand) 45%, transparent);
+  border: 2px solid var(--go-surface);
+  border-radius: 99px;
+}
+.go-table-scroll::-webkit-scrollbar-thumb:hover { background: var(--go-brand); }
+.go-table-scroll > table { margin: 0 !important; border-radius: 0 !important; }
+.go-table-scroll th, .go-table-scroll td { padding: 9px 14px; }
+/* 右侧渐隐：提示右边还有内容，滚到尽头自动消失 */
+.go-table-frame.is-scrollable:not(.at-end)::after {
+  content: '';
+  position: absolute; right: 1px; top: 1px; bottom: 11px; width: 54px;
+  background: linear-gradient(90deg, transparent, var(--go-surface));
+  border-radius: 0 12px 0 0;
+  pointer-events: none;
+  z-index: 3;
+}
+/* 滚动时固定首列，仍能对上「这一行是谁」 */
+.go-table-frame.is-scrollable .go-table-scroll th:first-child,
+.go-table-frame.is-scrollable .go-table-scroll td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--go-surface);
+  box-shadow: 1px 0 0 var(--go-line);
+}
+.go-table-frame.is-scrollable .go-table-scroll th:first-child {
+  background: var(--go-soft);
+  z-index: 4;
+}
+.go-table-tip {
+  display: none;
+  margin-top: .4rem;
+  font-size: 11.5px;
+  color: var(--go-muted);
+  text-align: right;
+}
+.go-table-frame.is-scrollable .go-table-tip { display: block; }
+.go-table-tip span { color: var(--go-brand); font-weight: 700; margin-right: .25rem; }
+
 @media (max-width: 640px) {
-  .vp-doc table { table-layout: fixed; }
-  .vp-doc th, .vp-doc td { padding: 6px 6px; font-size: 12px; }
-  .vp-doc :is(th, td).go-nowrap {
-    white-space: normal;
-    overflow-wrap: break-word;
-  }
+  .go-table-scroll th, .go-table-scroll td { padding: 7px 11px; font-size: 12.5px; }
+  .go-table-frame.is-scrollable::after { width: 34px; }
 }
 .vp-doc th { background: var(--go-soft); font-weight: 700; }
 .vp-doc :not(pre) > code { overflow-wrap: break-word; word-break: normal; }
@@ -339,7 +388,7 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
   text-transform: uppercase; color: var(--go-muted);
 }
 .go-codebar-actions { display: inline-flex; align-items: center; gap: 6px; }
-.go-run, .go-copy {
+.go-run, .go-copy, .go-fold {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   height: 24px; padding: 0 9px;
   background: var(--go-surface); border: 1px solid var(--go-line);
@@ -349,11 +398,79 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
   cursor: pointer; transition: all .16s ease;
 }
 .go-copy { width: 28px; padding: 0; }
-.go-run:hover, .go-copy:hover {
+.go-run:hover, .go-copy:hover, .go-fold:hover {
   color: var(--go-brand); border-color: var(--go-brand); background: var(--go-brand-soft);
 }
 .go-copy.done {
   color: var(--go-green); border-color: var(--go-green); background: var(--go-green-soft);
+}
+.go-foldable.is-collapsed .go-fold {
+  color: var(--go-brand); border-color: var(--go-brand); background: var(--go-brand-soft);
+}
+
+/* ---- 代码折叠：折叠态保留前约 10 行，底部渐隐 + 展开全部 ---- */
+.go-foldable { position: relative; }
+.go-foldable.is-collapsed pre {
+  max-height: 15rem;
+  overflow: hidden;
+}
+.go-foldable.is-collapsed::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: 0; height: 5.5rem;
+  background: linear-gradient(180deg, transparent, var(--vp-code-block-bg));
+  pointer-events: none;
+  z-index: 3;
+}
+.go-fold-bar {
+  display: none;
+  position: absolute; left: 50%; bottom: .8rem; transform: translateX(-50%);
+  z-index: 4;
+  align-items: center; gap: .4rem;
+  padding: 5px 14px;
+  border: 1px solid var(--go-brand); border-radius: 99px;
+  background: var(--go-surface); color: var(--go-brand);
+  font: 700 12px/1.4 var(--vp-font-family-base);
+  white-space: nowrap; cursor: pointer;
+  box-shadow: var(--go-shadow);
+}
+.go-foldable.is-collapsed .go-fold-bar { display: inline-flex; }
+.go-fold-bar:hover { background: var(--go-brand-soft); }
+
+/* ---- 代码内折叠：按结构收起函数体 / 结构体 / 缩进块 ----
+   所有行统一留出左侧手柄位，代码文本对齐不受影响；手柄是空按钮，
+   省略标记用伪元素，二者都不进 textContent，复制仍拿到完整源码。 */
+.go-hidden-line { display: none !important; }
+.go-inline-foldable .line { position: relative; padding-left: 1.3rem; }
+.go-line-fold {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; padding: 0;
+  border: 0; border-radius: 4px;
+  background: transparent; color: var(--go-muted);
+  cursor: pointer; font: inherit; opacity: .42;
+  transition: opacity .15s ease, color .15s ease, background .15s ease;
+}
+.go-line-fold::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+}
+.go-line-fold.is-folded::before {
+  border-left: 5px solid currentColor; border-right: 0;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+}
+.go-line-fold:hover, .go-line-fold:focus-visible {
+  opacity: 1; color: var(--go-brand); background: var(--go-brand-soft); outline: none;
+}
+.go-line-folded::after {
+  content: '⋯ ' attr(data-folded-lines) ' 行';
+  display: inline-block;
+  margin-left: .7rem; padding: 0 7px;
+  border: 1px dashed var(--go-line); border-radius: 99px;
+  background: var(--go-soft); color: var(--go-muted);
+  font: 11px/1.6 var(--vp-font-family-base); font-style: normal;
+  user-select: none; vertical-align: middle;
 }
 /* 工具条接管后，隐藏 VitePress 原生的复制按钮与语言小字，避免重复、错位 */
 .vp-doc div.go-enhanced > button.copy,
@@ -696,9 +813,10 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
   .go-badge { padding: 2px 5px; font-size: 10.5px; }
 }
 @media (max-width: 560px) {
-  .go-run span { display: none; }
-  .go-run { width: 28px; padding: 0; }
+  .go-run span, .go-fold span { display: none; }
+  .go-run, .go-fold { width: 28px; padding: 0; }
   .go-codebar { padding-left: 12px; padding-right: 8px; }
+  .go-fold-bar { font-size: 11px; padding: 4px 10px; }
 }
 
 
@@ -776,7 +894,7 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 .ft-wrap { margin: 1.2rem 0; }
 .ft-list { margin-top: .7rem; }
 .ft-list.horizontal {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: .8rem;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 1.1rem;
 }
 .ft-list.vertical { display: flex; flex-direction: column; }
 .ft-item { position: relative; display: flex; gap: .6rem; }
@@ -791,18 +909,35 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 }
 .ft-title { font-weight: 700; font-size: 13px; line-height: 1.5; }
 .ft-desc { font-size: 12.5px; color: var(--go-muted); line-height: 1.65; margin-top: .2rem; }
-.ft-list.horizontal .ft-item { flex-direction: column; }
-.ft-list.horizontal .ft-item:not(:last-child)::after {
-  content: '→'; position: absolute; right: -.72rem; top: 4px;
-  color: var(--go-muted); font-size: 14px;
+.ft-list.horizontal { align-items: stretch; }
+.ft-list.horizontal .ft-item { flex-direction: column; height: 100%; }
+/* 箭头放在卡片的垂直中线上，做成圆形连接点；
+   只给「同一行内还有下一步」的项显示（由组件按实际 top 分组打 has-next），
+   避免换行行末出现悬空箭头。 */
+.ft-list.horizontal .ft-card { position: relative; }
+.ft-list.horizontal .ft-item.has-next .ft-card::after {
+  content: '→';
+  position: absolute;
+  top: 50%;
+  right: -1.3rem;
+  transform: translateY(-50%);
+  width: 1.35rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--go-brand-soft);
+  border: 1px solid var(--go-line);
+  box-shadow: var(--go-shadow);
+  color: var(--go-brand);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
 }
 .ft-list.vertical .ft-item { padding-bottom: .75rem; }
 .ft-list.vertical .ft-item:not(:last-child)::before {
   content: ''; position: absolute; left: 12.5px; top: 26px; bottom: 0;
   width: 2px; background: var(--go-line);
-}
-@media (max-width: 640px) {
-  .ft-list.horizontal .ft-item:not(:last-child)::after { display: none; }
 }
 
 /* 一页纸速记 */
@@ -830,3 +965,71 @@ body { font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; }
 
 /* 长目录页：表格紧凑一点，避免 118 行过于稀疏 */
 .vp-doc table.go-catalog th, .vp-doc table.go-catalog td { padding: 6px 10px; font-size: 13px; }
+
+
+/* ============================================================
+   架构蓝图 ArchBlueprint / 时序图 SequenceDiagram
+   ============================================================ */
+.ab-wrap { margin: 1.4rem 0; }
+.ab-layers {
+  margin-top: .8rem; padding: 1rem; border: 1px solid var(--go-line);
+  border-radius: 14px; background: var(--go-surface); box-shadow: var(--go-shadow);
+}
+.ab-layer { position: relative; }
+.ab-layer-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.ab-layer-head b { font-size: 13px; color: var(--go-brand); }
+.ab-layer-note { font-size: 12px; color: var(--go-muted); }
+.ab-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; }
+.ab-item {
+  display: flex; flex-direction: column; gap: .2rem; text-align: left;
+  padding: .55rem .7rem; border: 1px solid var(--go-line);
+  border-left: 3px solid var(--ab-color); border-radius: 9px;
+  background: var(--go-soft); cursor: pointer;
+}
+.ab-item:hover, .ab-item.active { background: var(--go-brand-soft); border-color: var(--ab-color); }
+.ab-item b { font-size: 12.5px; font-weight: 700; line-height: 1.5; }
+.ab-item span { font-size: 11.5px; color: var(--go-muted); line-height: 1.55; }
+.ab-arrow {
+  display: flex; align-items: center; justify-content: center; gap: .6rem;
+  height: 44px; color: var(--go-muted);
+}
+/* 层间向下箭头与流程图的横向箭头统一为圆形连接点 */
+.ab-arrow i {
+  font-style: normal; font-size: 14px; line-height: 1;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--go-brand-soft); border: 1px solid var(--go-line);
+  color: var(--go-brand); font-weight: 700;
+}
+.ab-proto {
+  font-size: 11px; font-family: var(--vp-font-family-mono); padding: 2px 7px;
+  border: 1px solid var(--go-line); border-radius: 99px; background: var(--go-surface);
+}
+.ab-detail {
+  margin-top: .7rem; padding: .75rem .9rem; border: 1px solid var(--go-line);
+  border-left: 3px solid var(--go-brand); border-radius: 10px; background: var(--go-surface);
+}
+.ab-detail-head { font-weight: 750; font-size: 13px; }
+.ab-detail-head span { float: right; font-weight: 400; font-size: 11px; color: var(--go-muted); }
+.ab-detail p { margin: .4rem 0 0; font-size: 13px; line-height: 1.8; }
+.ab-hint { margin-top: .6rem; font-size: 12px; color: var(--go-muted); text-align: center; }
+.ab-caption { margin-top: .6rem; font-size: 12.5px; color: var(--go-muted); line-height: 1.7; text-align: center; }
+
+/* 时序图：画布按参与方数量生成舒适宽度，缩略态占满正文宽度并等比缩放，
+   细节交给 FigureLightbox 放大查看（与概念图同一套交互与样式）。 */
+.go-figure.sd-figure { max-width: 100%; }
+.go-figure.sd-figure .go-fig-frame { padding: .9rem .7rem .5rem; }
+.sd-legend {
+  display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center;
+  margin-top: .55rem; font-size: 11.5px; color: var(--go-muted);
+}
+.sd-legend span { display: flex; align-items: center; gap: .35rem; }
+.sd-legend i { width: 16px; height: 0; border-top: 2px solid var(--go-muted); display: inline-block; }
+.sd-legend i.return { border-top-style: dashed; border-color: var(--go-green); }
+.sd-legend i.self { border-color: var(--go-purple); }
+.sd-legend i.async { border-color: var(--go-blue); }
+.sd-legend .sd-zoom-hint { color: var(--go-brand); font-weight: 650; }
+@media (max-width: 640px) {
+  .ab-layers { padding: .7rem; }
+  .ab-items { grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); }
+}

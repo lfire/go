@@ -136,6 +136,26 @@ func main() {
 
 <Callout type="warn" title="易错点" text="MemStats 的 HeapAlloc 差值含运行时自身开销，只能做定性观察；别把它当精确公式。另注意 32 KB 是分界，且含指针的对象不会进入 tiny allocator。" />
 
+### 深入一步：mallocgc 源码字段、实验与生产观测
+
+下面的字段与常量以 Go 1.21~1.23 的 `$GOROOT/src/runtime` 为准，升级大版本前务必重新对照。分配入口是 `runtime/malloc.go` 的 `mallocgc`，它按请求大小分三路：小于 16 字节且类型不含指针的交给 tiny 合并，16 字节到 `maxSmallSize`（32 KB）之间按 size class 从 mcache 取槽位，更大的按 8 KB 页向 mheap 申请专用 span。这几版预定义 68 个档位（含 0 号空档），对照表在 `runtime/sizeclasses.go` 的 `class_to_size`，查它比凭印象猜可靠得多。
+
+三级缓存各有可查字段：`runtime/mcache.go` 里 mcache 的 `alloc` 数组按档位挂可用 span，另有 `tiny`、`tinyoffset`、`tinyAllocs` 服务小对象合并；`runtime/mcentral.go` 里 mcentral 用 `spanclass` 标识档位、维护 partial 与 full 两组集合，补货才加锁；`runtime/mheap.go` 里 mspan 用 `startAddr`、`npages`、`nelems` 描述范围，用 `allocBits`、`gcmarkBits` 两张位图记占用与标记。特别留意 `spanclass` 低位的 noscan 标记：它决定 GC 是否扫描整块 span，这也解释了「能用值切片就别用指针切片」为何能削减标记阶段的工作量。
+
+实验分三层：`go build -gcflags=-m alloc.go` 确认逃逸，`go tool compile -S alloc.go | grep -E 'mallocgc|makeslice'` 看到真实分配调用，`GODEBUG=gctrace=1 go run big.go` 则给出每次回收的堆占用与目标。线上更推荐 `runtime/metrics`（Go 1.16 起）的 `/gc/heap/allocs-by-size:bytes` 直方图，按档位分桶直接看出对象集中在哪里、碎片出在哪一档，与 pprof 的 `alloc_space` 同源。调优顺序是先减分配次数、再降指针密度、最后才动 GOGC。常见误用有三类：把 MemStats 差值当精确公式、以为含指针的小对象也能进 tiny、忽视 32 KB 分界把中等对象反复当成大对象分配。
+
+补两处容易漏掉的机制：mcentral 的 partial 按清扫代分成两组，GC 借此区分本轮已清扫与待清扫的 span，避免重复加锁扫描；mcache 挂在 P 上，P 销毁时由调度器回收本地缓存，不会泄漏。tiny 路径另有 `tinyAllocs` 计数，供 GC 判断整个 block 是否值得回收。大对象以 `spanclass=0` 申请专用 span，不进入 mcache 档位缓存，反复申请释放会直接推高 `HeapSys` 与 GC 目标，是线上内存抖动最常见的来源之一。`needzero` 则决定新槽位是否清零。
+
+| 请求字节 | 命中档位 / 路径 | 实际占用 | 内部碎片 | 说明 |
+| --- | --- | --- | --- | --- |
+| 1 | 8 B（无指针时优先 tiny 合并） | 8 B | 7 B | 多个小对象共用一个 16 B block |
+| 9 | 16 B | 16 B | 7 B | 跨过 8 B 边界即跳档 |
+| 17 | 24 B | 24 B | 7 B | 常见小结构体尺寸 |
+| 25 | 32 B | 32 B | 7 B | 档位按 8 的倍数递增 |
+| 32769 | 大对象路径，5 页 | 40960 B | 8191 B | 超过 32 KB，按 8 KB 页取整 |
+
+<SequenceDiagram title="一次分配触发的三级上溯" caption="前台货架缺货才逐级向区域仓、总仓乃至操作系统申请" :actors='["用户代码","mallocgc","mcache","mcentral","mheap","OS"]' :steps='[{"from":"用户代码","to":"mallocgc","label":"make/new 申请","kind":"call"},{"from":"mallocgc","to":"mcache","label":"查 alloc 档位","kind":"call"},{"from":"mcache","to":"mcache","label":"位图扫描空闲槽","kind":"self"},{"from":"mcache","to":"mcentral","label":"本档 span 已空","kind":"call"},{"from":"mcentral","to":"mheap","label":"partial 也无可用","kind":"call"},{"from":"mheap","to":"OS","label":"arena 不足 mmap","kind":"call"},{"from":"OS","to":"mheap","label":"返回新页","kind":"return"},{"from":"mheap","to":"mcentral","label":"切出新 span","kind":"return"},{"from":"mcentral","to":"mcache","label":"交付可用 span","kind":"return"},{"from":"mallocgc","to":"用户代码","label":"返回 object 地址","kind":"return"}]' />
+
 ## 4. 工程实践
 
 高频路径上，分配「次数」比分配「总量」更伤：每次都要走分档、位图与可能的补货。把零散小对象合并成一次预分配，往往比逐条 new 快一个量级。
@@ -143,6 +163,51 @@ func main() {
 <Compare :panels='[{"label":"逐条分配","code":"out := make([]*Item, 0, n)\nfor i := 0; i != n; i++ { out = append(out, new(Item)) }","note":"n 次分配，n 个指针，GC 需逐个扫描"},{"label":"预分配连续块","code":"buf := make([]Item, n)\nfor i := range buf { buf[i].ID = i }","note":"1 次分配，值连续，可打 noscan 标记"}]' title="减少分配次数与指针密度" />
 
 要点：优先 `make` 预分配容量；能用值切片就别用指针切片；让大对象生命周期清晰，避免误留在长命 span 里。这些判断都能用 `go build -gcflags=-m`、`go test -bench=. -benchmem` 与 `GODEBUG=gctrace=1` 量化验证，而不是凭感觉。
+
+### 用 runtime/metrics 看对象落在哪些档位
+
+与其凭 MemStats 的差值猜档位，不如直接读运行时暴露的直方图。下面这段完整程序先制造几种尺寸的对象，再打印按 size class 分桶的分配次数。
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime/metrics"
+)
+
+func main() {
+	// 先制造不同尺寸的对象，让直方图非空
+	var sink [][]byte
+	for _, n := range []int{8, 24, 100, 4096, 1 << 16} {
+		sink = append(sink, make([]byte, n))
+	}
+
+	// 该指标按 size class 分桶统计累计分配字节对应的次数
+	const name = "/gc/heap/allocs-by-size:bytes"
+	sample := []metrics.Sample{{Name: name}}
+	metrics.Read(sample)
+	h := sample[0].Value.Float64Histogram()
+	for i, c := range h.Counts {
+		if c > 0 {
+			fmt.Printf("[%6.0f, %6.0f) B: %d 次\n",
+				h.Buckets[i], h.Buckets[i+1], c)
+		}
+	}
+	_ = sink
+}
+```
+
+```bash
+go run alloc_hist.go
+GODEBUG=gctrace=1 go run alloc_hist.go
+```
+
+<OutputBox title="直方图输出（节选）" output="[      0,       8) B: 3 次\n[     16,      32) B: 2 次\n[     96,     112) B: 1 次\n[   4096,    4224) B: 1 次\n[  65536,   73728) B: 1 次" note="Buckets 是档位边界，Counts 是各桶累计分配次数；跨档即产生内部碎片。" />
+
+`Float64Histogram` 的 `Buckets` 长度恒比 `Counts` 多一，第 i 个桶是左闭右开的 `[Buckets[i], Buckets[i+1])`，`Counts[i]` 是落进该区间的分配次数；和上表对照，就能解释「申请 100 字节却按 112 字节档位计数」。`gctrace=1` 每行里箭头后的两个数字分别是本次标记结束时的存活堆与下一次触发目标，两者长期贴近说明分配速率高、GC 频繁，正是回头查预分配与指针密度的时候。
+
+<Quiz no="32-3" q="一个 40 KB 的 []byte 会走哪条分配路径？" :options='["tiny allocator 合并","某个 size class 从 mcache 取槽位","按 8 KB 页取整后直达 mheap","分配在栈上"]' answer="2" explain="40 KB 超过 maxSmallSize=32768，属大对象，按页取整后直接向 mheap 申请专用 span，不参与 mcache 分档缓存。" />
 
 ## 动手练一练
 

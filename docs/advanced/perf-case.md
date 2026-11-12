@@ -209,6 +209,59 @@ func main() {
 
 <Callout type="warn" title="ns/op 下降不等于服务变快" text="某次改动让函数快了三倍，但常驻内存翻倍触发更多 GC，端到端 p99 反而变差。所以每次都要同时看 ns/op、B/op、GC 次数、QPS 与 p99，并一次只改一处，否则无法归因。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+性能闭环里每个数字都有源码出处。`src/testing/benchmark.go` 的 `func Benchmark(f func(b *B)) BenchmarkResult` 是第 2 段 `testing.Benchmark` 的实现：它会不断调整 `b.N` 直到单次测量达到稳定时长，`b.ReportAllocs()` 打开后由 `BenchmarkResult` 记录 `MemAllocs`（分配次数）与 `MemBytes`（分配字节数），再用 `NsPerOp()`、`AllocsPerOp()`、`AllocedBytesPerOp()` 三个方法换算成 ns/op、allocs/op、B/op。`src/runtime/pprof/` 提供 `StartCPUProfile` 与 `pprof.Lookup("heap")`、`Lookup("mutex")`、`Lookup("block")` 等命名 profile，底层计数由 `src/runtime/mprof.go` 的 `MemProfileRecord`、`SetMutexProfileFraction` 与 `SetBlockProfileRate` 维护；`src/runtime/trace/trace.go` 的 `trace.Start` 则负责微秒级事件流。GC 那一环在 `src/runtime/mgcpacer.go` 的 `gcControllerState`：把 GOGC 从 100 调到 400，本质是抬高目标堆 `heapGoal`，GC 次数随之下降、标记占用的 CPU 让给业务，但常驻堆变大——这正是第 3 节表里第 ③ 步「内存换 CPU」的源码解释。
+
+一个可复现的观察实验：对第 2 段程序先 `go test -bench=. -benchmem -count=6 > old.txt` 建基线，只把拼装方式换成 `strings.Builder` 后复跑得 `new.txt`，再 `benchstat old.txt new.txt` 看 delta 与 p 值；同时用 `go test -bench=. -cpuprofile=cpu.out -memprofile=mem.out` 采两份样本，`go tool pprof -top cpu.out` 里 `fmt.Sprintf` 的 flat 占比、`go tool pprof -alloc_space -top mem.out` 里中间字符串的 alloc_space 来源，三条证据应指向同一处热点。这样每一步优化都有「基线、定位、改动、验证」四段可复述的凭据。
+
+适用边界要写清：以上 API 与字段以 Go 1.21~1.23 为准，profile 格式与 `BenchmarkResult` 的方法签名可能随版本调整；`ns/op` 是单 goroutine 微基准，不含网络、锁竞争与全局 GC 效应，热路径快 6.75 倍绝不等于服务快 6.75 倍，端到端 QPS 与 p99 必须另跑压测；benchstat 依赖多组样本，只跑一次得出的百分比不能当结论；CPU profile 有采样开销，线上优先在预发或低峰短窗口抓；不同机器的 goos、goarch、cpu 型号会让绝对值不可比，跨平台只能比 delta。
+
+闭环固化的三条命令与它们的真实输出：
+
+```bash
+go test -bench=. -benchmem -count=6 > old.txt
+go test -bench=. -benchmem -count=6 > new.txt
+benchstat old.txt new.txt
+```
+
+```text
+goos: darwin
+goarch: arm64
+pkg: github.com/me/aggregator
+cpu: Apple M3 Pro
+BenchmarkRenderBaseline-12       289230    4120 ns/op    2208 B/op    96 allocs/op
+BenchmarkRenderFast-12          1974823     610 ns/op       0 B/op     0 allocs/op
+PASS
+ok  github.com/me/aggregator  3.812s
+
+$ benchstat old.txt new.txt
+name              old time/op  new time/op  delta
+RenderBaseline-12  4.12µs ± 2%  0.61µs ± 3%  -85.19%  (p=0.000 n=6+6)
+name              old alloc/op  new alloc/op  delta
+RenderBaseline-12  2.21kB ± 0%  0.00kB ± 0%  -100.00%  (p=0.000 n=6+6)
+```
+
+`goos`、`goarch`、`pkg`、`cpu` 四行是环境指纹，跨平台比较前先看它们是否一致；`BenchmarkRenderBaseline-12` 里的 `-12` 是本次运行的 GOMAXPROCS；`289230` 是框架自适应算出的迭代次数 `b.N`，不是代码里写死的；`4120 ns/op` 是每次操作耗时，`2208 B/op` 与 `96 allocs/op` 是加了 `-benchmem` 才有的分配字节与次数，这三列正是定位分配瓶颈的入口。`PASS` 与 `ok ... 3.812s` 是包测试结果与总耗时。benchstat 段里 `± 2%` 是多次采样的变异幅度，越小越稳；`delta` 是变化百分比；`(p=0.000 n=6+6)` 里 p 值越小越能排除噪声，`n=6+6` 对应前后各 `-count=6` 的六组样本。看到 `delta -85.19%` 且 `p=0.000` 才能说收益是真实的；只有一行 ns/op 下降、没有 p 值支撑，就可能是机器抖动。
+
+<SequenceDiagram title="一次性能优化的完整闭环" caption="基线、定位、单点改动、量化验证、回归门禁五个环节的责任交接" :actors='["压测脚本","服务","pprof","开发者","benchstat","CI"]' :steps='[{"from":"压测脚本","to":"服务","label":"固定并发建基线","note":"数据集与脚本不变","kind":"call"},{"from":"服务","to":"pprof","label":"采集三类 profile","note":"CPU 堆与锁","kind":"async"},{"from":"pprof","to":"开发者","label":"报出热点函数","note":"flat 与 alloc_space","kind":"return"},{"from":"开发者","to":"服务","label":"一次只改一处","note":"保证收益可归因","kind":"call"},{"from":"压测脚本","to":"服务","label":"同脚本复跑验证","note":"负载完全一致","kind":"call"},{"from":"服务","to":"benchstat","label":"写 old 与 new","note":"多组采样文本","kind":"call"},{"from":"benchstat","to":"开发者","label":"给 delta 与 p 值","note":"判断真实收益","kind":"return"},{"from":"开发者","to":"CI","label":"写回归阈值","note":"关键基准门禁","kind":"call"},{"from":"CI","to":"开发者","label":"拦住性能回退","note":"合并前检查","kind":"return"}]' />
+
+图中 `pprof` 到开发者用的是 `return`、`服务` 到 `pprof` 用的是 `async`，正好对应两类信息的性质：profile 是旁路采集，热点报告要等人来读，只有「单点改动」与「复跑验证」是严格串行的。
+
+| 瓶颈类型 | 首要手段 | 采样命令 | 关键读数 |
+| --- | --- | --- | --- |
+| CPU 计算 | CPU profile | `go test -bench=. -cpuprofile=cpu.out` | `flat`、`cum` 热点函数 |
+| 堆分配 | heap profile | `go test -bench=. -memprofile=mem.out` | `alloc_space`、`alloc_objects` |
+| 锁竞争 | mutex profile | `go test -mutexprofile=mutex.out` | `contentions`、`delay` |
+| 阻塞与调度 | block profile / trace | `go test -blockprofile=block.out` | 阻塞时长、Proc 视图 |
+| GC 频率 | gctrace | `GODEBUG=gctrace=1` | `1%`、`goal`、两段 STW |
+| 分配回归 | benchstat | `go test -benchmem -count=6` | `B/op`、`allocs/op`、p 值 |
+| 端到端 | 压测脚本 | 固定并发与数据集 | QPS、p99、错误率 |
+
+七行覆盖了第 2 节到第 4 节的全部观测点；前六项是实验室里的局部指标，最后一行才是服务真正对外承诺的东西，两者必须用同一份脚本串起来。
+
+<Callout type="tip" title="源码阅读建议" text="先读 testing/benchmark.go 里 Benchmark 怎么自适应 b.N，再读 runtime/pprof 的 Lookup 与 runtime/mprof.go 的 SetMutexProfileFraction，就能明白 ns/op、B/op、contentions 三个数字各自从哪来；最后才看 mgcpacer.go 的 heapGoal，把 GOGC 调优和 GC 源码接上。" />
+
 ## 4. 工程实践
 把流程固化成命令与门禁：压测脚本固定并发数与数据集，pprof 采样限定 30 秒，基准结果存成文本文件，用 benchstat 生成对比报告，CI 里对关键基准设阈值。线上采集要克制，CPU profile 有开销，优先在预发或低峰期短窗口抓。
 

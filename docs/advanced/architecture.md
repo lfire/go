@@ -146,6 +146,49 @@ func main() {
 
 <Callout type="warn" title="别搞大爆炸重写" text="一次性重写常在「新系统没对齐旧行为」与「旧系统还在加需求」之间被拖垮。绞杀者每一步都可回切、可验证；边界要按变化方向划，别按数据库表划。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+「依赖方向指向抽象」在 Go 里能被静态验证，靠的是工具链与类型检查两处源码。`src/cmd/go/internal/load/pkg.go` 的 `Package` 结构记录 `ImportPath`（本包路径）、`Imports`（直接导入列表）与 `Deps`（传递依赖闭包），`go list` 与 `go list -deps` 就是把这三个字段打印出来；`src/cmd/go/internal/list/` 负责按模板渲染这些字段。接口为什么不需要显式声明实现，答案在 `src/cmd/compile/internal/types2`：类型检查器在 `Info` 里记录每个标识符的 `Defs` 与 `Uses`，只要某类型的方法集覆盖了接口方法集就判定实现；`src/go/types` 的 `Implements` 与 `AssignableTo` 把这套判断暴露给静态分析工具。正因为实现是隐式的，领域层声明 `OrderRepo` 接口时完全不必 import 基础设施包，依赖倒置在 Go 里几乎没有额外语法成本。
+
+一个可复现的观察实验：对第 1 段程序所在的包跑 `go list -f` 打印它的 `Imports`，确认里面只有标准库、没有任何 infra 包；然后故意在领域层加一行 `import "github.com/me/svc/internal/storage"`，`go list` 的输出里立刻出现 infra 路径，若形成环 `go build` 会直接报 import cycle，这就把「边界是否被破坏」变成了编译期可查的事实。把 `go list -deps` 的结果接进 CI，用一段脚本断言领域层的输出不含 infra 前缀，就是最低成本的架构守卫；第 2 段门面的 `modernPct` 灰度与第 3 段双写的不一致数，则要靠指标与 ADR 人工约定阈值，工具链管不到。
+
+适用边界要写清：以上路径与字段以 Go 1.21~1.23 为准，`cmd/go/internal` 属于内部包，结构与函数每个版本都可能重构，别在自己的工具里直接 import 它，用 `go list` 命令输出即可；`go list` 只看包级静态 import，跨服务调用、插件注册与反射装配这类运行时依赖它看不见；`internal/` 的可见性是编译期规则，不等于业务边界；包依赖无环只说明能编译，不代表限界上下文划得合理。绞杀者重构里「不一致数为 0」「p99 稳定」这些放量条件都必须由团队针对业务定阈值，源码与工具不会替你决定。
+
+一条命令就能把「领域层有没有偷偷依赖实现」查清楚：
+
+```bash
+go list -f '{{.ImportPath}} -> {{join .Imports " "}}' ./internal/order
+go list -deps ./internal/order | tail -5
+```
+
+```text
+github.com/me/svc/internal/order -> context errors
+github.com/me/svc/internal/order
+context
+errors
+fmt
+sync
+```
+
+`-f` 参数里的模板变量 `.ImportPath` 展开为当前包的导入路径，`.Imports` 是它的直接导入列表，`join` 用空格把切片拼成一行（真实写法见上面的 bash 命令，用双花括号包裹这两个字段）；`->` 只是我加的分隔符，方便肉眼切分「谁依赖谁」。第一行输出 `github.com/me/svc/internal/order -> context errors` 说明这个领域包只直接依赖标准库的 `context` 与 `errors`，完全没有 import `internal/storage`、`internal/cache` 之类基础设施包——这正是第 1 段代码里 `OrderRepo` 接口由使用方定义、编译期依赖统一指向抽象的可验证证据。第二条 `go list -deps` 打印的是传递依赖闭包，`tail -5` 取末尾五行看闭包里有没有混入 infra；输出里 `github.com/me/svc/internal/order` 与 `context`、`errors`、`fmt`、`sync` 都是标准库或自身，说明闭包干净。反证也很直接：一旦领域层 import 了具体实现包，第一行右侧立刻多出 infra 路径，形成环时 `go build` 还会报 import cycle。`go list` 只读、不编译，适合接进 CI 当架构门禁；但它只能证明「包级静态依赖方向」，不能证明边界本身划得对。
+
+<SequenceDiagram title="绞杀者门面的双写校验链路" caption="校验阶段对外仍返回旧结果，新实现只做影子调用并逐条比对" :actors='["Client","Facade","Legacy","Modern","校验器","指标/ADR"]' :steps='[{"from":"Client","to":"Facade","label":"带 key 请求","note":"统一走门面","kind":"call"},{"from":"Facade","to":"Facade","label":"哈希定路由","note":"读 modernPct","kind":"self"},{"from":"Facade","to":"Legacy","label":"调旧实现","note":"始终执行","kind":"call"},{"from":"Legacy","to":"Facade","label":"返回旧结果","note":"对外基准值","kind":"return"},{"from":"Facade","to":"Modern","label":"影子调新实现","note":"不影响返回","kind":"call"},{"from":"Modern","to":"Facade","label":"返回新结果","note":"仅用于比对","kind":"return"},{"from":"Facade","to":"校验器","label":"比对两份结果","note":"逐字段比对","kind":"call"},{"from":"校验器","to":"指标/ADR","label":"记不一致数","note":"同时记 p99","kind":"call"},{"from":"指标/ADR","to":"Facade","label":"差异为零准放量","note":"否则暂停灰度","kind":"return"},{"from":"Facade","to":"Client","label":"返回旧结果","note":"行为保持不变","kind":"return"}]' />
+
+关键在第 10 步：校验阶段对 Client 返回的始终是 Legacy 的结果，Modern 只是影子调用。这样即便新实现有 bug，也不会影响线上行为，放量才真正可回切。
+
+| 阶段 | 门面灰度 modernPct | 入口行为 | 校验动作 | 回切条件 | 进入下一阶段的条件 |
+| --- | --- | --- | --- | --- | --- |
+| 建门面 | 0 | 全部走 Legacy | 无 | 无 | 门面覆盖全部调用点 |
+| 双写校验 | 0 | 仍走 Legacy | 影子调 Modern 并比对 | 不一致数大于 0 | 不一致数持续为 0 |
+| 小步灰度 | 5 到 25 | 按 key 哈希切流 | 监控 p99 与错误率 | p99 陡升或出错 | 指标稳定一个观察窗 |
+| 扩大灰度 | 50 | 半量走 Modern | 双写继续抽检 | 出现行为差异 | 差异为零且容量充足 |
+| 全量 | 100 | 全部走 Modern | 只读回归测试 | 无 | 旧实现连续无流量 |
+| 下线旧码 | 不适用 | 删除 Legacy 与兼容分支 | 编译与全量测试 | 编译失败即回退 | 同步归档 ADR |
+
+六个阶段其实是一条只能前进、随时能回退的状态机：每一行都写清「什么情况下停、什么情况下走」，兼容分支才不会无限期留在代码里。
+
+<Callout type="tip" title="源码阅读建议" text="想搞懂依赖方向为什么能被工具验证，先读 cmd/go/internal/load/pkg.go 里 Package 的 ImportPath、Imports、Deps 三个字段，再看 types2 的 Info.Defs 与 Uses 怎么判定隐式实现；这两处读完，go list 的输出和 Go 不需要 implements 声明这两件事就连成一条线了。" />
+
 ## 4. 工程实践
 取舍要落进文档：每个重要边界写一条 ADR，记下背景、备选、结论与放弃理由。重构期间把灰度比例、双写不一致数、回切开关做成指标，并约定下线旧代码的条件，避免兼容分支无限期留存。
 

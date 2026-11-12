@@ -135,6 +135,58 @@ func main() {
 
 <Callout type="warn" title="跑对了不等于写对了" text="有竞争的程序不受 DRF-SC 保护，可能读到旧值或被优化成死循环。`-race` 只发现本次执行碰到的竞争，没报不代表没有；正确性必须靠 happens-before 推导。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+形式化定义的源头是 GOROOT 里的 `doc/go_mem.html`，它不是实现文档而是语言规范：把一次执行建模为一组 goroutine 的操作加上映射 `W`（每个读从哪个写取值），再定义 `sequenced before`、`synchronized before` 与二者并集的传递闭包 `happens before`，最后给出 DRF-SC 保证——不含数据竞争的程序，其行为等价于把各 goroutine 交错复用在单个处理器上的顺序一致执行。规范还规定普通读 `r` 只能看到「可见」的写 `w`：`w` happens before `r`，且不存在另一个写 `w'` 夹在两者之间。这就是「读看到的不是最后写完的值，而是偏序里紧邻它的那个写」的严格出处。
+
+各同步原语的保证写在标准库注释里，读源码比记结论可靠。`src/sync/mutex.go` 开头注明第 n 次 `Unlock` synchronizes before 第 m 次 `Lock`（n 小于 m），且失败的 `TryLock` 不建立任何关系；`src/sync/once.go` 注明 `f` 的返回 synchronizes before 任意 `Do` 的返回；`src/sync/waitgroup.go` 注明 `Done` synchronizes before `Wait` 的返回；`src/sync/atomic/doc.go` 注明全体原子操作表现为某个顺序一致的执行；`src/runtime/chan.go` 里发送与对应接收完成构成一对。`-race` 的实现则是编译器插桩：带 `-race` 构建时，`cmd/compile` 在每次内存访问前后插入对 `runtime.raceread`、`runtime.racewrite` 一族函数的调用，由 `src/runtime/race/` 下的 ThreadSanitizer 运行时维护 happens-before 向量时钟，发现两个未被同步边排序的冲突访问就打印报告。一个可复现的观察实验：用 `go run -race` 分别跑第 2 段的错误 bool 版与第 1 段的 atomic 版，前者稳定报告竞争、后者无报告；再对错误版加 `go test -race -count=20` 重复采样，会发现报告出现的位置可能变化，但 `Found 1 data race(s)` 与退出码 66 始终一致。
+
+适用边界要写清：以上规范文本与源码注释以 Go 1.21~1.23 为准，注释行号每版都会漂移，判断以术语与语义为准；`-race` 只发现本次执行实际碰到的冲突访问，未覆盖的分支、未触发的交错都查不到，所以「没报」绝不等于「没有」；DRF-SC 只保护无竞争的程序，一旦有竞争，语言不保证任何结果，编译器优化与 CPU 乱序都可能让程序表现得像死循环；硬件内存序（x86 的 TSO、ARM 的弱序）由编译器与运行时用屏障抽象掉，应用代码只应依赖语言级的 happens-before，不要按某款 CPU 的行为推理。
+
+一条命令把第 2 段错误样例的竞态报告打出来：
+
+```bash
+go run -race main.go
+GORACE="halt_on_error=1 history_size=5" go test -race -count=20 ./...
+```
+
+```text
+==================
+WARNING: DATA RACE
+Write at 0x00c0000120a0 by goroutine 7:
+  main.main.func1()
+      /path/to/main.go:12 +0x2c
+
+Previous read at 0x00c0000120a0 by main goroutine:
+  main.main()
+      /path/to/main.go:15 +0x5a
+
+Goroutine 7 (running) created at:
+  main.main()
+      /path/to/main.go:11 +0x28
+==================
+Found 1 data race(s)
+exit status 66
+```
+
+报告里每个字段都对应形式化定义：`WARNING: DATA RACE` 表示检测到两个冲突访问；`Write at 0x00c0000120a0 by goroutine 7` 给出写操作的内存地址、类型与发起者 id，`Previous read at` 同一地址 `by main goroutine` 给出与之冲突的另一次访问——两者地址相同即「同一内存位置」，而中间没有 channel、Mutex 或 atomic 的同步边，正是数据竞争定义里的「不被 happens before 排序」。两段栈帧的 `/path/to/main.go:12` 与 `:15` 是 `文件:行`，`+0x2c` 是函数内指令偏移，用来定位到具体语句；`Goroutine 7 ... created at` 追出该 goroutine 的创建点，便于补全调用链。`Found 1 data race(s)` 是本次执行发现的竞争数，`exit status 66` 是 race detector 让进程以 66 退出，CI 可以据此直接判定失败。`GORACE` 的 `halt_on_error=1` 让第一次竞争就停下，`history_size=5` 调大栈历史深度；`-count=20` 靠重复采样提高触发概率，但仍是采样手段，不能替代用 happens-before 推导正确性。
+
+<SequenceDiagram title="一次正确同步建立的 happens-before 链" caption="atomic 的 Store 与 Load 之间形成同步边，使读必然看到之前的写" :actors='["G1","data","atomic","G2","-race"]' :steps='[{"from":"G1","to":"data","label":"写 data 为 42","note":"sequenced before","kind":"call"},{"from":"G1","to":"atomic","label":"Store 发布信号","note":"Store 建立同步边","kind":"call"},{"from":"atomic","to":"G2","label":"Load 观察到 1","note":"synchronized before","kind":"return"},{"from":"G2","to":"data","label":"读 data","note":"happens before 覆盖","kind":"call"},{"from":"data","to":"G2","label":"返回 42","note":"必然看到该写","kind":"return"},{"from":"G2","to":"-race","label":"检查本次访问","note":"地址与栈比对","kind":"call"},{"from":"-race","to":"G2","label":"不报告竞争","note":"无 WARNING","kind":"return"},{"from":"G2","to":"G2","label":"DRF-SC 成立","note":"顺序一致执行","kind":"self"}]' />
+
+把第 3 步的 `return` 看成整条链的关键：Store 与 Load 配成一对同步边，才把 G1 里的 `sequenced before` 传递到 G2 的读上；少了它，前两步对 G2 就完全不可见。
+
+| 观测手段 | 能发现什么 | 关键输出或开关 | 开销与局限 |
+| --- | --- | --- | --- |
+| `go run -race main.go` | 本次执行碰到的冲突访问 | `WARNING: DATA RACE` 与两条栈 | 只覆盖实际跑到的路径 |
+| `go test -race ./...` | 测试路径里的竞争 | `Found N data race(s)` | 未测分支查不到 |
+| `go test -race -count=20` | 提高交错触发概率 | 多次采样结果 | 仍是采样，不保证穷尽 |
+| `GORACE halt_on_error=1` | 第一次竞争即停 | 配合 `history_size` 调栈深 | 仅本地诊断用 |
+| 带 `-race` 构建 | 编译器插桩后的执行 | `runtime.raceread` 等调用 | 内存约 5 到 10 倍、耗时 2 到 20 倍 |
+
+五项里前三项是日常 CI 的主力，后两项用于定位偶发问题；要记住 `-race` 是发现工具而非证明工具，真正的证明仍然来自 happens-before 推导。
+
+<Callout type="tip" title="源码阅读建议" text="先通读 doc/go_mem.html 里 happens before 与 DRF-SC 两节拿到术语，再按 sync/mutex.go、once.go、waitgroup.go、atomic/doc.go 的顺序读各文件开头的同步保证注释；想深挖 -race 就搜 runtime.raceread 的插桩点，别从 ThreadSanitizer 的向量时钟实现读起。" />
+
 ## 4. 工程实践
 代码评审时把「共享变量 + 是否有同步边」当成固定检查项：先列出所有跨 goroutine 的读写，再逐个追问两者之间有没有 channel、Mutex、Once、WaitGroup 或 atomic 建立的边；没有就补上，而不是加 `time.Sleep`。CI 里固定跑 `go test -race`，并对 `go_mem.html` 里「实现可以对数据竞争直接报告并终止」这一条保持敬畏。
 

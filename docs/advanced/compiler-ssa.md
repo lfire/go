@@ -136,6 +136,47 @@ SSA 的价值在于「形式化」：一旦每个值只有唯一定义，常量�
 
 <Callout type="warn" title="别把 80 当成函数行数" text="内联预算是代价节点数，不是代码行数；含闭包、defer、可变参数会额外加价。`-gcflags=-m` 的输出格式随版本调整，判断是否内联要看 can inline 与 inlining call，不要硬套某一条固定文案。" />
 
+### 源码精读与可复现验证（以 Go 1.21~1.23 为准，版本可能变化）
+
+编译器的目录划分本身就是一条阅读路线，全部在 `src/cmd/compile/internal/` 下：`noder` 与 `types2` 把源码解析成 AST 并做类型检查，`ir` 是统一的中间表示节点，`inline` 负责内联，`escape` 负责逃逸分析，`ssagen` 把 IR 构造成 SSA，`ssa` 里放着优化 pass 与 `compile.go` 的 pass 列表，`obj` 产出目标文件。内联发生在 SSA 之前，`src/cmd/compile/internal/inline/inl.go` 定义 `inlineMaxBudget = 80` 与 `inlineHotMaxBudget = 2000`，按「代价节点数」而非源码行数计分，调用、闭包、可变参数、`defer` 都会额外加价；Go 1.21 起的 PGO 会把热点函数的预算抬到 2000。逃逸分析在 `escape/escape.go` 里沿指针流建图，给每个局部变量标一个「逃逸位置」，结论直接决定生成栈上分配还是 `runtime.newobject`。
+
+SSA 部分读两处就够：`ssa/compile.go` 的 pass 列表决定了优化顺序，`GOSSAFUNC` 环境变量会让编译器把每个 pass 前后的 SSA 图写进当前目录的 `ssa.html`；`ssa/prove.go` 是基于 SSA 的证明器，边界检查消除（BCE）就发生在这里——当它能证明下标由 `range` 约束时，对应的 `IsInBounds` 检查会被删掉。`ssagen` 最后调 `genssa` 选指令、分寄存器、产出汇编。一个可复现的观察实验：对第 3 段程序跑 `GOSSAFUNC=sum1 go build -o /dev/null .`，在生成的 `ssa.html` 里对比 `prove` pass 前后的值节点数；再 `go tool compile -S` 数 `sum1` 与 `sum2` 里 `runtime.panicIndex` 的出现次数，`sum1` 应为 0，`sum2` 仍保留显式范围判断，这就把「SSA 让优化可证明」落成了可数的证据。
+
+适用边界要写清：以上目录、常量与 pass 名以 Go 1.21~1.23 为准，pass 列表与 `-gcflags=-m` 的输出文案每版都可能调整，判断内联要以 `can inline` 与 `inlining call to` 为准而不是套某句固定文本；内联预算是代价节点数，别当函数行数；PGO 结论只在带 `default.pgo` 的构建里成立；Go 1.17 起 amd64 等平台用寄存器 ABI，汇编里参数走 AX、BX 而非 `FP` 偏移，拿旧教程的栈帧图对照会对不上。
+
+一条命令把编译器最终生成的汇编打出来：
+
+```bash
+go tool compile -S add.go
+```
+
+```text
+main.add STEXT nosplit size=19 args=0x10 locals=0x0 funcid=0x0 align=0x0
+        0x0000 00000 (add.go:3) TEXT main.add(SB), NOSPLIT|ABIInternal, $0-16
+        0x0000 00000 (add.go:3) FUNCDATA $0, gclocals·w1C0hLTfU0e5E9yGk8SUA==(SB)
+        0x0000 00000 (add.go:3) FUNCDATA $1, gclocals·w1C0hLTfU0e5E9yGk8SUA==(SB)
+        0x0000 00000 (add.go:3) ADDQ BX, AX
+        0x0003 00003 (add.go:3) RET
+```
+
+首行是符号摘要：`main.add` 是符号名，`STEXT` 表示代码段，`nosplit` 说明小函数不插入栈增长检查；`size=19` 是机器码字节数，`args=0x10` 是两个 int 参数加返回值共 16 字节，`locals=0x0` 表示没有栈上局部变量，`funcid` 与 `align` 是函数标识与对齐要求。之后每行前三列分别是函数内偏移（如 `0x0000`）、全局字节偏移（如 `00000`）与源码行号 `(add.go:3)`，用来把汇编逐行对回源码。`TEXT ... NOSPLIT|ABIInternal, $0-16` 是入口伪指令，`SB` 是静态基址寄存器，`$0-16` 表示本地帧 0 字节、参数区 16 字节；两条 `FUNCDATA` 是 GC 需要的栈指针与活跃指针映射。`ADDQ BX, AX` 把两个参数寄存器相加、结果留在 AX，说明寄存器 ABI 下参数根本不上栈；末尾 `RET` 之后没有任何 `CALL`，正好佐证这个 `add` 既没内联失败、也没触发 `runtime.newobject`。把第 2 段的 `doesEscape` 拿去编译，就会看到 `CALL runtime.newobject(SB)` 出现，那是逃逸落到堆上的铁证。
+
+<SequenceDiagram title="一个函数从源码到汇编的编译链" caption="内联与逃逸在 SSA 之前完成，prover 负责消除可证明的边界检查" :actors='["go build","noder","inline/escape","ssagen","ssa pass","obj"]' :steps='[{"from":"go build","to":"noder","label":"解析成 AST","note":"含 import 与类型检查","kind":"call"},{"from":"noder","to":"inline/escape","label":"类型检查得 IR","note":"统一 IR 节点","kind":"call"},{"from":"inline/escape","to":"inline/escape","label":"定内联与逃逸","note":"按预算 80 决策","kind":"self"},{"from":"inline/escape","to":"ssagen","label":"交 IR 构造 SSA","note":"buildssa 单赋值","kind":"call"},{"from":"ssagen","to":"ssa pass","label":"逐 pass 化简","note":"按 compile.go 顺序","kind":"call"},{"from":"ssa pass","to":"ssa pass","label":"BCE 与常量折叠","note":"prove 证明性质","kind":"self"},{"from":"ssa pass","to":"obj","label":"选指令分寄存器","note":"genssa 产出汇编","kind":"call"},{"from":"obj","to":"go build","label":"返回目标文件","note":"产出 .o","kind":"return"},{"from":"go build","to":"go build","label":"链接写二进制","note":"交给 linker","kind":"self"}]' />
+
+图中把内联与逃逸放在 SSA 之前是关键：它们先决定「哪些代码存在、哪些变量上堆」，SSA pass 才能在已经定型的图上做证明，顺序反过来优化就无从下手。
+
+| 观测命令 | 观察对象 | 输出里的关键判据 | 能回答的问题 |
+| --- | --- | --- | --- |
+| `go build -gcflags=-m` | 内联与逃逸决策 | `can inline`、`escapes to heap` | 这个函数被摊平了吗、变量上堆了吗 |
+| `go build -gcflags=-m=2` | 完整决策链 | `moved to heap` 及原因 | 是哪一个引用让变量逃逸 |
+| `GOSSAFUNC=sum1 go build` | 每个 SSA pass | `ssa.html` 各阶段值节点数 | `prove` 之后少了哪些检查 |
+| `go tool compile -S` | 生成的汇编 | `runtime.panicIndex`、`newobject` | BCE 是否生效、有没有堆分配调用 |
+| `go tool objdump -s main.sum1 ./bin` | 链接后机器码 | 真实指令地址与符号 | 最终二进制里还剩什么 |
+
+五条命令从决策链到最终产物层层收窄，接进 CI 时通常只留 `-m` 与 `compile -S` 两条做回归门禁，其余按需手动查。
+
+<Callout type="tip" title="源码阅读建议" text="先用 GOSSAFUNC=sum1 go build 生成 ssa.html，从左到右点几个 pass 看值节点怎么变少，再回头读 ssa/compile.go 的 pass 列表；内联与逃逸先各读一个函数就够，别一上来啃 inl.go 的全部代价表。记 pass 的效果比记 pass 的名字更耐用。" />
+
 ## 4. 工程实践
 写热路径代码时，与其猜编译器有没有优化，不如让编译器自己交代。`GOSSAFUNC=main go build` 会在当前目录生成 `ssa.html`，逐 pass 展示 SSA 图如何被化简；`go tool compile -S` 打印汇编，可数出循环里还剩几条边界检查。把这些命令接进 CI，能在性能回归合并之前就发现「某个改动意外让变量逃逸」这类问题。
 

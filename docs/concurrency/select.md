@@ -147,6 +147,90 @@ func main() {
 
 <Callout type="warn" title="time.After 的 timer 泄漏" text="for-select 循环里反复写 time.After(d)，每次都新建一个 runtime timer。若其它 case 命中很快、间隔远小于 d，旧 timer 必须等到 d 到期才回收，短时间大量堆积会占内存、加重堆负担。高频循环改用 time.NewTimer 显式持有，配 defer Stop，需重复计时用 Reset。" />
 
+### 再深一层：select 为什么随机、timer 为什么会堆积
+
+判断一段 select 会不会出事，要落到运行时依据，而不是凭「看起来能跑」。编译器把 select 语句翻译成 `runtime.selectgo`：所有 case 的 channel 先被收进 `scases` 数组，运行时按 channel 地址排序生成 `lockorder`（固定加锁顺序，避免一次锁多个 channel 时死锁），再用 `fastrand` 打乱出 `pollorder`。所谓「伪随机选择」就来自 `pollorder`——它逐个探测就绪的 case，碰到第一个可通信的便执行，打乱是为了让各路长期公平、不被书写顺序饿死。没有任何 case 就绪时，当前 G 会为每个 channel 造一个 `sudog` 挂进 `sendq`/`recvq`（结构见第 43 讲 hchan），随后 `gopark` 挂起；任一 channel 有数据或被关闭时把它 `goready` 唤醒。由此得到两条正确性依据：被选中的那次收发与后续语句之间建立 happens-before；`close(done)` 与所有对 done 的接收之间同样建立 happens-before。所以「关闭一个 done 广播叫停一批 goroutine」在内存模型上是可靠的，而「用共享 bool 当停止标志、main 写 worker 读」没有同步，是真正的数据竞争——这一区别用 `go test -race` 一跑便知。
+
+高频事故出在 timer 堆。`time.After(d)` 本质就是 `NewTimer(d).C`，每次调用都向运行时的 timer 堆插入一个 `runtimeTimer`（关键字段 `when` 到期纳秒、`period` 周期、`f` 回调、`arg` 参数、`seq` 序号）；Go 1.14 起每个 P 维护一棵四叉小顶堆 `timers`，到期检查由调度循环与 sysmon 承担。定时器只有到期或被 `Stop` 才从堆里摘除。当 for-select 循环里业务通道命中远快于 d 时，每轮 `time.After` 新建的 timer 都要一直挂到 d 到期才回收，短时间就能累出成千上万个对象：它不报错，只让 `HeapObjects` 与 GC 次数缓慢爬升，这就是「timer 泄漏」。想亲手复现，把下面的 `leak_test.go` 用 `go test -bench=. -benchmem -run=^$ ./...` 跑一遍，`-benchmem` 的 `allocs/op` 一列会显示 `BenchmarkTimeAfter` 每轮都新建 timer 与 channel，分配次数是 `BenchmarkTimerReuse` 的数倍；后者只 `NewTimer` 一次，命中后 `Stop` 再 `Reset`，每轮几乎零分配。示例把 d 压到 1ms 是为了让基准测试不堆积、安全跑完，真实服务里 d 往往是秒级，堆积更严重，但「每轮新建 timer」这一分配特征不变。生产定位用 `go tool pprof -alloc_objects` 找谁在调 `time.After`/`time.NewTimer`，结合 heap profile 的增长趋势，`GODEBUG=gctrace=1` 可直观看 GC 次数与堆大小。还有一条版本差异：Go 1.23 起 timer 的 channel 默认改为同步（无缓冲），`Stop` 后不再需要「从 C 兜底读一次」；旧代码若依赖缓冲行为可用 `GODEBUG=asynctimerchan=1` 恢复，但 `time.After` 每次新建 timer 的事实没变，泄漏根源仍在。
+
+```go
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+// 错误写法：命中很快，但每轮 time.After 都新建一个 timer，旧 timer 要等到 d 到期才回收
+func loopAfter(fast chan struct{}, n int) {
+	for i := 0; i < n; i++ {
+		select {
+		case <-fast:
+			fast <- struct{}{}
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// 正确写法：只建一个 timer，命中后 Stop 再 Reset，反复复用
+func loopReuse(fast chan struct{}, n int) {
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	for i := 0; i < n; i++ {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(time.Millisecond)
+		select {
+		case <-fast:
+			fast <- struct{}{}
+		case <-timer.C:
+		}
+	}
+}
+
+func BenchmarkTimeAfter(b *testing.B) {
+	fast := make(chan struct{}, 1)
+	fast <- struct{}{}
+	b.ResetTimer()
+	loopAfter(fast, b.N)
+}
+
+func BenchmarkTimerReuse(b *testing.B) {
+	fast := make(chan struct{}, 1)
+	fast <- struct{}{}
+	b.ResetTimer()
+	loopReuse(fast, b.N)
+}
+```
+
+```bash
+go test -bench=. -benchmem -run=^$ ./...   # 看 allocs/op：TimeAfter 明显更高
+go test -race ./...                          # 顺带确认整个包没有数据竞争
+```
+
+<OutputBox title="本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkTimeAfter-12：3 allocs/op，248 B/op；BenchmarkTimerReuse-12：0 allocs/op，0 B/op" note="allocs/op 一列直接反映每轮新建 timer 的分配；数值随机器与版本浮动，但差距稳定" />
+
+把上面两类失效与对应的检测、修复整理成表，排障时按行对照即可：
+
+| 失败场景 | 根因 | 可验证的检测命令 | 修复要点 |
+| --- | --- | --- | --- |
+| for-select 循环里堆 timer | `time.After(d)` 每轮新建 `runtimeTimer`，命中快于 d 时到期前不回收 | `go test -bench=. -benchmem` 看 `allocs/op`；`go tool pprof -alloc_objects` | `time.NewTimer` 一次 + `defer Stop` + `Reset` 复用 |
+| 用共享 bool 当停止标志 | main 写、worker 读无同步，构成数据竞争 | `go test -race ./...` 报 `WARNING: DATA RACE` 指向该变量 | 改用 `close(done)`，关闭与接收建立 happens-before |
+| 阻塞等待没有超时或停止出口 | 下游卡住则 G 永久 `gopark` | `runtime.NumGoroutine()` 随请求数上涨；`go tool pprof` goroutine profile | 每个可能阻塞的 select 都配 `timer.C` 与 `done` |
+| `default` 写成忙轮询 | 空 select 反复立即返回，占满一个 P | `go tool pprof` CPU profile 见该函数自环 | 无就绪时退避 `time.Sleep`，或去掉 `default` 改阻塞 |
+
+下面这张时序图把「命中快、timer 堆积、close(done) 广播」三条线索串在一次循环里，配合本讲前面的双层 select 一起看：
+
+<SequenceDiagram title="for-select 超时与停止链路" caption="命中远快于超时时旧 timer 滞留，close(done) 一次广播唤醒全部等待者" :actors='["主协程","worker","业务通道","timer.C","done 通道"]' :steps='[{"from":"主协程","to":"worker","label":"启动循环","note":"三路出口同时监听","kind":"call"},{"from":"worker","to":"业务通道","label":"select 等待","note":"带 default 非阻塞探测","kind":"call"},{"from":"worker","to":"timer.C","label":"注册超时","note":"time.After 每轮新建 timer","kind":"call"},{"from":"业务通道","to":"worker","label":"命中返回","note":"命中远快于 d","kind":"return"},{"from":"timer.C","to":"worker","label":"旧 timer 挂起","note":"到期前一直留在堆","kind":"async"},{"from":"worker","to":"timer.C","label":"再建 timer","note":"下一轮重复堆积","kind":"call"},{"from":"主协程","to":"done 通道","label":"close(done)","note":"一次关闭","kind":"call"},{"from":"done 通道","to":"worker","label":"广播唤醒","note":"close 建立 happens-before","kind":"return"},{"from":"worker","to":"主协程","label":"退出循环","note":"defer Stop 释放计时器","kind":"return"}]' />
+
+<Quiz no="44-3" q="for-select 循环里业务通道命中远快于超时 d，反复写 time.After(d) 会带来什么后果？" :options='["timer 命中更快，程序更省内存","每轮新建的 runtimeTimer 要等到 d 到期才回收，堆对象与 GC 次数上涨","select 会退化为按书写顺序执行","编译直接报错"]' answer="1" explain="time.After 每次新建 timer 插入 per-P 的 timer 堆，命中快时旧 timer 到期前不摘除；用 go test -bench=. -benchmem 看 allocs/op，或 pprof -alloc_objects 定位调用者，修法是 NewTimer 一次加 Stop 加 Reset 复用。" />
+
+<Callout type="warn" title="别把 Go 1.23 的同步 timer 当成『不用 Stop』" text="1.23 把 timer channel 改为无缓冲后，Stop 之后『再从 C 兜底读一次』的旧套路不再必要；但 NewTimer、NewTicker 持有的 runtime timer 仍要 Stop 才会从堆摘除。高频循环里只复用不 Stop、或反复 time.After，泄漏照旧。判断标准始终是：这个等待有没有超时或停止出口，timer 有没有被显式释放。" />
+
 ## 4. 工程实践
 真实服务里 select 几乎总是「数据 + 超时 + 停止」三件套：HTTP handler 等下游结果、等 deadline、等客户端断开；后台 worker 抢任务、等心跳、等优雅退出。经验是任何可能阻塞的等待都要配超时或停止出口，否则一个卡住的下游就能拖垮整组 goroutine；定时器复用而非每次新建，done 用 close 广播。
 

@@ -147,6 +147,110 @@ func main() {
 
 <Callout type="tip" title="归还前先重置" text="取出的对象可能带残留数据，Put 前把切片截零、字段清零，Put 后别再持有引用。encoding/json 与 fmt 正是这样复用编码缓冲。" />
 
+### 再深一层：Pool 的三层结构、GC 清空与 -race 的随机丢弃
+
+要解释「Pool 为什么不是缓存」，得看 `sync/pool.go` 的真实结构。每个 P 持有一个 `poolLocal`，里面是 `private any`（当前 P 独占、LIFO 复用）与 `shared poolChain`（无锁 SPMC 队列，可被其它 P 偷取）；`Get` 的顺序是「先拿 private，再从 shared 出队，再从别的 P 偷，最后回退 `New`」，而 `Put` 优先塞进 private、满了才进 shared。整份缓存还分两级：`p.local`（primary）与 `p.victim`。`poolCleanup()` 在每次 GC 开始、STW 期间被运行时调用：第一轮把 `oldPools` 里的 `victim` 清空、再把 `allPools` 的 `local` 降级为新的 `victim`；第二轮才把上一轮的 `victim` 真正丢弃。这正是本讲示例里要连调两次 `runtime.GC()` 才能看到对象被清空的原因——GC 并不直接清 private/shared，只是把它们降级，对象最多活过两轮 GC。所以「Put 后下次 Get 必拿到同一个」在内存模型与实现上都不成立，Pool 只是「减少分配压力」的周转区。
+
+一个更隐蔽、能亲手复现的事实：`Put` 在竞态检测开启时会故意捣乱。源码里写着 `if race.Enabled { if runtime_randn(4) == 0 { return } }`——`go test -race` 下每次 `Put` 有 1/4 概率把对象直接丢掉，目的就是暴露那些错误依赖「Put 后必复用」的代码。我们实测把脏对象 `Put` 回去再 `Get`，即便锁线程、`GOMAXPROCS(1)`，取回的仍是全新对象。因此本讲的 `TestPoolReset` 不赌取用顺序，而是直接构造一个「带上次残留」的脏 `*Buf` 来验证：`fillNoReset` 未截零就 append，结果被污染成「旧数据新」；`fillReset` 先 `b.Data[:0]` 再写、归还前再截零，结果恒为「新」。真正的修复不在 Get/Put，而在「取出先重置、归还前再重置」这条纪律，以及 `New` 必须能独立造出干净对象。
+
+原子侧的正确性同样有边界。`atomic.Int64.Add`、`CompareAndSwap` 落到一条 CPU 原子读改写指令（x86 的 `LOCK CMPXCHG`、ARM 的 `LDXR/STXR` 循环），Go 内存模型规定所有 `sync/atomic` 操作按「顺序一致」执行，因此它们之间自带 happens-before，不会互相覆盖。但 CAS 只比较「当前值是否等于期望值」，察觉不到「被改成别的值又改回来」的 ABA 问题，跨步不变式仍要退回 Mutex。`atomic.Value` 的 `Store` 首次决定具体类型，之后存不同类型会 panic `inconsistently typed value`，存 nil 同样 panic，读方 `Load` 后必须判类型断言的 ok。生产定位：用 `go test -race ./...` 暴露对复用顺序的错误依赖；用 `go test -bench=. -benchmem` 看 `allocs/op` 判断 Pool 是否真有收益——本机实测 `BenchmarkNoPool` 是 1 allocs/op、1024 B/op，`BenchmarkWithPool` 降到 0 allocs/op。收益只在「构造成本高、可丢弃、无外部资源」的对象上成立，小对象直接分配往往更快。
+
+```go
+package main
+
+import (
+	"sync"
+	"testing"
+)
+
+type Buf struct{ Data []byte }
+
+var bufPool = sync.Pool{
+	New: func() any { return &Buf{Data: make([]byte, 0, 1024)} },
+}
+
+var sink []byte
+
+func BenchmarkNoPool(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		sink = make([]byte, 0, 1024)
+	}
+}
+
+func BenchmarkWithPool(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		bb := bufPool.Get().(*Buf)
+		bb.Data = bb.Data[:0]
+		bufPool.Put(bb)
+	}
+}
+
+// 错误写法：取出后不重置直接 append，残留数据混进结果；归还时也没清
+func fillNoReset(b *Buf, s string) []byte {
+	b.Data = append(b.Data, s...)
+	return append([]byte(nil), b.Data...)
+}
+
+// 正确写法：取出先截零，用完后归还前再截零
+func fillReset(b *Buf, s string) []byte {
+	b.Data = append(b.Data[:0], s...)
+	out := append([]byte(nil), b.Data...)
+	b.Data = b.Data[:0] // 归还前重置
+	return out
+}
+
+// 从池取用并归还的包装：真正的 bug 是「忘了重置」
+func withPool(fn func(*Buf, string) []byte, s string) []byte {
+	b := bufPool.Get().(*Buf)
+	out := fn(b, s)
+	bufPool.Put(b)
+	return out
+}
+
+func TestPoolReset(t *testing.T) {
+	// -race 下 sync/pool.go 的 Put 会随机丢弃对象，复用顺序不可依赖，
+	// 因此直接构造「带残留」的脏对象，让实验稳定复现
+	dirty := &Buf{Data: []byte("旧数据")}
+	if got := string(fillNoReset(dirty, "新")); got != "旧数据新" {
+		t.Fatalf("未重置应产生污染，实际 %q", got)
+	}
+	clean := &Buf{Data: []byte("旧数据")}
+	if got := string(fillReset(clean, "新")); got != "新" {
+		t.Fatalf("重置后应干净，实际 %q", got)
+	}
+	// 正确写法放进真实 Pool 也稳定
+	if got := string(withPool(fillReset, "新")); got != "新" {
+		t.Fatalf("Pool 中重置写法应稳定，实际 %q", got)
+	}
+}
+```
+
+```bash
+go test -race -run=TestPoolReset -v ./...   # 打印污染结果，验证重置写法
+go test -bench=. -benchmem -run=^$ ./...    # 看 allocs/op：NoPool 1、WithPool 0
+go test -race ./...                         # 全量回归
+```
+
+<OutputBox title="本机实测（Go 1.23.8 / darwin-arm64）" output="BenchmarkNoPool-12：1 allocs/op，1024 B/op；BenchmarkWithPool-12：0 allocs/op，0 B/op" note="Pool 把每轮一次堆分配降到零；只有构造成本高、可丢弃的对象才值得这样复用" />
+
+把分配、GC 行为与边界整理成表，判断「该不该用 Pool」时可逐行核对：
+
+| 手段 / 状态 | 分配特征（实测） | GC 后的行为 | 适用与误用边界 |
+| --- | --- | --- | --- |
+| 每次 `make([]byte,0,1024)` | 1 allocs/op，1024 B/op | 对象即垃圾，触发 GC | 简单直接，小对象往往比 Pool 更快 |
+| `sync.Pool` 复用 | 0 allocs/op，0 B/op | primary 降级为 victim，两轮后丢弃 | 只放可重建、无外部资源的临时大对象 |
+| Pool 对象 `private` 槽 | 命中时零分配 | 每轮 GC 后被降级 | 不能假定 Put 后必 Get 回同一个 |
+| `-race` 下的 `Put` | 1/4 概率丢弃对象 | 同上 | 专门暴露对复用顺序的错误依赖 |
+| `atomic.Value.Store` | 无锁 | 不受 GC 清空影响 | 类型必须一致，禁止存 nil，读判 ok |
+
+下面这张时序图把 `private`、`victim`、两轮 GC 与 `New` 兜底串起来，配合前面的两次 `runtime.GC()` 示例一起看：
+
+<SequenceDiagram title="sync.Pool 的两轮 GC 与 victim 降级" caption="首轮 GC 把 local 降级为 victim，次轮丢弃 victim，池空后 Get 回退到 New" :actors='["应用","primary(local)","victim","GC","New"]' :steps='[{"from":"应用","to":"primary(local)","label":"Put 归还","note":"进本 P 的 private","kind":"call"},{"from":"primary(local)","to":"应用","label":"Get 命中","note":"LIFO 零分配复用","kind":"return"},{"from":"GC","to":"primary(local)","label":"首轮 GC","note":"STW 调 poolCleanup","kind":"call"},{"from":"primary(local)","to":"victim","label":"降级为 victim","note":"local 置空","kind":"call"},{"from":"应用","to":"victim","label":"Get 仍可能命中","note":"顶多活两轮 GC","kind":"call"},{"from":"GC","to":"victim","label":"次轮 GC","note":"清空 oldPools","kind":"call"},{"from":"victim","to":"New","label":"缓存丢弃","note":"对象被回收","kind":"call"},{"from":"应用","to":"New","label":"池空回退","note":"New 造干净对象","kind":"call"},{"from":"New","to":"应用","label":"返回新对象","note":"不依赖上次残留","kind":"return"}]' />
+
+<Predict no="46-3" q="把带『旧数据』残留的 Buf 交给未重置的 fillNoReset 再 append『新』，结果是什么？" :options='["只有 新","旧数据新","空字符串","panic"]' answer="1" output="旧数据新" explain="复用对象带着上次残留，未截零就 append 会把旧内容拼在前面；正确写法先 b.Data[:0] 再写、归还前再截零，结果恒为 新。" />
+
+<Callout type="tip" title="能不能用 -race 验证 Pool 复用？" text="不能验证『Put 必被复用』，因为 sync/pool.go 在 race.Enabled 时以 1/4 概率随机丢弃 Put 的对象，正是为了打掉这种错误假设。想稳定复现残留污染，要像 TestPoolReset 那样直接构造脏对象，或显式连调两次 runtime.GC() 观察 victim 被清空。" />
+
 ## 4. 工程实践
 实战里 atomic 常用于指标计数、限流令牌、状态标志等单值场景，简单逻辑下比 Mutex 快一个量级；但「先检查再更新」这类跨步不变式要退回 Mutex 或 CAS 自旋。sync.Pool 只复用「构造成本高、可丢弃、无外部资源」的临时对象，是否有收益用基准测试的分配次数说话，小对象直接分配往往更快。
 

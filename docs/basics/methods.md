@@ -148,6 +148,110 @@ func main() {
 
 <Callout type="tip" title="切片元素调指针方法" text="切片元素可取地址；map 的 value 不能取址，得先取出或改存指针。" />
 
+把接收者看穿，其实就一句话：它是隐式的第一个参数。`c.Add(1)` 与函数 `Counter.Add(c, 1)` 在编译器眼里等价，所以值接收者一定会把整个结构体拷一份，字段越多越贵；指针接收者只传一个地址。想亲眼确认，可以写方法表达式 `f := (*Counter).Add; f(&c, 1)` 调一次，或跑 `go build -gcflags=-m`，输出里能看到哪些接收者被判定为逃逸到堆。方法集也不玄学：`go/types` 包的 `types.NewMethodSet` 能列出 `T` 与 `*T` 各自有哪些方法，`go doc go/types.NewMethodSet` 就有签名；`cmd/compile/internal/types2` 在类型检查阶段算的正是这张表。这里只借它说明「为什么值类型赋不进指针实现的接口」，不读源码。
+
+最该记住的一条工程红线是：含 `sync.Mutex` 的类型千万别用值接收者。值接收者会把锁连同字段一起拷贝，两个副本各锁各的，等于没加锁；`go vet` 的 `copylocks` 检查器会直接报 `passes lock by value`，这条命令比 code review 更靠谱。并发下再跑 `go test -race`，把锁去掉就会看到 `DATA RACE`，加上就干净——两个命令配合，能自己把「为什么必须指针接收者」验证一遍。这也是「同一类型的接收者风格要一致」的硬理由：只要有一个方法用了指针，其余即便只读也跟着用指针，免得方法集被切得七零八落。
+
+真实踩坑还有两类。其一是接口赋值拖到运行前才发现：函数参数写着接口，传值进去时编译失败，报错说某个方法不在方法集里；在项目里提前写一行 `var _ Interface = (*T)(nil)`，签名一改就当场编译报错，不用等到调用点。其二是 nil 接收者：指针接收者完全可能为空，方法里直接 `c.N++` 就是 panic；像链表求和那样开头判空返回零值，或者像账户扣款那样返回明确错误，都是把边界收进方法内部。注意这跟「接口变量整体是不是 nil」是两回事，后者留到下一讲。
+
+<ConceptDiagram type="value-pointer" title="值接收者与指针接收者" caption="值接收者拿到整份拷贝，指针接收者只拿到一个地址，改的是同一份数据" />
+
+下面两段代码把「并发安全」与「nil 接收者」写成能跑的例子。第一段给计数器加上互斥锁：含锁的类型只能用指针接收者，100 个 goroutine 并发累加仍得到确定结果。
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// SafeCounter 内含互斥锁，只能用指针接收者：
+// 值接收者会把锁一并拷贝，两个副本各锁各的，等于没锁。
+type SafeCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *SafeCounter) Add(delta int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n += delta
+}
+
+func (c *SafeCounter) Value() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func main() {
+	var c SafeCounter
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Add(1)
+		}()
+	}
+	wg.Wait()
+	fmt.Println("并发累加结果 =", c.Value())
+}
+```
+
+<OutputBox title="运行结果" output="并发累加结果 = 100" />
+
+第二段让指针接收者把边界收进方法内部：余额不足、金额非法、接收者为 nil 都返回明确错误，而不是默默改坏数据或崩掉。
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Account struct {
+	Balance int
+}
+
+// Withdraw 用指针接收者改状态；余额不足或接收者为 nil 都返回明确错误。
+func (a *Account) Withdraw(amount int) error {
+	if a == nil { // 指针接收者可能为 nil，先挡住
+		return errors.New("账户为空")
+	}
+	if amount <= 0 || amount > a.Balance {
+		return fmt.Errorf("取款 %d 不合法", amount)
+	}
+	a.Balance -= amount
+	return nil
+}
+
+func main() {
+	a := &Account{Balance: 100}
+	if err := a.Withdraw(30); err == nil {
+		fmt.Println("取款后余额 =", a.Balance)
+	}
+	fmt.Println("超额被拒 =", a.Withdraw(1000) != nil)
+
+	var empty *Account
+	fmt.Println("nil 接收者被挡住 =", empty.Withdraw(1) != nil)
+}
+```
+
+<OutputBox title="运行结果" output="取款后余额 = 70\n超额被拒 = true\nnil 接收者被挡住 = true" />
+
+| 写法 | 现象 | 原因与修法 |
+| --- | --- | --- |
+| 含 `sync.Mutex` 却用值接收者 | 并发仍出错或锁失效 | 值接收者把锁拷了一份，改指针接收者 |
+| 大结构体用值接收者 | 每次调用都整份拷贝 | 改指针，`go build -gcflags=-m` 看逃逸 |
+| 值类型赋给只由 `*T` 实现的接口 | 编译失败 | 把方法改成值接收者，或传地址 |
+| 指针接收者方法里直接解引用 | nil 调用时 panic | 方法开头判 `if c == nil` |
+| 给别包的类型加方法 | 编译失败 | 只能给本包定义的类型加方法 |
+
+<Predict no="18-3" q="SafeCounter 内含 sync.Mutex，若把 Add 误写成值接收者 func (c SafeCounter) Add，再起 100 个 goroutine 各加 1，go vet 与 go test -race 分别会怎样？" :options='["都通过，结果稳定","vet 报 passes lock by value，race 报 DATA RACE","只 race 报错","编译失败"]' answer="1" output="go vet 报 passes lock by value，go test -race 报 DATA RACE" explain="值接收者把 Mutex 拷了一份，各副本锁不住同一份数据；copylocks 静态能查出拷贝锁，race 运行时能查出并发读写，两道检查都指向「必须改成指针接收者」。" />
+
 ## 动手练一练
 
 <Exercise title="让结构体可自增" task="给 Counter 加方法 Inc，调用后 N 加 1 并打印。" :hints='["要改原值用指针接收者","调用自动取地址"]' solution="func (c *Counter) Inc() {\n    c.N++\n}\nc := Counter{}\nc.Inc()\nfmt.Println(c.N)" explain="指针接收者改到原值，输出 1。" />

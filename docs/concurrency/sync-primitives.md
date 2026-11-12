@@ -176,6 +176,105 @@ func main() {
 
 <Callout type="tip" title="几类常见死锁" text="Go 的 Mutex 不可重入，同一 goroutine 连续 Lock 两次会自锁；复制已使用的 Mutex 值会得到两份无关状态，务必传指针；两个 goroutine 以相反顺序获取两把锁会形成 AB-BA 死锁，应固定全局加锁顺序。这些问题多能被 go vet 与 -race 提前暴露。" />
 
+### 再深一层：WaitGroup 的计数、sema 与 happens-before
+
+「锁粒度」和「Add 时机」不是风格偏好，而是由运行时状态与内存模型共同决定的正确性约束。先看 `sync.Mutex`：结构体只有两个字段，`state int32`（低位是 `mutexLocked`/`mutexWoken`/`mutexStarving` 三个标志位加等待者计数）与 `sema uint32`。`Lock` 先 CAS 抢 `mutexLocked`，抢不到才进 `lockSlow` 自旋，仍失败就调 `runtime_SemacquireMutex` 把当前 G 挂进 `runtime/sema.go` 的 `semaRoot` 等待队列（一棵按地址索引的 `sudog` treap）；`Unlock` 走 `runtime_Semrelease` 把队首 `goready`。正是这对 sema 操作带有 acquire/release 语义，才让「一次 Unlock happens-before 下一次 Lock」，前一次临界区的写入对后一个持锁者可见。若读路径不进临界区（如 `badGet` 直接读 `c.n`），这条 happens-before 就断了，`go test -race` 会在该变量上报 `WARNING: DATA RACE`；把读也纳入同一把锁，`TestGuard` 就稳定输出 1000。这就是「临界区要覆盖全部共享访问」的机器级含义：粒度不是越小越好，漏掉一次读就等于没保护。
+
+`sync.WaitGroup` 同理但更隐蔽。Go 1.20 起它的 `state atomic.Uint64` 高 32 位存计数器、低 32 位存等待者计数，另加一个 `sema uint32`：`Add(delta)` 对计数器做原子加，`Done()` 即 `Add(-1)`；`Wait()` 循环读 state，计数器为 0 就直接返回，否则 CAS 增加等待者计数后 `runtime_Semacquire(&wg.sema)` 挂起，等最后一个 `Done` 把计数减到 0 时由 `runtime_Semrelease` 唤醒全部等待者。源码注释写得很直白：`Done` synchronizes before 它所唤醒的 `Wait` 的返回。关键在于 `Add` 与 `Wait` 之间没有自动排序：若把 `wg.Add(1)` 挪进 goroutine 内部，主协程完全可能在计数登记前读到 0 就返回。实测把本讲 `TestGuard` 里的 Add 挪进函数体、让任务睡 1ms，`go test -count=3` 下 `Wait` 返回时「已完成」有时是 50、有时是 0——结果随机少算，且没有任何报错。约定「循环里先 Add、再 go、函数体 defer Done、循环外 Wait」正是为了把计数登记排在 goroutine 启动之前。
+
+把下面的 `guard_test.go` 用 `go test -race -run=TestGuard -v ./...` 跑，正确写法全绿；再用 `SHOW_RACE=1 go test -race -run=TestBadGuardRace ./...` 单独跑那个故意保留 bug 的反面实验，会看到 `WARNING: DATA RACE` 精确指向 `c.n` 的读写——这就是可复现的对照。生产里排查锁相关故障，用 `go tool pprof -mutex` 看争用热点、block profile 看阻塞时长，`runtime/pprof` 的 goroutine profile 能发现卡在 `semacquire` 的 G；AB-BA 死锁（两个 goroutine 以相反顺序取两把锁）运行时只在「所有 G 都睡死」时才 panic，局部死锁靠 `-race` 与超时兜底，因此工程上应固定全局加锁顺序。
+
+```go
+package main
+
+import (
+	"os"
+	"sync"
+	"testing"
+)
+
+type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+// 错误对照：读路径没进临界区，与写无同步
+func (c *Counter) badGet() int { return c.n }
+
+// 正确：读写都由同一把锁覆盖
+func (c *Counter) Add() {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+}
+
+func (c *Counter) Get() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func TestGuard(t *testing.T) {
+	var c Counter
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1) // 计数先登记，Wait 才不会漏任务
+		go func() {
+			defer wg.Done()
+			c.Add()
+		}()
+	}
+	wg.Wait()
+	if got := c.Get(); got != 1000 {
+		t.Fatalf("期望 1000，实际 %d", got)
+	}
+}
+
+// 反面实验：设 SHOW_RACE=1 并配合 -race，可看到读未加锁的 DATA RACE
+func TestBadGuardRace(t *testing.T) {
+	if os.Getenv("SHOW_RACE") == "" {
+		t.Skip("反面实验：设 SHOW_RACE=1 并加 -race 运行")
+	}
+	var c Counter
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			c.Add()
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		_ = c.badGet() // 与写并发且无锁
+	}
+	wg.Wait()
+}
+```
+
+```bash
+go test -race -run=TestGuard -v ./...                    # 正确写法：全绿，稳定 1000
+SHOW_RACE=1 go test -race -run=TestBadGuardRace ./...   # 反面实验：报 WARNING: DATA RACE
+go vet ./...                                           # 抓 copylocks 等静态问题
+```
+
+把各原语「谁保证可见性、依据在哪、错了怎么测」整理成表，比死记 API 更可靠：
+
+| 同步动作 | 建立的 happens-before | 源码依据 | 误用后果与检测手段 |
+| --- | --- | --- | --- |
+| Mutex 的 Unlock 到后续 Lock | 前次临界区写入对下一持锁者可见 | `runtime_Semrelease` 与 `runtime_SemacquireMutex` 的 acquire/release | 读不进锁即竞态，`go test -race` 报 DATA RACE |
+| WaitGroup 的 Done 到被唤醒的 Wait | 任务写入对 Wait 返回后可见 | 源码注释 synchronizes before；state 计数归零触发 `runtime_Semrelease` | Add 放进 goroutine 则 Wait 可能提前返回，`go test -count=10` 随机少算 |
+| close(done) 到各接收者 | 关闭前写入对所有接收者可见 | 关闭 channel 唤醒全部 recvq 中的 sudog | 忘关则下游永等，goroutine profile 见卡住的 G |
+| Once 的 Do 返回 | 初始化写入对所有调用者可见 | done 原子标志加互斥双重检查 | Do 里递归调自身会自锁，靠超时与压测暴露 |
+| Cond 的 Broadcast 到 Wait 返回 | 唤醒前写入对等待者可见（须持锁） | Wait 释放锁并入队，唤醒时 goready | Wait 前未持锁会 panic，不用 for 复查会虚假唤醒 |
+
+下图把「抢锁失败、挂入 sema 队列、Unlock 唤醒、重新入调度」这条链路补上，正好解释高竞争下 G 为何被切走又放回：
+
+<ConceptDiagram type="scheduler-loop" title="锁竞争下的 G 挂起与唤醒" caption="抢不到 Mutex 的 G 经 runtime_SemacquireMutex 挂入 semaRoot 等待队列，Unlock 时 goready 唤醒，回到调度循环重新入队" />
+
+<Quiz no="45-3" q="把 wg.Add(1) 从循环里挪进 goroutine 函数体，最可能观察到什么？" :options='["编译报错","Wait 可能在计数登记前观察到 0 而提前返回，结果随机少算","程序一定 panic","RWMutex 自动退化成普通 Mutex"]' answer="1" explain="Add 与 Wait 没有自动排序；实测让任务睡 1ms、go test -count=3，Wait 返回时完成数有时是 50、有时是 0。先 Add 再 go 才能让 Done synchronizes before Wait 的返回。" />
+
+<Callout type="warn" title="局部死锁 -race 也救不了" text="两个 goroutine 以相反顺序获取两把 Mutex 形成的 AB-BA 死锁，Go 运行时只在『所有 goroutine 都睡死』时才抛 fatal error；只要还有别的 G 在跑，它会一直挂着。go vet 能抓 copylocks（复制已用锁），抓不到加锁顺序；工程上固定全局加锁顺序、给等待配超时或减少共享，才是兜底。" />
+
 ## 4. 工程实践
 锁的首选是「不用锁」：能用 channel 传所有权、用不可变数据就别引入共享状态。确实要共享时按读写比例选锁——写多或临界区极短时普通 Mutex 更快，RWMutex 读锁记账有成本。锁和数据定义在一起，导出方法内部加解锁；初始化用 Once，广播退出优先 close(channel)，比 Cond 简洁。
 

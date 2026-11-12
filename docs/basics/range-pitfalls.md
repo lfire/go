@@ -160,6 +160,92 @@ func main() {
 
 <Callout type="tip" title="稳定输出靠排序" text="map 遍历顺序不保证；日志、快照、签名先取键排序，别依赖 range 顺序。" />
 
+为什么 1.22 之前所有闭包读到同一个值？因为闭包捕获的是「变量」这个存储单元，而不是某一刻的值。被闭包引用的局部变量会从栈搬到堆上（这就是逃逸），整个循环只分配了一个这样的单元，每轮只是把新值写进去；闭包记住的是单元的地址，等循环跑完再调用，读到的自然是最后一轮留下的值。用 `go build -gcflags=-m` 编译旧语义的代码，输出里能看到循环变量 `escapes to heap`；1.22 起改为每轮在循环体内新建变量，等价于编译器替你自动写了 `v := v`，于是每个闭包各指向一个独立单元。`range` 被降级成普通循环的代码在 `cmd/compile/internal/walk/range.go`——这里只需知道路径，真读源码是后续阶段的事。
+
+决定是否启用新语义的是 `go.mod` 里的 `go` 指令，而不是你机器上装了哪个版本的 Go。这条最容易踩：把构建机从 1.21 升到 1.23，但模块仍写 `go 1.21`，编译器就继续按旧语义处理，行为纹丝不动。验证顺序是先看 `go version` 再看 `go.mod`，必要时显式把指令改成 `go 1.22` 并 `go mod tidy`。想在同一台机器上对比，可以用 `GOEXPERIMENT=loopvar go run main.go` 在新旧过渡期预览。把循环变量交给 goroutine 的旧代码还藏着数据竞争：主循环写、goroutine 读同一个变量，`go test -race` 会明确报出 `DATA RACE`，这也是升级前最值得跑的一条命令。
+
+生产里真实的翻车现场有两个。其一是把 `&v` 存进任务队列，队列异步消费时全部指向最后一条记录，表现为「批量任务只处理了同一条数据」，用 `-race` 一跑就现形。其二是拿循环变量当分片下标启动 goroutine，结果所有协程挤到同一片，负载全压在一个核上——`top` 与 pprof 里会看到明显的倾斜。更隐蔽的一类是 map 遍历顺序被写进签名，偶发验签失败；先取键排序往往当场解决。
+
+<FlowTimeline title="排查闭包捕获的四步" :steps='[{"title":"查版本","desc":"读 go.mod 的 go 指令","tone":"blue"},{"title":"找捕获","desc":"闭包是否用了循环变量","tone":"orange"},{"title":"看存址","desc":"&v 是否进了长生命周期容器","tone":"green"},{"title":"加副本","desc":"v := v 兼容所有版本","tone":"purple"}]' direction="horizontal" />
+
+下面用两段代码把「版本差异」和「nil 边界」变成能亲手跑的实验。第一段把循环变量直接交给 goroutine，1.22 起各写各的下标，旧版本则会漏写并触发竞态。
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	nums := []int{1, 2, 3}
+	var wg sync.WaitGroup
+	out := make([]int, len(nums))
+	for i, v := range nums {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Go 1.22 起 i、v 每轮新建，各 goroutine 互不干扰；
+			// 1.21 及更早共用一个变量，会读到最后一轮且构成数据竞争
+			out[i] = v * 10
+		}()
+	}
+	wg.Wait()
+	fmt.Println("结果 =", out)
+}
+```
+
+<OutputBox title="Go 1.22 及之后的运行结果" output="结果 = [10 20 30]" />
+
+第二段换成指针切片，演示最容易漏掉的 nil 边界：切片里可能混入 nil 指针，批量校验时要在循环体内判空，并且「找不到/非法」要当成明确结果返回而不是悄悄跳过。
+
+```go
+package main
+
+import "fmt"
+
+type User struct {
+	Name  string
+	Score int
+}
+
+// validate 检查指针切片里有没有 nil 元素或负分，发现即整体返回错误。
+func validate(users []*User) error {
+	for i, u := range users {
+		if u == nil { // 真边界：指针切片可能混入 nil
+			return fmt.Errorf("第 %d 个元素是 nil", i)
+		}
+		if u.Score < 0 {
+			return fmt.Errorf("用户 %s 分数非法", u.Name)
+		}
+	}
+	return nil
+}
+
+func main() {
+	users := []*User{{Name: "a", Score: 90}, {Name: "b", Score: 80}}
+	fmt.Println("全部合法 =", validate(users) == nil)
+
+	users = append(users, nil) // 混入一个 nil 指针
+	fmt.Println("含 nil 时报错 =", validate(users) != nil)
+
+	fmt.Println("nil 切片也合法 =", validate(nil) == nil)
+}
+```
+
+<OutputBox title="运行结果" output="全部合法 = true\n含 nil 时报错 = true\nnil 切片也合法 = true" />
+
+| 现象 | 根因 | 定位或修法 |
+| --- | --- | --- |
+| 一串结果全相同 | 闭包捕获了共享的循环变量（≤1.21） | `go test -race` 查竞态；改用 `v := v` |
+| 改了元素却没生效 | `range` 给的是值副本 | 用下标 `s[i]` 回写，或改存指针切片 |
+| 输出顺序每次不同 | map 遍历起点随机 | 取键排序后再访问 |
+| 升级 Go 后行为没变 | 只换工具链，`go.mod` 的 `go` 指令没升 | 查 `go version` 与 `go.mod`，显式改 `go 1.22` |
+| 遍历指针切片时 panic | 切片里混入了 nil 指针 | 循环体先判 `u == nil` |
+
+<Predict no="15-3" q="go.mod 写 go 1.21，把 range 的 i、v 直接交给 goroutine 写 out[i]，wg.Wait 之后最可能出现什么？" :options='["稳定得到 [10 20 30]","多个下标被漏写，且 go test -race 报数据竞争","编译失败","固定输出 [30 30 30]"]' answer="1" output="多个下标被漏写，且 go test -race 会报 DATA RACE" explain="旧语义下 i、v 共用一个变量并被主循环与 goroutine 并发读写，既是数据竞争也会让多个协程写到同一处；1.22 起每轮新建变量才稳定得到 [10 20 30]。" />
+
 ## 动手练一练
 
 <Exercise title="修好闭包捕获" task="循环把 i 存进函数切片，结束后调用会得到三个相同的值。不升级 Go 版本，让结果依次为 0、1、2。" :hints='["整轮共用一个循环变量","在循环体内声明同名局部变量"]' solution="var fs []func()\nfor _, i := range []int{0, 1, 2} {\n    i := i\n    fs = append(fs, func() { fmt.Println(i) })\n}\nfor _, g := range fs {\n    g()\n}" explain="i := i 建立独立副本，输出 0、1、2。" />

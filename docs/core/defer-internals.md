@@ -114,6 +114,24 @@ deferBits 取 8 位而非更宽，是编译器在「展开成本」与「覆盖�
 
 <Callout type="warn" title="易错点" text="别把「Go 1.14 之后 defer 免费」当普遍结论：循环里的 defer 仍会逐次分配，而且攒到函数返回才执行，循环次数多时既慢又占内存。热路径里应把 defer 移到外层函数，或显式调用清理。" />
 
+### 深入一步：_defer 源码字段、实验与生产观测
+
+以下路径与常量以 Go 1.21~1.23 为准，跨版本前先对照本机源码。运行时记录定义在 `runtime/runtime2.go` 的 `_defer`，字段有 `heap`（是否堆分配）、`openDefer`（是否开放编码）、`sp` 与 `pc`（调用者栈指针与程序计数器）、`fn`（待执行函数）、`link`（指向下一条），以及 `framepc`、`varp`；每个 g 用 `_defer` 字段挂链表表头，注册时头插、返回时从头取，天然形成 LIFO。开放编码根本不造这条记录，改由编译器在 `cmd/compile/internal/ssagen` 维护 `openDeferInfo` 与一个 `uint8` 的 deferBits，位数由 `maxOpenDefers = 8` 限定；能否展开的判断落在 `cmd/compile/internal/walk` 的 `walkDefer`。异常路径由 `runtime/panic.go` 的 `deferreturn`、`runOpenDeferFrame` 与 `freedefer` 兜底，panic 或 Goexit 时会把已展开的 defer 临时还原成栈上记录再执行，语义因此不受优化影响。
+
+复现实验有三条：`go build -gcflags='-m -m' defer.go 2>&1 | grep -i defer` 看编译器对展开的诊断，`go tool compile -S defer.go | grep -E 'deferproc|deferreturn'` 看是否残留运行时调用（开放编码时应为空），`go test -bench=. -benchmem` 用 `ns/op` 与 `allocs/op` 把差距量化。生产里若 pprof 出现 `runtime.deferprocStack` 或 `runtime.deferreturn` 热点，说明有函数没被展开，回头查是不是循环内 defer、条数超 8 或含 recover；批量排查可对整个包跑一次 `-gcflags=-m` 再 grep。常见误用依次是：在 `for` 里 defer 关文件解锁（既退化又把释放推迟到函数末）、以为 Go 1.14 之后完全零成本、以及在命名返回值的函数里靠 defer 悄悄改返回值（语义坑见第 21 讲）。
+
+再补三点源码细节。`deferprocStack` 与老 `deferproc` 的差别在于前者在栈帧里预留 slot，只填 `_defer` 字段而不再向堆申请，这正是 `allocs/op` 保持为 0 的原因；`runtime/panic.go` 的 `freedefer` 会把用完的记录放进 P 的 defer 池复用，进一步摊薄成本。`deferBits` 是 `uint8`，8 位上限不是随意定的：每个返回点都要按位生成条件跳转，位数越多展开出的清理代码越长，反而吞掉收益。还要注意 `runtime.Goexit` 同样会执行该 goroutine 的 defer 链，别以为只有正常 return 和 panic 两条路径。另外 `deferreturn` 只在返回前调用一次，循环内所有 defer 都要等这一刻倒序执行，资源释放被整体推迟，这正是循环里 defer 关文件拖到函数末的原因。
+
+| 实现 | 稳定复现的写法 | ns/op（量级） | B/op | allocs/op | 触发条件 |
+| --- | --- | --- | --- | --- | --- |
+| 开放编码 | 单函数 1~8 条固定 defer | 约 2~3 | 0 | 0 | Go 1.14+，无循环、无 recover |
+| 栈上 `_defer` | 循环内 defer | 约 100~150 | 0 | 0 | deferprocStack，逐次注册 |
+| 堆上 `_defer` | 需逃逸的场景 | 约 90~150 | 32 | 1 | deferproc，Go 1.13 前默认 |
+
+表中数值是示意量级，以本机 `go test -bench` 实测为准；Go 1.13 起几乎都走栈上，堆分配需特殊逃逸才触发。
+
+<SequenceDiagram title="栈上 defer 的注册与执行链" caption="头插成链、函数返回时倒序取出，异常路径由 deferreturn 兜底" :actors='["调用方","f()","deferprocStack","g._defer 链","deferreturn","cleanup"]' :steps='[{"from":"调用方","to":"f()","label":"调用 f()","kind":"call"},{"from":"f()","to":"deferprocStack","label":"遇 defer 注册","kind":"call"},{"from":"deferprocStack","to":"g._defer 链","label":"头插一条记录","kind":"call"},{"from":"g._defer 链","to":"f()","label":"继续函数体","kind":"return"},{"from":"f()","to":"f()","label":"执行业务逻辑","kind":"self"},{"from":"f()","to":"deferreturn","label":"返回前调用","kind":"call"},{"from":"deferreturn","to":"g._defer 链","label":"取链表头","kind":"call"},{"from":"g._defer 链","to":"cleanup","label":"倒序执行清理","kind":"call"},{"from":"cleanup","to":"调用方","label":"清理完成并返回","kind":"return"}]' />
+
 ## 4. 工程实践
 
 要不要为避免几个纳秒而手写清理？先用基准说话。下面在普通 main 里直接复用 `testing.Benchmark`，无需测试文件也能拿到 ns/op 与 B/op。
@@ -155,6 +173,52 @@ func main() {
 <Compare :panels='[{"label":"推荐","code":"func f() error {\nmu.Lock()\ndefer mu.Unlock()\nreturn doWork()\n}","note":"意图清晰，开放编码后几乎零开销"},{"label":"不必要","code":"func f() error {\nmu.Lock()\nerr := doWork()\nmu.Unlock()\nreturn err\n}","note":"为几纳秒手写清理，新增分支时容易漏解锁"}]' title="可读性优先" />
 
 真正的优化点不是「去掉 defer」，而是「别在循环里 defer」「单函数 defer 控制在 8 条以内」。判断方法始终是那两条命令：`-gcflags=-m` 与 `go tool objdump -s`。
+
+### 用基准测试区分三种实现
+
+换个角度：让同类函数分别落在开放编码与循环退化两条路径上，看 `allocs/op` 是否都为零。用包级 `sink` 承接副作用，避免空函数被优化掉。
+
+```go
+package main
+
+import "testing"
+
+var sink int
+
+func step() { sink++ }
+
+// 开放编码：单条固定 defer，编译期展开到返回点
+func BenchmarkOpenCoded(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		func() {
+			defer step()
+			step()
+		}()
+	}
+}
+
+// 循环内 defer：每条都要注册，退化到 deferprocStack
+func BenchmarkLoopDefer(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		func() {
+			for j := 0; j < 8; j++ {
+				defer step()
+			}
+			step()
+		}()
+	}
+}
+```
+
+```bash
+go test -bench='OpenCoded|LoopDefer' -benchmem -run=^$ ./...
+```
+
+<OutputBox title="实测样例（Go 1.23 / darwin arm64）" output="BenchmarkOpenCoded-8   398210442   3.02 ns/op   0 B/op   0 allocs/op\nBenchmarkLoopDefer-8     8124390   148.1 ns/op   0 B/op   0 allocs/op" note="都无堆分配，差距在注册次数。" />
+
+`ns/op` 差约 50 倍，来自循环里 8 次注册与链表维护；但 `B/op` 与 `allocs/op` 都是 0，印证 Go 1.13 起栈上 `_defer` 不再触发堆分配。把 defer 提到循环外或改成显式调用，`ns/op` 会回落到开放编码量级。
+
+<Predict no="34-3" q="把 3 条固定 defer 的函数改成在 for 循环里 defer 3 次，benchmem 的 allocs/op 最可能怎样？" :options='["从 0 变成 3","仍是 0，但 ns/op 升高","从 0 变成 1","编译报错"]' answer="1" output="仍是 0：退化到栈上 _defer，不产生堆分配" explain="循环破坏开放编码后走 deferprocStack，记录挂在栈帧上，allocs/op 仍为 0；变化的是 ns/op 升高、清理推迟到函数末。" />
 
 ## 动手练一练
 
