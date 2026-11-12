@@ -19,7 +19,7 @@ const hintList = computed(() => {
 const opened = ref(true)
 const hintAt = ref(0)
 const showSolution = ref(false)
-const code = computed(() => (props.solution || '').replace(/\\n/g, '\n'))
+const code = computed(() => String(props.solution ?? '').replace(/\\n/g, '\n'))
 </script>
 
 <template>

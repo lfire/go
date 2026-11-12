@@ -1,0 +1,329 @@
+---
+title: 第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
+description: 讲清 Cache-Aside 模式、穿透击穿雪崩三大问题的成因与对策、TTL 抖动、双写一致与分布式锁初探，把缓存用对而不是用多
+---
+
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="把缓存用对而不是用多" prereq="第 66 讲 · ORM 与迁移" />
+
+# 第 67 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
+
+> 加缓存看起来是稳赚的优化：内存比磁盘快几个数量级。但缓存是**副本**，只要引入副本，就必然引入「副本与主数据不一致」以及「副本失效时流量全部砸回主库」两个新问题。线上很多缓存事故不是没加缓存，而是加错了：给写多读少的接口加、给不能容忍任何不一致的余额加、所有 key 设同一个 TTL 导致整点集体失效。这一讲把三大经典问题和一致性方案逐个拆开，并给出可运行的对策代码。
+
+## 这一讲你会得到什么
+
+<CheckList id="67-goal" title="本讲目标" :items='["能写对 Cache-Aside 读路径：先查缓存、未命中回源、回填并设置 TTL","能说清穿透、击穿、雪崩各自的成因与对应解法","理解 TTL 抖动、单飞重建、空值缓存为什么能挡住流量","能分析双写一致的几种方案，并写出带 token 的最小分布式锁"]' />
+
+## 1. 先建立直觉
+
+把数据库想成仓库，Redis 想成店面前台的小货架。顾客要货，先看货架（缓存），有就直接拿；没有才去仓库取一件，顺手放一份到货架上（回填），并贴一个「几小时后下架」的标签（TTL）。这就是 **Cache-Aside**：缓存不主动同步，谁读谁负责回填。
+
+三个经典故障都发生在货架失效的瞬间。**穿透**是顾客一直问一件根本不存在的货，货架永远没有、仓库也永远没有，每次都白跑一趟仓库；**击穿**是一件爆款货刚好下架，同一秒几百个顾客全部涌去仓库取同一件；**雪崩**是货架上一大批货贴了同一时刻的标签，整点到点一起下架，仓库瞬间被全量流量压垮。三者成因不同，解法也不同，混着谈只会记不住。
+
+<ConceptDiagram type="cache-aside" title="Cache-Aside：读时回填，写时删除而不是更新" caption="命中直接返回；未命中才回源并回填；写操作删除缓存，让下一次读自然重建" />
+
+## 2. 语法与规则
+
+第一段代码是完整、可运行的 HTTP 服务：Cache-Aside 读路径、空值缓存防穿透、TTL 抖动防雪崩，以及 Redis 故障时降级回源。
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"math/rand"
+	"net/http"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+var rdb *redis.Client
+
+// 模拟源数据库；生产里换成 db.QueryRowContext。
+var db = map[string]string{"1": "gopher", "2": "alice"}
+
+const (
+	baseTTL   = 5 * time.Minute
+	emptyTTL  = 60 * time.Second // 空值缓存只挡一小段时间
+	emptyMark = "__NULL__"        // 约定一个不会与业务值冲突的哨兵
+)
+
+func queryDB(id string) (string, bool) {
+	v, ok := db[id]
+	return v, ok
+}
+
+// ttlWithJitter 在基础 TTL 上加 0~20% 随机量，让 key 分散过期。
+func ttlWithJitter(base time.Duration) time.Duration {
+	jitter := time.Duration(rand.Int63n(int64(base / 5)))
+	return base + jitter
+}
+
+func getUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	key := "user:" + id
+	c := r.Context()
+
+	val, err := rdb.Get(c, key).Result()
+	if err == nil { // 命中
+		if val == emptyMark {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK,
+			map[string]string{"id": id, "name": val, "from": "cache"})
+		return
+	}
+	// 区分「没命中」与「缓存故障」：后者必须降级回源，不能让整个接口挂掉。
+	if !errors.Is(err, redis.Nil) {
+		log.Printf("redis get: %v", err)
+	}
+
+	name, ok := queryDB(id)
+	if !ok {
+		// 查不到也缓存一小段空值，挡住对不存在 id 的反复穿透。
+		_ = rdb.Set(c, key, emptyMark, emptyTTL).Err()
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	_ = rdb.Set(c, key, name, ttlWithJitter(baseTTL)).Err()
+	writeJSON(w, http.StatusOK,
+		map[string]string{"id": id, "name": name, "from": "db"})
+}
+
+func main() {
+	rdb = redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 0})
+	defer rdb.Close()
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		log.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /users/{id}", getUser)
+	log.Println("listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+```
+
+<OutputBox title="两次请求的差异" output="第 1 次 GET /users/1 返回 from=db，并回填缓存\n第 2 次 GET /users/1 返回 from=cache\nGET /users/999 返回 404，并写入短 TTL 的空值标记\n此后连续请求 999 都在缓存层被挡住" note="缓存故障时接口依然可用，只是回源比例升高；这是降级设计的目标" />
+
+<LineByLine code="val, err := rdb.Get(ctx, key).Result()\nif err == nil {\nreturn val\n}\nrow := queryDB(id)\nrdb.Set(ctx, key, row, ttl)\nreturn row" :notes='["先查缓存，Get 在键不存在时返回 redis.Nil","err 为 nil 才是真正命中","命中直接返回，不碰数据库","未命中才回源；这一步最慢，应加超时与限流","回填时设置带抖动的 TTL，别用永不过期","把结果返回给调用方，下次同类读即命中"]' title="Cache-Aside 读路径逐行看" />
+
+第二段代码用零依赖的纯 Go 演示**单飞重建**：热点 key 失效瞬间，只放一个请求回源，其余等待后直接读缓存；同时加上 TTL 抖动。生产里应当用第 48 讲介绍的 `singleflight.Group` 按 key 分组，这里用一把互斥锁把原理展示清楚。
+
+```go
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"time"
+)
+
+type entry struct {
+	value   string
+	expires time.Time
+}
+
+type cache struct {
+	mu    sync.Mutex
+	data  map[string]entry
+	loads sync.Mutex // 简化版单飞：同一时刻只允许一个协程回源
+}
+
+func (c *cache) get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.data[key]
+	if !ok || time.Now().After(e.expires) {
+		return "", false
+	}
+	return e.value, true
+}
+
+func (c *cache) set(key, value string, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[key] = entry{value: value, expires: time.Now().Add(ttl)}
+}
+
+func ttlWithJitter(base time.Duration) time.Duration {
+	return base + time.Duration(rand.Int63n(int64(base/5)))
+}
+
+// loadWithSingleFlight 让并发的未命中请求只回源一次。
+func (c *cache) loadWithSingleFlight(key string, load func() string) string {
+	if v, ok := c.get(key); ok {
+		return v
+	}
+	c.loads.Lock()
+	defer c.loads.Unlock()
+	// 双检：等在锁上的请求进来时，可能已被前一个协程重建好了。
+	if v, ok := c.get(key); ok {
+		return v
+	}
+	v := load()
+	c.set(key, v, ttlWithJitter(3*time.Second))
+	return v
+}
+
+func main() {
+	c := &cache{data: make(map[string]entry)}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = c.loadWithSingleFlight("hot", func() string {
+				fmt.Println("回源一次（模拟慢查询）")
+				time.Sleep(20 * time.Millisecond)
+				return "value"
+			})
+		}()
+	}
+	wg.Wait()
+	fmt.Println("20 个并发请求，回源只发生 1 次")
+}
+```
+
+`loads` 是全局一把锁，意味着不同 key 也会互相等待，只适合演示；真实实现按 key 分组，让不相干的热点互不阻塞。双检不能省：等到锁的请求拿到的可能是刚被前一个协程填好的值，不检查就会重复回源。
+
+## 3. 深入一步
+
+| 问题 | 成因 | 现象 | 对策 |
+| --- | --- | --- | --- |
+| 穿透 | 查询**根本不存在**的数据 | 缓存与库都没有，每次都回源 | 空值缓存、布隆过滤器、参数校验 |
+| 击穿 | 单个**热点 key** 过期 | 大量并发同时回源同一条数据 | 单飞重建、互斥锁、热点逻辑不过期 |
+| 雪崩 | 大量 key **同一时刻**失效或 Redis 宕机 | 全量流量砸向数据库 | TTL 抖动、多级缓存、高可用与限流降级 |
+
+三者的分界线很清晰：穿透是「数据不存在」，击穿是「一个 key」，雪崩是「一批 key 或整个缓存层」。所以空值缓存治不了雪崩，TTL 抖动也治不了穿透。
+
+**双写一致**才是缓存最难的部分。写数据库与写缓存是两个独立操作，没有跨系统事务，并发下必然存在乱序窗口。主流方案有三档：
+
+| 方案 | 做法 | 一致性 | 代价 |
+| --- | --- | --- | --- |
+| 先更新库，再删缓存 | Cache-Aside 标准写路径 | 短暂不一致，最终一致 | 简单可靠，推荐默认 |
+| 延迟双删 | 删缓存、更新库、延迟再删 | 降低旧值回填概率 | 多一次删、延迟时长难定 |
+| 订阅 binlog 异步删 | 监听数据库变更事件删缓存 | 更接近最终一致 | 需要 CDC 链路，运维成本高 |
+
+<Term word="热 key" text="被极高频率访问的单个缓存键；单节点 Redis 可能因它被打满网卡与 CPU，常用本地缓存、key 加随机后缀打散到多分片、以及提前探测来治理" />
+
+<Callout type="warn" title="头号反模式：盲目加缓存" text="不是所有读都该缓存。写多读少的接口（缓存刚回填就被删）、要求强一致的数据（余额、库存扣减）、单次查询本身已经很快且结果集很大的场景，加了缓存只会多一跳网络、多一份不一致、多一个要运维的组件。先确认「读多写少、能容忍秒级不一致、回源确实慢」，再决定加。缓存不是加速器，是一致性换性能的交易。" />
+
+<Callout type="idea" title="抖动与多级缓存" text="TTL 抖动只需在基础过期时间上叠加一个随机量（如 0~20%），就能把集体失效摊平到时间轴上。对抗雪崩的另一层是本地缓存（进程内 LRU）作为 Redis 之前的挡箭牌：Redis 宕机时本地缓存仍能顶住一部分流量，但要注意本地缓存的一致性与内存上限。" />
+
+第三段代码演示生产里两件必备能力：带 token 的最小分布式锁，以及延迟双删。
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// tryLock 用 SETNX 加唯一 token 与 TTL，实现最小可用的互斥与租约。
+func tryLock(ctx context.Context, rdb *redis.Client, key, token string, ttl time.Duration) (bool, error) {
+	return rdb.SetNX(ctx, key, token, ttl).Result()
+}
+
+// 释放锁必须「先比对 token 再删除」，两步用 Lua 保证原子，
+// 否则可能把别人续期后持有的锁误删。
+var releaseScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+end
+return 0
+`)
+
+func releaseLock(ctx context.Context, rdb *redis.Client, key, token string) error {
+	return releaseScript.Run(ctx, rdb, []string{key}, token).Err()
+}
+
+// updateUser 演示延迟双删：先删、更新库、延迟再删一次，
+// 用来清掉「读请求夹在删除与更新之间把旧值回填」的脏数据。
+func updateUser(ctx context.Context, rdb *redis.Client, id, name string) error {
+	key := "user:" + id
+	if err := rdb.Del(ctx, key).Err(); err != nil {
+		return err
+	}
+	fmt.Println("数据库已更新:", id, name) // 生产里是 writeDB
+	// 用独立 context：原请求的 ctx 在返回后可能已取消。
+	time.AfterFunc(500*time.Millisecond, func() {
+		_ = rdb.Del(context.Background(), key).Err()
+	})
+	return nil
+}
+
+func main() {
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
+	defer rdb.Close()
+	ctx := context.Background()
+	key := "lock:rebuild:user:1"
+	token := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	ok, err := tryLock(ctx, rdb, key, token, 10*time.Second)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !ok {
+		fmt.Println("已有实例在重建，本实例跳过")
+		return
+	}
+	defer func() { _ = releaseLock(ctx, rdb, key, token) }()
+
+	fmt.Println("拿到锁，执行缓存重建")
+	if err := updateUser(ctx, rdb, "1", "gopher-v2"); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+锁的三要素缺一不可：**唯一 token**（防止 A 的锁被 B 释放）、**TTL 租约**（持有者崩溃也能自动解锁）、**Lua 原子比对删除**。这里只是初探，完整的看门狗续期、Redlock 争议会在第 84 讲展开。
+
+## 4. 工程实践
+
+缓存上线前先想清楚失败路径：Redis 全部不可用时，接口是「降级回源」还是「直接失败」？对大多数业务，降级回源换取可用性更合理，但必须配合限流，否则缓存一挂、数据库立刻被放大数倍的流量打死，这被称为缓存雪崩的第二种形态。
+
+<Compare title="写操作之后，该更新缓存还是删除缓存" :panels='[{"label":"反模式 · 写后更新缓存","code":"writeDB(row)\nrdb.Set(key, newValue, ttl)","note":"两个并发写可能乱序，缓存里留下旧值；计算结果型缓存还可能白白重算"},{"label":"正解 · 写后删除缓存","code":"writeDB(row)\nrdb.Del(key)","note":"下次读自然回源重建，天然避开并发写乱序，且与 Cache-Aside 读路径一致"}]' />
+
+<FlowTimeline title="一次带缓存的读请求" :steps='[{"title":"查缓存","desc":"命中且非空值标记则直接返回","tone":"blue"},{"title":"判断未命中","desc":"区分 redis.Nil 与 Redis 故障，后者降级","tone":"purple"},{"title":"单飞回源","desc":"同 key 只放一个请求查库","tone":"orange"},{"title":"回填","desc":"写缓存并叠加 TTL 抖动","tone":"green"},{"title":"返回","desc":"空结果写短 TTL 空值，防后续穿透","tone":"gray"}]' direction="horizontal" />
+
+还有几个反模式：**给所有 key 设同一个固定 TTL**（等价于给自己安排一次整点雪崩）；**永不过期 + 不主动更新**（数据改了缓存永远不刷新）；**把缓存当数据库用**（Redis 重启或淘汰策略会丢数据，业务必须能回源重建）；**缓存大对象或大集合**（单 key 几 MB，网络与序列化成本抵消收益）；以及前面点名的**盲目加缓存**。
+
+## 动手练一练
+
+<Exercise title="给 Cache-Aside 补上空值缓存" task="现有读路径在查库为空时直接返回 404，导致攻击者用大量不存在的 id 反复穿透。请补全分支，要求挡住穿透但又不长期占用内存。" :hints='["写一个与业务值不冲突的哨兵字符串","空值缓存的 TTL 要比正常数据短得多，比如 60 秒","命中缓存时也要判断哨兵，返回 404 而不是把哨兵当名字"]' solution="name, ok := queryDB(id)\nif !ok {\nrdb.Set(ctx, key, emptyMark, emptyTTL)\nreturn notFound\n}\nrdb.Set(ctx, key, name, ttlWithJitter(baseTTL))\nreturn name" explain="空值缓存是穿透最经济的解法：短 TTL 避免内存浪费，也避免「刚查不到、随后数据被创建」时长时间读不到新值。高量场景可再加布隆过滤器。" />
+
+## 随堂检测
+
+<Quiz no="67-1" q="某热点 key 过期瞬间，上千并发请求同时回源查同一条数据，这属于哪个问题？" :options='["缓存穿透","缓存击穿","缓存雪崩","双写不一致"]' answer="1" explain="单个热点 key 失效导致并发回源是击穿；穿透是查不存在的数据，雪崩是一批 key 或整个 Redis 层失效。" />
+
+<Predict no="67-2" q="所有缓存 key 都设置为「创建后 5 分钟过期」，服务在整批预热后运行，最可能发生什么？" :options='["命中率稳定，没有异常","约 5 分钟后大量 key 同时失效，数据库流量骤增","Redis 内存持续增长直至 OOM","部分 key 永不过期"]' answer="1" output="预热后约 5 分钟出现集中的失效尖峰，回源 QPS 瞬间抬升" explain="同一时刻批量写入 + 固定 TTL = 集体过期，这是最典型的雪崩成因；解法是给 TTL 加随机抖动。" />
+
+## 一页纸速记
+
+<KnowledgeCard :points='["Cache-Aside：读时回填、写时删除，缓存是副本不是数据源","穿透查不存在的数据，用空值缓存与布隆过滤器；击穿是单热点，用单飞重建","雪崩是一批 key 集体失效，用 TTL 抖动、多级缓存与高可用兜住","写后删缓存优于写后更新；分布式锁要有唯一 token、TTL 与 Lua 原子释放"]' :pitfalls='["盲目给写多读少或强一致的数据加缓存","所有 key 用同一个固定 TTL，自己制造整点雪崩","缓存故障时直接返回错误，回源流量把数据库打死","释放锁时不比对 token，误删他人的锁","把 Redis 当持久化数据库用"]' summary="加缓存是拿一致性换性能的交易；先确认业务能接受这笔交易，再设计失效与降级路径。" />
+
+## 小结与下一讲
+
+- 三大问题按「数据是否存在 / 一个 key 还是一批 key」区分，对策不能混用。
+- Cache-Aside 的标准写路径是「先更新库、再删缓存」，一致性更强要靠 CDC 订阅 binlog。
+- TTL 抖动、单飞重建、空值缓存、降级回源，是把缓存从「能跑」做到「能扛」的四块拼图。
+
+缓存解决的是读的压力，而服务之间的解耦、削峰与异步化，需要另一个组件。下一讲进入消息队列与可靠投递。
+
+[下一讲：消息队列：Kafka / NATS / 可靠投递](/server/mq)

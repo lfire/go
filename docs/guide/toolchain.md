@@ -1,0 +1,157 @@
+---
+title: 第 04 讲 · 工具链全景：build / test / fmt / vet / mod
+description: 掌握日常开发最常用的命令与排查手段，让工具替团队守住风格与质量
+---
+
+<StageHeader stage="L0 · 导学" level="★★☆☆☆" time="30 分钟" goal="掌握日常开发最常用的命令与排查手段" prereq="第 03 讲" />
+
+# 第 04 讲 · 工具链全景：build / test / fmt / vet / mod
+
+> 很多语言生态里，格式化、静态检查、依赖管理要靠一堆第三方工具拼起来，每个项目配法还不一样。Go 把这些全部做成了官方命令，装好工具链就有一套统一流水线。这一讲不要求背参数，重点是建立一张"什么时候该跑哪条命令"的地图：写代码时靠 `gofmt`，提交前靠 `vet` 与 `test`，依赖乱了靠 `go mod tidy`，重复代码靠 `go generate`，交付靠 `go build` 与交叉编译。
+
+## 这一讲你会得到什么
+
+<CheckList id="L0-04" title="本讲目标" :items='["能画出日常开发的命令地图，知道每条命令解决什么问题","能说清 gofmt 与 goimports 的分工，以及为什么 gofmt 没有配置项","能解释 go vet 抓的是编译能过、但运行时会出错的可疑写法","会跑 go mod tidy、go generate，并用 GOOS/GOARCH 做交叉编译"]' />
+
+## 1. 先建立直觉
+
+把工具链想成一条出厂流水线上的质检工位：`gofmt` 负责把每个零件摆得一模一样（统一外观），`go vet` 拿着检查表找"看着没问题、装上会出事"的可疑装配，`go test` 实际通电试运行，`go mod tidy` 清点配料表、把没用上的原料退回去，`go generate` 让机器自动生产那些重复零件，最后 `go build` 打包出厂。它们的共同点是不需要额外安装、不挑项目、全团队跑出来的结果一致。
+
+<ConceptDiagram type="compile-link" title="工具链都围绕同一条编译流程工作" />
+
+这张图解释了为什么 Go 的工具链能这么统一：所有命令共享同一套包解析、类型检查与编译前端，所以 `vet` 看到的类型信息和编译器看到的完全一致，不会出现"编辑器说不报错、CI 说报错"的割裂。
+
+## 2. 语法与规则
+
+先看日常最高频的几条命令，以及各自该在什么时机跑：
+
+| 命令 | 解决什么 | 建议时机 |
+| --- | --- | --- |
+| `gofmt -w .` | 按官方风格重写源码排版 | 每次保存、提交前 |
+| `goimports -w .` | 在 gofmt 之外自动增删 import | 保存时由编辑器调用 |
+| `go vet ./...` | 静态检查可疑写法 | 提交前、CI |
+| `go test ./...` | 跑全部包的单元测试 | 提交前、CI |
+| `go mod tidy` | 补齐缺失依赖、删除无用依赖 | 增删 import 之后 |
+| `go generate ./...` | 执行源码里的生成指令 | 生成代码需要更新时 |
+| `go build ./...` | 编译全部包并产出二进制 | 发布、打镜像 |
+
+`gofmt` 最反直觉的一点是：它**没有配置项**。缩进、空行、括号位置全由官方定死，这正是第 01 讲说的"风格统一到没什么可争论"落到实处的手段。下面这段就是 gofmt 之后该有的样子：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	total := 40 + 2
+	fmt.Println("合计：", total)
+}
+```
+
+<OutputBox title="运行结果" output="合计： 42" />
+
+`goimports` 是 gofmt 的超集，额外帮你补上漏写的 import、删掉多写的 import。它不在官方工具链里，需要单独安装，但编辑器插件通常已内置。
+
+第二段代码留一个纯粹的小函数，正好用来说明 `go test` 与 `go vet` 各看什么：
+
+```go
+package main
+
+import "fmt"
+
+func add(a int, b int) int { // 一个值得被单元测试覆盖的小函数
+	return a + b
+}
+
+func main() {
+	fmt.Printf("40 加 2 等于 %d\n", add(40, 2)) // 格式串与参数类型一致
+}
+```
+
+<LineByLine code="total := add(40, 2)\nfmt.Println(total)" :notes='["调用 add 并把返回值存进新变量，add 是前面定义的纯函数","把这个结果打印出来；go test 可以单独给 add 写用例，不必启动整个程序"]' />
+
+`go test ./...` 会自动寻找同目录下以 `_test.go` 结尾的文件并运行；`go vet` 则盯着另一类问题，比如 `fmt.Printf` 的格式串写 `%d` 却传了字符串——这种代码**能编译通过**，运行时却会打印出奇怪的东西。vet 的价值就在这里：把编译器的漏网之鱼提前捞出来。
+
+<Compare :panels='[{"label":"gofmt","code":"gofmt -w main.go","note":"只重排缩进与空行，不改动任何语义，也不碰 import 列表"},{"label":"goimports","code":"goimports -w main.go","note":"先按 gofmt 格式化，再自动增删 import 分组"}]' title="两个格式化工具的分工" />
+
+第三段代码演示 `go generate` 与交叉编译。源码里的 `//go:generate` 只是注释，不影响编译：
+
+```go
+package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+//go:generate echo 真实项目常在这里调用 stringer 之类的生成器
+
+func main() {
+	fmt.Println("构建目标：", runtime.GOOS, runtime.GOARCH)
+}
+```
+
+<OutputBox title="运行结果（平台相关）" output="构建目标： darwin arm64" />
+
+执行 `go generate ./...` 时，工具链会扫描并执行这条注释里的命令；改了枚举或协议后重新生成一次，比手工维护重复代码可靠得多。而把 `GOOS`、`GOARCH` 换成别的值再 `go build`，就能得到另一个平台的可执行文件，无需那台机器的工具链。
+
+## 3. 深入一步
+
+<Term word="静态检查" text="不运行程序，只分析源码与类型信息来发现可疑写法，go vet 就是官方实现。" />
+
+<Term word="可复现构建" text="源码加 go.mod 加 go.sum 在任何机器上都能构建出同一份产物，go mod tidy 是维护它的关键。" />
+
+把常用命令串成一条流水线，提交前依次跑一遍，绝大多数低级问题都进不了代码库：
+
+<FlowTimeline :steps='[{"title":"gofmt -l","desc":"列出还没格式化的文件，非空就打回","tone":"blue"},{"title":"go vet ./...","desc":"静态检查可疑写法","tone":"purple"},{"title":"go test ./...","desc":"跑全部单测，必要时加 -race","tone":"orange"},{"title":"go build ./...","desc":"编译通过才允许合并","tone":"green"}]' direction="horizontal" />
+
+<Callout type="warn" title="版本差异与边界" text="gofmt 从 Go 1.19 起会重新排版文档注释，老项目升级后可能出现大面积 diff，属正常现象；go.mod 里的 toolchain 指令是 Go 1.21 才引入的；go vet 的检查项也会随版本增加，升级后冒出新的告警要先看清楚再修，不要直接忽略。另外 vet 只报可疑、不保证全对，而 go test 只覆盖你写了用例的部分，两者都不能替代代码评审。" />
+
+`go mod tidy` 容易被忽略但很重要：它会扫描全部源码里的 import，把用到却没声明的依赖加进 `go.mod`，把声明了却没人用的删掉，并同步 `go.sum`。凡是大改过 import 之后，提交前都该跑一次，否则 CI 上的依赖状态和你本机不一致。
+
+## 4. 工程实践
+
+团队里真正省时间的做法，是把这条流水线固化下来而不是靠人记。用 Makefile 或脚本封装 `make check`（gofmt 检查 + vet + test），让本地和 CI 跑完全相同的命令；配一个 pre-commit 钩子自动 `gofmt -w`，杜绝"格式化提交"混进功能改动里，让 diff 干净可读。CI 里再加一条 `go build ./...` 作为最终闸门。
+
+```bash
+gofmt -w .
+goimports -w .
+go vet ./...
+go test ./...
+go mod tidy
+go generate ./...
+GOOS=linux GOARCH=amd64 go build -o app-linux .
+go tool dist list
+```
+
+<CodeTabs :tabs='[{"label":"本地开发","code":"gofmt -w .\ngo test ./...","note":"快速反馈，改完立刻验证"},{"label":"提交前自查","code":"gofmt -l .\ngo vet ./...","note":"gofmt -l 有输出就说明还有文件没格式化"},{"label":"CI 发布","code":"go test ./...\ngo build -o app ./...","note":"固定 Go 版本，产物名用 -o 明确指定"}]' title="三个场景各跑哪几条" />
+
+<Callout type="tip" title="一条实用经验" text="用 gofmt -l . 做检查而不是 gofmt -w .：前者只列出不规范的文件、不改动源码，适合放进 CI；后者直接重写文件，适合放在本地编辑器保存时。混用容易让 CI 悄悄改代码却没人发现。" />
+
+交叉编译时 `go tool dist list` 会列出全部支持的平台组合，写构建脚本前查一眼比凭记忆可靠。生成的代码要不要提交进仓库，取决于项目约定：提交能让没有装生成器的同事直接构建，不提交则能保证生成物永远和源定义同步。
+
+## 动手练一练
+
+<Exercise title="把紧凑代码改成 gofmt 规范" task="下面这行紧凑写法能编译，但排版不符合官方风格。请写出 gofmt 之后 main 函数应有的样子，用 Println 打印 total 的值。" :hints='["gofmt 会把函数体缩进一个制表符","把两条语句拆成两行，花括号各占一行"]' solution="func main() {\n    total := 40 + 2\n    fmt.Println(total)\n}" explain="gofmt 只调整排版，不改变语义，输出仍是 42。这也说明它做不了逻辑检查，逻辑要靠 vet 与 test。" />
+
+## 随堂检测
+
+<Quiz no="04-1" q="关于 gofmt 与 go vet，下面哪一项说法是正确的？" :options='["gofmt 提供丰富的缩进与换行配置项供团队自定义","go vet 报的问题一定会导致编译失败","gofmt 没有配置项，vet 抓的是编译能过但可疑的写法","goimports 是 go 命令内置的子命令"]' answer="2" explain="gofmt 刻意不提供配置项以统一全生态风格；vet 抓的是编译能过的可疑写法；goimports 需要单独安装，不是内置命令。" />
+
+<Predict no="04-2" q="给工程删掉一处 import 之后直接提交，没跑 go mod tidy，最可能发生什么？" :options='["go.mod 里那条依赖会自动消失","go.mod 仍留着没人用的依赖，go.sum 也可能不同步","编译一定报错","go test 会自动替你清理"]' answer="1" explain="go mod tidy 才是负责按实际 import 增删依赖的命令；不跑它，声明与源码就会逐渐不一致。" />
+
+<FillBlank no="04-3" tpl="统一格式用 go ___\n静态检查用 go ___\n清理依赖用 go mod ___" :answers='["fmt","vet","tidy"]' hint="三条都是 go 开头的高频命令，第三条是 go mod 的子命令。" explain="gofmt、go vet、go mod tidy 分别对应格式、静态检查、依赖清理，是提交前的三件套。" />
+
+## 一页纸速记
+
+<KnowledgeCard :points='["gofmt 无配置项，负责统一排版；goimports 额外自动增删 import","go vet 抓编译能过但可疑的写法，go test 验证行为，二者互补","go mod tidy 按实际 import 同步 go.mod 与 go.sum，改依赖后必跑","go generate 执行源码里的生成指令；GOOS 与 GOARCH 控制交叉编译"]' :pitfalls='["别在 CI 里用 gofmt -w 悄悄改代码，改用 gofmt -l 做检查","别忽略 vet 告警，升级 Go 后新增告警要先读懂再修","别把 go generate 的产物和源定义搞成两份不同步的手工副本"]' summary="把格式、检查、测试、依赖、生成、构建固化成一条流水线，质量就不再依赖个人记性。" />
+
+## 小结与下一讲
+
+- 工具链统一是 Go 的核心体验：`gofmt` 管外观、`vet` 管可疑写法、`test` 管行为、`mod tidy` 管依赖。
+- 提交前的推荐顺序是格式化检查、静态检查、单测、再编译，并把它固化进 Makefile 与 CI。
+- `go generate` 消灭重复代码，`GOOS`/`GOARCH` 让交叉编译一行命令搞定。
+
+工具链已经齐备，从下一讲起进入编程地基，先回答一个最根本的问题：程序到底在处理什么。
+
+[下一讲：程序、数据、值与类型](/foundation/concepts)

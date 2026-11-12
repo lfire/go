@@ -14,12 +14,14 @@ go/                            # 仓库根目录
 ├── docs/                      # VitePress 源码
 │   ├── .vitepress/
 │   │   ├── config.mts         # 站点配置（base / 导航 / 侧栏）
-│   │   ├── components/        # 交互组件（全局注册 17 个 + StepLab 别名）
+│   │   ├── components/        # 交互组件（全局注册 21 个 + StepLab 别名）
 │   │   ├── theme/             # 自定义主题与 CSS
 │   │   ├── richtext.ts        # 组件属性里的最小 Markdown 解析
 │   │   └── utils.ts           # 学习进度存储（localStorage）
 │   ├── index.md               # 首页
-│   ├── guide/ foundation/ projects/ practice/ about/
+│   ├── guide/ foundation/ basics/ core/ concurrency/ engineering/
+│   ├── server/ microservice/ distributed/ advanced/
+│   ├── projects/ practice/ about/     # 118 讲 + 导览 + 附录
 │   └── public/favicon.svg
 ├── .github/workflows/deploy.yml   # Pages 自动部署
 ├── package.json
@@ -93,4 +95,4 @@ https://lfire.github.io/go/
 
 <Callout type="idea" title="内容维护" text="新增一页只要在 docs/ 下加 .md 文件，并在 .vitepress/config.mts 的侧栏里补一条；如果希望它计入学习进度，再在 .vitepress/utils.ts 的 LESSONS 数组里加一项即可。" />
 
-[返回关于本站 →](/about/index.md)
+[返回关于本站 →](/about/)

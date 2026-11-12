@@ -1,13 +1,14 @@
+// 由 .workbuddy/gen_course.py 生成，结构变更请改数据源后重新运行。
 import { defineConfig } from 'vitepress'
 
 // GitHub 项目页部署在子路径下，base 与仓库名一致。
-// 改用自定义域名 / 用户主页仓库时，构建时传 VP_BASE=/ 即可，无需改代码。
+// 改用自定义域名 / 用户主页仓库时，构建时传 VP_BASE=/ 即可。
 const BASE = process.env.VP_BASE || '/go/'
 
 export default defineConfig({
   lang: 'zh-CN',
   title: 'Go 零基础通关',
-  description: '一套为完全零基础学习者设计的交互式 Go 教程：递进式知识路径 + 分类分级的工程实战。',
+  description: '一套从零基础到资深的交互式 Go 教程：十一个递进阶段、118 讲、10 类工程场景与贯穿式实战。',
   base: BASE,
   outDir: '.vitepress/dist',
   cacheDir: '.vitepress/cache',
@@ -18,13 +19,13 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: `${BASE}favicon.svg` }],
     ['meta', { name: 'theme-color', content: '#00add8' }],
-    ['meta', { name: 'og:title', content: 'Go 零基础通关 · 交互式教程' }],
-    ['meta', { name: 'og:description', content: '从第一行代码到生产级工程，边学边练的 Go 中文教程。' }],
+    ['meta', { name: 'og:title', content: 'Go 零基础通关 · 从零到资深' }],
+    ['meta', { name: 'og:description', content: '118 讲递进式课程，边读边练，覆盖语法、运行时、并发、工程化、微服务、分布式与源码。' }],
   ],
   vite: {
     build: {
-      // 本地全文搜索索引只在打开搜索框时懒加载；提高阈值避免构建时输出无害的体积提示。
-      chunkSizeWarningLimit: 700,
+      // 本地全文搜索索引懒加载；提高阈值避免构建时输出无害的体积提示。
+      chunkSizeWarningLimit: 2000,
     },
   },
   markdown: {
@@ -36,6 +37,8 @@ export default defineConfig({
       infoLabel: '说明',
       detailsLabel: '展开查看详情',
     },
+    // 允许组件属性里的 < 与 > 原样输出（组件用法讲解会用到）
+    html: true,
   },
   themeConfig: {
     logo: '/favicon.svg',
@@ -62,44 +65,222 @@ export default defineConfig({
         },
       },
     },
-    // 栏目结构与参考站点保持一致；具体讲次目录待课程定稿后填充。
     nav: [
+      { text: '课程总目录', link: '/guide/curriculum' },
       { text: '学习路线', link: '/guide/' },
-      { text: '阶段课程', link: '/foundation/' },
+      {
+        text: '阶段课程',
+        items: [
+          { text: '编程地基', link: '/foundation/' },
+          { text: '语法核心', link: '/basics/' },
+          { text: '核心机制', link: '/core/' },
+          { text: '并发编程', link: '/concurrency/' },
+          { text: '工程化与质量', link: '/engineering/' },
+          { text: '服务端与数据', link: '/server/' },
+          { text: 'RPC 与微服务', link: '/microservice/' },
+          { text: '分布式与云原生', link: '/distributed/' },
+          { text: '资深进阶与源码', link: '/advanced/' },
+        ],
+      },
       { text: '工程实战', link: '/projects/' },
       { text: '练习与速查', link: '/practice/' },
       { text: '关于', link: '/about/' },
     ],
     sidebar: {
-      '/guide/': placeholderSidebar('开始之前', [
-        { text: '学习路线', link: '/guide/' },
-      ]),
-      '/foundation/': placeholderSidebar('阶段课程', [
-        { text: '阶段课程导览', link: '/foundation/' },
-      ]),
-      '/projects/': placeholderSidebar('工程实战', [
-        { text: '工程场景地图', link: '/projects/' },
-      ]),
-      '/practice/': placeholderSidebar('练习与速查', [
-        { text: '练习与速查', link: '/practice/' },
-      ]),
-      '/about/': placeholderSidebar('关于本站', [
-        { text: '关于本站', link: '/about/' },
-        { text: '本地运行与 Pages 部署', link: '/about/deploy' },
-      ]),
+      '/guide/': [
+        { text: '导学 · 建立地图', collapsed: false, items: [
+          { text: '阶段导览 · 导学', link: '/guide/' },
+          { text: '01 开篇：Go 是什么，为什么值得学', link: '/guide/opening' },
+          { text: '02 装好环境：工具链、工作区与 Modules', link: '/guide/setup' },
+          { text: '03 第一行 Go 代码：从源码到可执行文件', link: '/guide/hello' },
+          { text: '04 工具链全景：build / test / fmt / vet / mod', link: '/guide/toolchain' },
+        ] },
+      ],
+      '/foundation/': [
+        { text: '阶段一 · 编程地基', collapsed: false, items: [
+          { text: '阶段导览 · 编程地基', link: '/foundation/' },
+          { text: '05 程序、数据、值与类型', link: '/foundation/concepts' },
+          { text: '06 变量、常量、iota 与作用域', link: '/foundation/variables' },
+          { text: '07 数值、布尔、字符与类型转换', link: '/foundation/numeric' },
+          { text: '08 字符串、rune 与高效拼接', link: '/foundation/strings' },
+          { text: '09 栈、堆、值语义与指针', link: '/foundation/memory' },
+          { text: '10 函数、多返回值、变参与闭包', link: '/foundation/callables' },
+          { text: '11 包、模块与依赖管理', link: '/foundation/packages' },
+          { text: '12 阶段综合：CLI 单位换算器', link: '/foundation/capstone' },
+        ] },
+      ],
+      '/basics/': [
+        { text: '阶段二 · 语法核心', collapsed: false, items: [
+          { text: '阶段导览 · 语法核心', link: '/basics/' },
+          { text: '13 数组与切片：定义与操作', link: '/basics/arrays-slices' },
+          { text: '14 控制流：if / for / switch / goto', link: '/basics/control-flow' },
+          { text: '15 for range 与闭包捕获陷阱', link: '/basics/range-pitfalls' },
+          { text: '16 map：哈希、遍历与 Set 技巧', link: '/basics/maps' },
+          { text: '17 结构体、标签与内存对齐', link: '/basics/structs' },
+          { text: '18 方法与接收者：值还是指针', link: '/basics/methods' },
+          { text: '19 接口：隐式实现与组合', link: '/basics/interfaces' },
+          { text: '20 错误处理：error、包装与错误链', link: '/basics/errors' },
+          { text: '21 defer / panic / recover', link: '/basics/defer-panic' },
+          { text: '22 泛型：类型参数与约束', link: '/basics/generics' },
+          { text: '23 反射 reflect 与 go generate', link: '/basics/reflect' },
+          { text: '24 JSON、序列化与常见坑', link: '/basics/json' },
+          { text: '25 阶段综合：内存版 KV 存储', link: '/basics/capstone' },
+        ] },
+      ],
+      '/core/': [
+        { text: '阶段三 · 核心机制', collapsed: false, items: [
+          { text: '阶段导览 · 核心机制', link: '/core/' },
+          { text: '26 值语义深潜：赋值、传参、拷贝成本', link: '/core/value-semantics' },
+          { text: '27 逃逸分析与编译器决策', link: '/core/escape-analysis' },
+          { text: '28 切片底层：三元组、扩容与共享陷阱', link: '/core/slice-internals' },
+          { text: '29 map 底层：hmap、桶与渐进扩容', link: '/core/map-internals' },
+          { text: '30 interface 底层：iface / eface 与 nil 陷阱', link: '/core/interface-internals' },
+          { text: '31 字符串底层与零拷贝转换', link: '/core/string-internals' },
+          { text: '32 内存分配器：mcache / mcentral / mheap', link: '/core/allocator' },
+          { text: '33 垃圾回收：三色标记、屏障与 GOGC', link: '/core/gc' },
+          { text: '34 defer 实现与 open-coded 优化', link: '/core/defer-internals' },
+          { text: '35 程序启动、init 顺序与包初始化', link: '/core/startup' },
+          { text: '36 编译、链接、SSA 与内联', link: '/core/compiler' },
+          { text: '37 unsafe、cgo 与跨边界成本', link: '/core/unsafe-cgo' },
+        ] },
+      ],
+      '/concurrency/': [
+        { text: '阶段四 · 并发编程', collapsed: false, items: [
+          { text: '阶段导览 · 并发编程', link: '/concurrency/' },
+          { text: '38 并发与并行：CSP 思想', link: '/concurrency/concurrency-intro' },
+          { text: '39 goroutine：创建、栈与生命周期', link: '/concurrency/goroutine' },
+          { text: '40 GMP 调度模型全景', link: '/concurrency/gmp' },
+          { text: '41 调度循环：抢占、窃取与 handoff', link: '/concurrency/scheduler' },
+          { text: '42 channel：语义、缓冲与关闭', link: '/concurrency/channel' },
+          { text: '43 channel 底层 hchan 与收发队列', link: '/concurrency/hchan' },
+          { text: '44 select、超时与多路复用', link: '/concurrency/select' },
+          { text: '45 sync：Mutex / RWMutex / WaitGroup / Once / Cond', link: '/concurrency/sync-primitives' },
+          { text: '46 atomic 与 sync.Pool', link: '/concurrency/atomic-pool' },
+          { text: '47 context：取消、超时、值传递', link: '/concurrency/context' },
+          { text: '48 并发模式：pipeline / fan-out / worker pool', link: '/concurrency/patterns' },
+          { text: '49 数据竞争、内存模型与 race detector', link: '/concurrency/race' },
+        ] },
+      ],
+      '/engineering/': [
+        { text: '阶段五 · 工程化与质量', collapsed: false, items: [
+          { text: '阶段导览 · 工程化', link: '/engineering/' },
+          { text: '50 项目结构与分层设计', link: '/engineering/project-layout' },
+          { text: '51 代码规范、gofmt、vet 与 golangci-lint', link: '/engineering/code-style' },
+          { text: '52 单元测试与表驱动测试', link: '/engineering/unit-test' },
+          { text: '53 Mock：gomock / sqlmock / httptest', link: '/engineering/mock-test' },
+          { text: '54 基准测试、模糊测试与覆盖率', link: '/engineering/bench-fuzz' },
+          { text: '55 日志：slog / zap 与结构化采样', link: '/engineering/logging' },
+          { text: '56 配置：flag / env / viper / 配置中心', link: '/engineering/config' },
+          { text: '57 错误码、错误栈与统一响应', link: '/engineering/error-design' },
+          { text: '58 设计模式与 Functional Options / wire', link: '/engineering/patterns-design' },
+          { text: '59 性能剖析：pprof / trace / 火焰图', link: '/engineering/profiling' },
+          { text: '60 CI/CD、Makefile、代码生成与发布', link: '/engineering/cicd' },
+        ] },
+      ],
+      '/server/': [
+        { text: '阶段六 · 服务端与数据', collapsed: false, items: [
+          { text: '阶段导览 · 服务端与数据', link: '/server/' },
+          { text: '61 net/http 深入：Handler、ServeMux 与中间件链', link: '/server/net-http' },
+          { text: '62 路由与框架：Gin / Echo / Chi', link: '/server/web-framework' },
+          { text: '63 REST API 设计、校验与 OpenAPI', link: '/server/rest-api' },
+          { text: '64 WebSocket / SSE 与实时推送', link: '/server/websocket' },
+          { text: '65 database/sql、连接池与事务', link: '/server/database-sql' },
+          { text: '66 GORM / sqlx / sqlc 与迁移', link: '/server/orm' },
+          { text: '67 Redis 缓存：穿透 / 击穿 / 雪崩与一致性', link: '/server/redis' },
+          { text: '68 消息队列：Kafka / NATS / 可靠投递', link: '/server/mq' },
+          { text: '69 Elasticsearch 与倒排索引', link: '/server/search' },
+          { text: '70 认证授权：Session / JWT / OAuth2 / RBAC', link: '/server/auth' },
+          { text: '71 文件、对象存储与断点续传', link: '/server/file-storage' },
+        ] },
+      ],
+      '/microservice/': [
+        { text: '阶段七 · RPC 与微服务', collapsed: false, items: [
+          { text: '阶段导览 · RPC 与微服务', link: '/microservice/' },
+          { text: '72 RPC 原理与自研最小 RPC', link: '/microservice/rpc-basics' },
+          { text: '73 Protobuf 与 gRPC 四种流', link: '/microservice/protobuf' },
+          { text: '74 gRPC 拦截器、metadata、错误与超时', link: '/microservice/grpc-advanced' },
+          { text: '75 服务注册发现与健康检查', link: '/microservice/discovery' },
+          { text: '76 负载均衡与 resolver 源码', link: '/microservice/load-balance' },
+          { text: '77 配置中心与动态配置', link: '/microservice/config-center' },
+          { text: '78 API 网关、鉴权与限流', link: '/microservice/gateway' },
+          { text: '79 熔断、降级、重试与雪崩防护', link: '/microservice/resilience' },
+          { text: '80 OpenTelemetry 链路追踪', link: '/microservice/tracing' },
+          { text: '81 Prometheus / Grafana 与 RED 指标', link: '/microservice/metrics' },
+          { text: '82 自研微服务框架：从 0 到 1', link: '/microservice/framework' },
+        ] },
+      ],
+      '/distributed/': [
+        { text: '阶段八 · 分布式与云原生', collapsed: false, items: [
+          { text: '阶段导览 · 分布式云原生', link: '/distributed/' },
+          { text: '83 CAP / BASE 与一致性模型', link: '/distributed/cap-base' },
+          { text: '84 分布式锁、幂等与去重', link: '/distributed/distributed-lock' },
+          { text: '85 分布式事务：2PC / TCC / Saga / 消息最终一致', link: '/distributed/distributed-tx' },
+          { text: '86 分布式 ID、时钟与雪花算法', link: '/distributed/distributed-id' },
+          { text: '87 一致性哈希、分片与路由', link: '/distributed/sharding' },
+          { text: '88 Raft 共识与 etcd 实践', link: '/distributed/raft' },
+          { text: '89 高可用：多活、容灾与混沌工程', link: '/distributed/high-availability' },
+          { text: '90 容器化：多阶段构建与镜像瘦身', link: '/distributed/docker' },
+          { text: '91 Kubernetes 部署与服务暴露', link: '/distributed/kubernetes' },
+          { text: '92 Helm / GitOps / 灰度发布', link: '/distributed/gitops' },
+          { text: '93 SRE：SLO、告警、容量与稳定性治理', link: '/distributed/sre' },
+        ] },
+      ],
+      '/advanced/': [
+        { text: '阶段九 · 资深进阶与源码', collapsed: false, items: [
+          { text: '阶段导览 · 资深进阶', link: '/advanced/' },
+          { text: '94 runtime 源码：进程启动与初始化', link: '/advanced/runtime-startup' },
+          { text: '95 调度器源码：schedule / findRunnable / sysmon', link: '/advanced/runtime-scheduler' },
+          { text: '96 GC 源码与真实调优案例', link: '/advanced/runtime-gc' },
+          { text: '97 channel / mutex 源码与锁竞争', link: '/advanced/runtime-sync' },
+          { text: '98 编译器源码：SSA、逃逸与内联', link: '/advanced/compiler-ssa' },
+          { text: '99 Go 内存模型与 happens-before 精解', link: '/advanced/memory-model' },
+          { text: '100 极致性能优化：从 pprof 到 30w QPS', link: '/advanced/perf-case' },
+          { text: '101 架构设计：模块拆分、演进与重构', link: '/advanced/architecture' },
+          { text: '102 资深能力图谱、技术选型与持续精进', link: '/advanced/senior-path' },
+        ] },
+      ],
+      '/projects/': [
+        { text: '阶段十 · 工程实战', collapsed: false, items: [
+          { text: '阶段导览 · 工程实战', link: '/projects/' },
+          { text: '103 实战 01 · 待办清单 CLI', link: '/projects/cli-todo' },
+          { text: '104 实战 02 · protoc 插件与代码生成器', link: '/projects/cli-codegen' },
+          { text: '105 实战 03 · 短链服务', link: '/projects/net-shortlink' },
+          { text: '106 实战 04 · 图片服务与对象存储', link: '/projects/net-image-server' },
+          { text: '107 实战 05 · 日志分析 ETL 管道', link: '/projects/data-log-etl' },
+          { text: '108 实战 06 · CSV / SQL 查询工具', link: '/projects/data-sql-tool' },
+          { text: '109 实战 07 · 并发爬虫：单机 → 并发 → 分布式', link: '/projects/concurrent-crawler' },
+          { text: '110 实战 08 · 分布式任务调度系统', link: '/projects/concurrent-scheduler' },
+          { text: '111 KV 贯穿线 ① 内存版与接口抽象', link: '/projects/kv-1-memory' },
+          { text: '112 KV 贯穿线 ② TCP 协议帧与网络层', link: '/projects/kv-2-network' },
+          { text: '113 KV 贯穿线 ③ WAL、持久化与并发控制', link: '/projects/kv-3-async' },
+          { text: '114 KV 贯穿线 ④ 分片、复制与 Raft', link: '/projects/kv-4-distributed' },
+          { text: '115 实战 09 · 电商微服务系统', link: '/projects/micro-ecommerce' },
+          { text: '116 实战 10 · 秒杀与高并发库存', link: '/projects/micro-seckill' },
+          { text: '117 实战 11 · Kubernetes Operator 与可观测平台', link: '/projects/cloud-operator' },
+          { text: '118 实战 12 · LLM 网关与流式推理管道', link: '/projects/ai-gateway' },
+        ] },
+      ],
+      '/practice/': [
+        { text: '练习与速查', collapsed: false, items: [
+          { text: '综合自测', link: '/practice/' },
+          { text: '语法速查表', link: '/practice/cheatsheet' },
+          { text: '常见坑与反模式', link: '/practice/pitfalls' },
+          { text: '零基础常见问题', link: '/practice/faq' },
+          { text: '面试与能力自评', link: '/practice/interview' },
+          { text: 'Go 生态与选型地图', link: '/practice/ecosystem' },
+        ] },
+      ],
+      '/about/': [
+        { text: '关于本站', collapsed: false, items: [
+          { text: '关于与内容来源', link: '/about/' },
+          { text: '本地运行与 Pages 部署', link: '/about/deploy' },
+        ] },
+      ],
     },
     socialLinks: [{ icon: 'github', link: 'https://github.com/lfire/go' }],
     footer: {
-      message: '为完全零基础的学习者而写 · 站点框架与交互组件先行，课程内容陆续补充',
+      message: '为完全零基础的学习者而写 · 从第一行代码到源码级理解与工程架构',
       copyright: '© 2026 Go 零基础通关',
     },
   },
 })
-
-/**
- * 占位侧栏。写正文时把 items 换成真实讲次即可；
- * 需要按阶段分组时，返回多个 { text, collapsed, items } 对象。
- */
-function placeholderSidebar(group: string, items: { text: string; link: string }[]) {
-  return [{ text: group, collapsed: false, items }]
-}

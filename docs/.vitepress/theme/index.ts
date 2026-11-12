@@ -21,11 +21,16 @@ import ConceptDiagram from '../components/ConceptDiagram.vue'
 import StageHeader from '../components/StageHeader.vue'
 import CheckList from '../components/CheckList.vue'
 import CodeTabs from '../components/CodeTabs.vue'
+import LineByLine from '../components/LineByLine.vue'
+import OutputBox from '../components/OutputBox.vue'
+import FlowTimeline from '../components/FlowTimeline.vue'
+import KnowledgeCard from '../components/KnowledgeCard.vue'
 
 const components: Record<string, any> = {
   HomePage, PathMap, ScenarioMatrix, ProgressTracker, Quiz, Predict, FillBlank,
   StepBox, OwnershipLab, Compare, Callout, Term, Exercise, ConceptDiagram,
   StageHeader, CheckList, CodeTabs,
+  LineByLine, OutputBox, FlowTimeline, KnowledgeCard,
 }
 
 // OwnershipLab 是参考工程里的命名，实际是一个与语言无关的「逐语句状态演示台」，

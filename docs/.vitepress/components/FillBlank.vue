@@ -3,18 +3,24 @@ import { computed, ref } from 'vue'
 
 const props = defineProps<{
   tpl: string
-  answers: string
+  answers: string | string[]
   hint?: string
   explain?: string
   no?: string
 }>()
 
-const source = computed(() => (props.tpl || '').replace(/\\n/g, '\n'))
+const source = computed(() => String(props.tpl ?? '').replace(/\\n/g, '\n'))
 const segments = computed(() => source.value.split('___'))
-const keys = computed(() => {
-  const v = props.answers || ''
-  try { const p = JSON.parse(v); if (Array.isArray(p)) return p.map(String) } catch { /* ignore */ }
-  return v.split('|').map((s: string) => s.trim())
+/** 兼容三种写法：:answers='[...]'（Vue 解析成数组）、JSON 字符串、"a|b" 分隔字符串。 */
+const keys = computed<string[]>(() => {
+  const v: any = props.answers ?? ''
+  if (Array.isArray(v)) return v.map(String)
+  const s = String(v)
+  try {
+    const p = JSON.parse(s)
+    if (Array.isArray(p)) return p.map(String)
+  } catch { /* 按 | 分隔处理 */ }
+  return s.split('|').map((x) => x.trim())
 })
 const values = ref<string[]>([])
 const checked = ref(false)
