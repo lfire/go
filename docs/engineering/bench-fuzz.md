@@ -505,7 +505,7 @@ L10 里数字和反例都是硬需求：`/projects/kv-1-memory` 的 `Storage` �
 
 <Quiz no="054-1" q="关于覆盖率，下面哪项说法最准确？" :options='["覆盖率到 100% 就说明没有 bug","覆盖率只说明语句被执行过，不保证断言正确","覆盖率越高，测试运行越快","covermode=count 能证明并发路径没问题"]' answer="1" explain="覆盖率是「执行过」的度量，不是「验证过」的度量；断言质量、边界与并发路径都要另外判断。" />
 
-<Predict no="054-2" q="某函数有 2 条语句，其中 1 条从未被执行，go test -cover 的输出大致是？" :options='["coverage: 0.0% of statements","coverage: 50.0% of statements","coverage: 100.0% of statements","不输出覆盖率"]' answer="1" output="coverage: 50.0% of statements" explain="默认 set 模式按「执行过的语句数 / 总语句数」计算，1 除以 2 即 50.0%。" />
+<Predict no="054-2" q="某函数有 2 条语句，其中 1 条从未被执行，go test -cover 的输出大致是？" :options='["coverage: 0.0% of statements","coverage: 50.0% of statements","coverage: 100.0% of statements","不输出覆盖率"]' answer="1" explain="默认 set 模式按「执行过的语句数 / 总语句数」计算，1 除以 2 即 50.0%。" />
 
 ## 一页纸速记
 

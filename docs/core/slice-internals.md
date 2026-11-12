@@ -384,7 +384,7 @@ go test -bench='NoCap|WithCap' -benchmem -run=^$ ./...
 
 三列要会读：`ns/op` 是每次迭代耗时，`B/op` 是每次迭代分配的字节，`allocs/op` 是分配次数。`WithCap` 的 `B/op` 恰好是 1024×8=8192，说明一次到位；`NoCap` 多出来的分配次数正是 `growslice` 被调用的次数，也是 pprof 里该函数的命中次数。容量接近真实规模即可把扩容压到个位数。
 
-<Predict q="把 WithCap 里的 make([]int, 0, 1024) 改成 make([]int, 0, 512)，循环仍 append 1024 次，allocs/op 最接近多少？" :options='["仍是 1 次","约 2 次","仍是 12 次","降到 0 次"]' answer="1" output="约 2 次：容量写满 512 时再扩容一次即可容纳 1024 个元素" explain="预留 512 后写满时触发一次 growslice，分配次数从 12 降到 2；容量接近真实规模即可大幅减少拷贝。" />
+<Predict q="把 WithCap 里的 make([]int, 0, 1024) 改成 make([]int, 0, 512)，循环仍 append 1024 次，allocs/op 最接近多少？" :options='["仍是 1 次","约 3 次","仍是 12 次","降到 0 次"]' answer="1" output="约 3 次：512→848→1280 触发两次 growslice，加上初始 make 共 3 次分配" explain="预留 512 后写满时先扩到 848，仍装不下 1024，需再扩到 1280，共两次 growslice，分配次数从 12 降到 3；容量接近真实规模即可大幅减少拷贝。" />
 
 <Callout type="idea" title="配套示例工程">
 
@@ -400,7 +400,7 @@ go test -bench='NoCap|WithCap' -benchmem -run=^$ ./...
 
 <Quiz no="028-1" q="a := base[1:3] 后执行 b := append(a, 7)，若 cap(a) 足够，base 会怎样？" :options='["完全不变","base 的后续元素可能被覆盖","base 的 len 变长","一定 panic"]' answer="1" explain="cap 够用时 append 复用同一底层数组，直接写入 a 的 len 之后的位置，也就是 base 的后续槽位——这是最隐蔽的别名写。" />
 
-<Predict no="028-2" q="s := make([]int, 2, 2); t := s; s = append(s, 3); t[0] = 99，最终 s[0] 是多少？" :options='["99","0","不确定","编译错误"]' answer="1" output="0" explain="append 时 cap 不够触发扩容，s 指向新数组；t 仍指向旧数组，改 t[0] 不影响 s。用 StepLab 一步步看这次分家。" />
+<Predict no="028-2" q="s := make([]int, 2, 2); t := s; s = append(s, 3); t[0] = 99，最终 s[0] 是多少？" :options='["99","0","不确定","编译错误"]' answer="1" explain="append 时 cap 不够触发扩容，s 指向新数组；t 仍指向旧数组，改 t[0] 不影响 s。用 StepLab 一步步看这次分家。" />
 
 <FillBlank no="028-3" tpl="full slice expression 的第三个索引把 ___ 锁住，形如 s[low:high:max]；彻底切断与底层数组的共享可以用内置函数 ___。" :answers='["cap","copy"]' hint="填一个字段名与一个内置函数" explain="第三个索引限定 cap；copy 把元素搬进新数组，不再拖住原底层数组。" :explains='["三索引切片的第三个数限定新切片的容量上界，使其无法再 append 到覆盖 max 之后的底层元素，从而把可见范围锁住。","这个内置函数把元素逐个搬进另一个底层数组，源与目标此后互不影响；由于不再引用原数组，旧的大数组也能被 GC 回收。"]' />
 

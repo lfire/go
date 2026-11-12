@@ -141,7 +141,11 @@ func main() {
 		fmt.Fprint(w, exposition(1000, 12, 0.18))
 	}))
 	defer ts.Close()
-	resp, _ := http.Get(ts.URL + "/metrics")
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		fmt.Println("抓取失败:", err)
+		return
+	}
 	defer resp.Body.Close()
 	fmt.Println("抓取状态:", resp.StatusCode, "类型:", resp.Header.Get("Content-Type"))
 }

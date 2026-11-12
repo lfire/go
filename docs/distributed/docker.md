@@ -317,7 +317,7 @@ d7e3f2a1c0b9   2 minutes ago  COPY ca-certificates.crt /etc/ssl/certs/       220
 
 ## 随堂检测
 <Quiz no="090-1" q="把未关 CGO 的动态链接 Go 二进制放进 scratch 镜像，最可能发生什么？" :options='["正常运行","容器启动时因缺少动态链接器而失败","自动改用静态链接","镜像体积变大但不影响运行"]' answer="1" explain="scratch 里没有任何动态库与 loader，动态链接二进制无法加载，报错常被误读成文件丢失。" />
-<Predict no="090-2" q="多阶段 Dockerfile 里，把 COPY . . 放在 go mod download 之前会怎样？" :options='["构建更快","改一行业务代码就会让依赖下载层缓存失效","依赖不再下载","没有影响"]' answer="1" output="改一行业务代码就会让依赖下载层缓存失效" explain="源码层内容一变，其后的所有层缓存都作废，依赖被反复下载，构建明显变慢。" />
+<Predict no="090-2" q="多阶段 Dockerfile 里，把 COPY . . 放在 go mod download 之前会怎样？" :options='["构建更快","改一行业务代码就会让依赖下载层缓存失效","依赖不再下载","没有影响"]' answer="1" explain="源码层内容一变，其后的所有层缓存都作废，依赖被反复下载，构建明显变慢。" />
 <FillBlank no="090-3" tpl="多阶段构建用 ___ 从构建阶段拷贝产物；要让二进制跑在 scratch 里必须设置 ___ = 0；非 root 运行建议用 ___ 指定数字 UID。" :answers='["COPY --from","CGO_ENABLED","USER"]' hint="拷贝指令、CGO 开关、切换用户指令" explain="三者分别对应产物隔离、静态链接与最小权限，是 Go 镜像的标配三件套。" :explains='["多阶段里用 COPY --from 指向前一阶段的别名，只取编译好的二进制，不把 SDK 与源码带进最终镜像，体积骤降。","置为 0 时禁用 cgo 走静态链接，二进制不再依赖 glibc；scratch 无动态库，动态链接的程序会起不来。","镜像默认以 root 启动，用 USER 指定数字 UID 降权运行，容器逃逸或挂载宿主目录时把影响限制在非特权账号。"]' />
 
 ## 一页纸速记

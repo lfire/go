@@ -1,9 +1,9 @@
-# 第 115 讲 · 实战 09 · 电商微服务系统
+# 第 115 讲 · 实战 13 · 电商微服务系统
 
 - **阶段**：L10 · 工程实战
 - **目标**：走完一个企业级系统的全流程
 - **知识点**：服务拆分与契约 / 用户/商品/订单/库存 / gRPC + HTTP 网关 / 分布式事务 / 搜索与联调
-- **教程正文**：[第 115 讲 · 实战 09 · 电商微服务系统](/projects/micro-ecommerce)
+- **教程正文**：[第 115 讲 · 实战 13 · 电商微服务系统](/projects/micro-ecommerce)
 - **GitHub 目录**：[l10-projects/lesson-115-micro-ecommerce](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-115-micro-ecommerce)
 
 ## 运行

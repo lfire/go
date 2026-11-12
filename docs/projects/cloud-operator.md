@@ -1,11 +1,11 @@
 ---
-title: 第 117 讲 · 实战 11 · Kubernetes Operator 与可观测平台
+title: 第 117 讲 · 实战 15 · Kubernetes Operator 与可观测平台
 description: 用 CRD 声明期望状态，写出完整 Reconcile 循环与限速队列，并把指标、日志、告警收成平台
 ---
 
 <StageHeader stage="L10 · 工程实战" level="★★★★☆" time="75 分钟" goal="用 Go 管理 Go 服务" prereq="第 116 讲 · 秒杀与高并发库存" />
 
-# 第 117 讲 · 实战 11 · Kubernetes Operator 与可观测平台
+# 第 117 讲 · 实战 15 · Kubernetes Operator 与可观测平台
 
 > 前十一讲我们交付了 CLI、短链、图片服务、KV 存储、电商与秒杀系统，服务的数量从一个变成十几个。靠 `kubectl scale` 加几段脚本去管它们，有个绕不过去的硬伤：**脚本执行一次就结束了**。有人手动改了副本数、某个 Pod 半夜被驱逐、一次发布被回滚到旧版本，没有任何东西会把状态拉回来。Operator 把这个思路彻底反过来——业务方只声明「我要三个 v1.4.0 的副本」，控制器则不知疲倦地把实际状态往期望状态收敛，无论中间发生了多少次偏离。这一讲用标准库写出一套完整、可编译、可压测的调谐循环，再把指标、结构化日志与错误预算告警接成闭环，目标是这份文档能直接拿去做设计评审，读者照着就能把系统搭出来，并且清楚每个决策的代价。
 
@@ -607,7 +607,7 @@ func main() {
 
 ### 6.3 Informer 缓存：线程安全与乱序防护
 
-**设计意图**：watch 事件高频且可能乱序，缓存是 apiserver 的只读投影，必须线程安全、必须拒绝比当前更旧的事件、绝不能让调用方拿到可写的内部对象。**关键取舍**：用 `sync.RWMutex` 而非 `sync.Map`，因为需要按 namespace 的二级索引与一次性列举；写入时 `DeepCopy`、读出时也 `DeepCopy`，把「就地修改污染缓存」这个坑从根上堵死；`Update` 用 `resourceVersion` 字符串比较判断乱序。
+**设计意图**：watch 事件高频且可能乱序，缓存是 apiserver 的只读投影，必须线程安全、必须拒绝比当前更旧的事件、绝不能让调用方拿到可写的内部对象。**关键取舍**：用 `sync.RWMutex` 而非 `sync.Map`，因为需要按 namespace 的二级索引与一次性列举；写入时 `DeepCopy`、读出时也 `DeepCopy`，把「就地修改污染缓存」这个坑从根上堵死；`Update` 用 `resourceVersion` 的**数值**比较判断乱序——直接按字符串字典序会把 `"100"` 判成小于 `"99"`，让迟到事件被接受。
 
 ```go
 // 文件：internal/informer/store.go
@@ -615,6 +615,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 )
 
@@ -655,11 +656,21 @@ func (s *Store) Add(o Object) {
 	set[o.Key] = struct{}{}
 }
 
+// RV 是 uint64 的十进制字符串：字典序会把 "100" 判成小于 "99"，必须按数值比较。
+func rvAtLeast(cur, incoming string) bool {
+	a, errA := strconv.ParseUint(cur, 10, 64)
+	b, errB := strconv.ParseUint(incoming, 10, 64)
+	if errA != nil || errB != nil {
+		return cur >= incoming // 非数字 RV 退回字典序
+	}
+	return a >= b
+}
+
 // Update 拒绝乱序事件：RV 不大于当前值就丢弃，返回是否接受。
 func (s *Store) Update(o Object) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.byK[o.Key]; ok && cur.ResourceVersion >= o.ResourceVersion {
+	if cur, ok := s.byK[o.Key]; ok && rvAtLeast(cur.ResourceVersion, o.ResourceVersion) {
 		return false
 	}
 	s.byK[o.Key] = o.DeepCopy()
@@ -1280,7 +1291,7 @@ func BenchmarkDecide(b *testing.B) {
 
 <Quiz no="117-1" q="为什么本讲的 Reconcile 必须是 level-triggered，而不是只在事件到达时执行一次动作？" :options='["为了少写几行代码","因为事件可能丢失、动作可能失败、控制器可能重启，必须靠反复对账收敛","因为 Kubernetes 不支持 watch 事件","因为 Go 的 channel 不可靠"]' answer="1" explain="事件会丢、动作会失败、进程会重启，这三条决定了只有每次从当前实际状态重新计算、配合 5 分钟全量 resync，才能保证最终收敛。第 6.2 节的 Reconcile 重入后重新 Get 而非复用旧 Observed，正是这个设计。" />
 
-<Predict no="117-2" q="期望 3 副本 v2，实际 1 副本 v1，一次 Reconcile 会做什么？" :options='["同时扩容到 3 并升级到 v2","先扩容到 3，下一轮再升级","先升级到 v2，下一轮再扩容","什么都不做，等待人工介入"]' answer="2" output="先升级到 v2，下一轮再扩容" explain="Decide 里版本不一致优先于副本差异，返回 ActionRollout 与 PhaseUpgrading。一次只推进一个维度，等下一轮 Get 读到新版本后才处理扩缩容，这样失败时不用判断该补偿哪个动作。" />
+<Predict no="117-2" q="期望 3 副本 v2，实际 1 副本 v1，一次 Reconcile 会做什么？" :options='["同时扩容到 3 并升级到 v2","先扩容到 3，下一轮再升级","先升级到 v2，下一轮再扩容","什么都不做，等待人工介入"]' answer="2" explain="Decide 里版本不一致优先于副本差异，返回 ActionRollout 与 PhaseUpgrading。一次只推进一个维度，等下一轮 Get 读到新版本后才处理扩缩容，这样失败时不用判断该补偿哪个动作。" />
 
 <Quiz no="117-3" q="关于 Reconcile 的幂等性，下列哪种写法是错的？" :options='["ApplyReplicas 传期望的绝对值 3","UpdateStatus 允许带 resourceVersion 重复覆盖","ApplyReplicas 传增量，每次把当前副本加 1","Cleanup 重复调用结果相同"]' answer="2" explain="传增量会让重复调谐不断叠加，事件重复、退避重试、resync 都会放大它。所有动作必须是「设为期望值」的绝对值语义，删除清理同样要幂等。" />
 
@@ -1298,4 +1309,4 @@ func BenchmarkDecide(b *testing.B) {
 
 到这里，云原生这条线收束了：用 Go 写的控制器去管理同样用 Go 写的服务，正是「用 Go 管理 Go 服务」这个目标最贴切的落点。最后一个项目把 Go 的并发优势用到 AI 工程上——多家大模型供应商的流式协议各不相同，网关要统一鉴权、限流、计费，还要把 token 一个一个实时转发给客户端，并且在客户端断开时立刻停掉上游，别让钱白烧。下一讲实现多供应商适配与 SSE 流式转发。
 
-[下一讲：实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway)
+[下一讲：实战 16 · LLM 网关与流式推理管道](/projects/ai-gateway)

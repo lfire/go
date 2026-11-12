@@ -92,7 +92,7 @@ func main() {
 }
 ```
 
-<OutputBox title="运行结果" output="结果: hello, gopher 错误: nil\n无 token 时: unauthenticated: 缺少 token" note="认证层在业务之前短路，业务 handler 根本没被执行；日志层的前后两条记录夹住整段耗时。" />
+<OutputBox title="运行结果" output="结果: hello, gopher 错误: &lt;nil&gt;\n无 token 时: unauthenticated: 缺少 token" note="认证层在业务之前短路，业务 handler 根本没被执行；日志层的前后两条记录夹住整段耗时。" />
 
 ### 2.2 metadata 与 status 错误码
 
@@ -413,7 +413,7 @@ grpc-status: 0
 <Predict q="父 ctx 的 deadline 是 100 毫秒，用 WithTimeout(parent, 300ms) 派生子 ctx，子 ctx 实际的 deadline 是？" :options='["父子中更早的 100 毫秒","名义上的 300 毫秒","两者相加 400 毫秒","不设 deadline"]' answer="0" output="子取父子中更早的 100 毫秒" explain="context.WithTimeout 在父子中取更早的 deadline，子只能缩短不能延长预算；3.5 的测试正是用 cd.After(pd) 断言这一点。" />
 
 ## 动手练一练
-<Exercise title="给拦截器链加上 panic 恢复与 trace-id 透传" task="在 2.1 的 chain 里新增一个 recoverInterceptor 放最外层，把业务里的 panic 转成 Internal 错误；再写一个透传拦截器，从 Incoming metadata 取出 trace-id 并挂到下一跳的 Outgoing context。" :hints='["recover 必须写在 defer 里，且要放在调用 handler 之前注册","用命名返回值把 panic 转成 error，避免返回零值","透传时新建或复制一份 Metadata，只把需要的 key 挂回 context"]' solution="要点一：recoverInterceptor 用 defer 加 recover，命中时把命名返回 err 设为 Errorf(Internal, msg)，它应放在数组最外层。\n要点二：透传拦截器先 FromIncomingContext 取 trace-id，再用 NewOutgoingContext 挂回新 ctx 传给 handler。\n要点三：拦截器顺序是日志、recover、认证、透传、业务，越靠外越先做前置逻辑。" explain="把 recover 放最外层才能兜住内层所有 panic；把 metadata 显式再挂回 Outgoing context，才不会让链路 ID 在网关这一跳断掉。" />
+<Exercise title="给拦截器链加上 panic 恢复与 trace-id 透传" task="在 2.1 的 chain 里新增一个 recoverInterceptor 放最外层，把业务里的 panic 转成 Internal 错误；再写一个透传拦截器，从 Incoming metadata 取出 trace-id 并挂到下一跳的 Outgoing context。" :hints='["recover 必须写在 defer 里，且要放在调用 handler 之前注册","用命名返回值把 panic 转成 error，避免返回零值","透传时新建或复制一份 Metadata，只把需要的 key 挂回 context"]' solution="要点一：recoverInterceptor 用 defer 加 recover，命中时把命名返回 err 设为 Errorf(Internal, msg)，它应放在数组最外层。\n要点二：透传拦截器先 FromIncomingContext 取 trace-id，再用 NewOutgoingContext 挂回新 ctx 传给 handler。\n要点三：拦截器顺序是 recover、日志、认证、透传、业务，越靠外越先做前置逻辑。" explain="把 recover 放最外层才能兜住内层所有 panic；把 metadata 显式再挂回 Outgoing context，才不会让链路 ID 在网关这一跳断掉。" />
 
 ## 随堂检测
 <Quiz no="074-1" q="客户端设了 500 毫秒 deadline，服务端调用下游时却用 context.Background() 新建 ctx，会怎样？" :options='["下游继承 500 毫秒预算，一切正常","整条 deadline 链从 Background 处断开，下游可能无限等待","deadline 自动翻倍成 1 秒","gRPC 会直接报错并拒绝请求"]' answer="1" explain="用 Background 起新 ctx 等于抛弃父 ctx 的 deadline 与取消信号，下游不再受顶层预算约束，慢调用会一直挂到自身超时甚至更久。" />

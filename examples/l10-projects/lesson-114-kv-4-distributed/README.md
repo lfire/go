@@ -1,9 +1,9 @@
-# 第 114 讲 · KV 贯穿线 ④ 分片、复制与 Raft
+# 第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft
 
 - **阶段**：L10 · 工程实战
 - **目标**：把 KV 演进成分布式存储
 - **知识点**：分片路由 / 副本复制 / Raft 集成 / 读写一致性 / 成员变更与压测
-- **教程正文**：[第 114 讲 · KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed)
+- **教程正文**：[第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed)
 - **GitHub 目录**：[l10-projects/lesson-114-kv-4-distributed](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-114-kv-4-distributed)
 
 ## 运行

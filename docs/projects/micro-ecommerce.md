@@ -1,11 +1,11 @@
 ---
-title: 第 115 讲 · 实战 09 · 电商微服务系统
+title: 第 115 讲 · 实战 13 · 电商微服务系统
 description: 按业务边界拆分服务、用 .proto 定契约、以 Saga 编排下单与补偿、用 HTTP 网关统一入口
 ---
 
 <StageHeader stage="L10 · 工程实战" level="★★★★☆" time="90 分钟" goal="走完一个企业级系统的全流程" prereq="第 114 讲 · 分片、复制与 Raft" />
 
-# 第 115 讲 · 实战 09 · 电商微服务系统
+# 第 115 讲 · 实战 13 · 电商微服务系统
 
 > 上一讲的分片 KV 证明了单 key 可以做到原子与强一致，可真实业务里最值钱的那次写入——「下一个订单」——偏偏要同时改动订单、库存、支付三处数据，而且这三处往往由三个团队各自维护、各自扩容、各自发布。把它们塞进一个单体、用一个本地事务盖住并不难；难的是当它们必须独立部署时，怎么保证这一串动作要么全部落地、要么全部不留痕，并且在途中任何一步超时、宕机、重复请求时都不留下幽灵订单或凭空多出的库存。这一讲不追求跨服务强事务，而是诚实接受最终一致：用 `.proto` 把边界钉成契约，用 Saga 把长事务拆成带逆序补偿的本地事务，用 HTTP 网关统一入口，用可靠消息与 binlog 把异构索引补齐。读完你应该能拿着这份文档直接去做设计评审，并说清每一个决策的代价。
 
@@ -655,7 +655,7 @@ func main() {
 }
 ```
 
-<OutputBox title="支付失败后的补偿结果" output="err=saga: aborted at charge: payment declined" note="stock 回到 10、order 置 CANCELED，第 3 步 charge 从未成功因此不执行其 undo" />
+<OutputBox title="支付失败后的补偿结果" output="err=saga: aborted at charge: payment declined\nstate=map[order:CANCELED payment:none stock:10]" note="stock 回到 10、order 置 CANCELED，第 3 步 charge 从未成功因此不执行其 undo" />
 
 <Callout type="idea" title="为什么补偿换用全新 context" text="请求 ctx 在网关超时那一刻就已被 cancel，若补偿沿用它，第一次 Undo 就会撞上 ctx.Err 直接返回，预扣库存永远释放不掉。补偿是「收尾工作」，必须用一个独立的、带自己 deadline 的 context 跑完；同时也说明补偿不能只依赖某次内存调用栈，进程崩溃后要靠持久化状态机续跑。" />
 
@@ -1389,7 +1389,7 @@ func main() {
 
 <Quiz no="115-2" q="本讲把服务按业务边界拆分，最硬的判据是什么？" :options='["按 controller / service / dao 分层","按代码行数平均切分","按业务边界与数据所有权划分","按团队人数一人一个服务"]' answer="2" explain="数据所有权决定边界：每个服务独占自己的库，跨服务只能走 proto 契约。按技术层拆会共享同一个库，既没获得隔离性又平白多出网络调用，正是第 3 节 Callout 点出的第一个错误。" />
 
-<Predict no="115-3" q="6.3 里 charge 返回 payment declined 后，state 的最终值是什么？" :options='["stock=9 order=CREATED payment=none","stock=10 order=CANCELED payment=none","stock=9 order=CANCELED payment=REFUNDED","stock=10 order=PAID payment=REFUNDED"]' answer="1" output="stock=10 order=CANCELED payment=none" explain="charge 是第 3 步且自身失败，因此只补偿已成功的 reserve 与 create 两步：逆序先撤建单置 CANCELED、再释放预扣把 stock 加回 10；charge 从未成功，它的 undo 不执行，payment 保持 none。" />
+<Predict no="115-3" q="6.3 里 charge 返回 payment declined 后，state 的最终值是什么？" :options='["stock=9 order=CREATED payment=none","stock=10 order=CANCELED payment=none","stock=9 order=CANCELED payment=REFUNDED","stock=10 order=PAID payment=REFUNDED"]' answer="1" explain="charge 是第 3 步且自身失败，因此只补偿已成功的 reserve 与 create 两步：逆序先撤建单置 CANCELED、再释放预扣把 stock 加回 10；charge 从未成功，它的 undo 不执行，payment 保持 none。" />
 
 <Quiz no="115-4" q="支付 Charge 超时但网关可能已扣款，正确做法是？" :options='["立即重试扣款直到成功","立即执行退款","标记为未知、暂停自动补偿、靠对账确认后再推进或退款","忽略它，用户会重新下单"]' answer="2" explain="超时意味着结果未知，重试可能重复扣款，盲目退款可能退一笔不存在的款。第 7 节失败矩阵把它列为 UNKNOWN，必须转对账并落到人工队列，这正是「敢写代价」的体现。" />
 
@@ -1405,4 +1405,4 @@ func main() {
 
 这一讲解决的是「跨服务一致性」，但库存扣减仍是一个普通的预扣调用。到了秒杀那种瞬时十万级请求、单 SKU 热点的场景，先查再扣的写法会直接把库存卖成负数，数据库也扛不住洪峰。下一讲专门解决超卖与流量削峰。
 
-[下一讲：实战 10 · 秒杀与高并发库存](/projects/micro-seckill)
+[下一讲：实战 14 · 秒杀与高并发库存](/projects/micro-seckill)

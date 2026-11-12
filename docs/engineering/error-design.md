@@ -525,7 +525,7 @@ gRPC 侧同理：内部错误码映射到 `codes.NotFound`、`codes.InvalidArgum
 
 <Quiz no="057-1" q="关于 errors.As 与错误码，哪项做法最稳妥？" :options='["用 err.Error() 的字符串判断类别","用稳定的整数码并靠 errors.As 提取","每个包各自定义一套码","把码拼进 message 让前端解析"]' answer="1" explain="整数码稳定、可判定；errors.As 能沿 %w 错误链找到自定义类型，不受文案改动影响。" />
 
-<Predict no="057-2" q="CodeNotFound 经 statusOf 映射后，writeErr 写出的 HTTP 状态码是？" :options='["200","400","404","500"]' answer="2" output="404" explain="CodeNotFound 命中 switch 的第一个分支，返回 http.StatusNotFound，即 404。" />
+<Predict no="057-2" q="CodeNotFound 经 statusOf 映射后，writeErr 写出的 HTTP 状态码是？" :options='["200","400","404","500"]' answer="2" explain="CodeNotFound 命中 switch 的第一个分支，返回 http.StatusNotFound，即 404。" />
 
 ## 一页纸速记
 

@@ -293,7 +293,7 @@ func main() {
 
 <Quiz no="024-1" q="关于 omitempty，下面哪项说法正确？" :options='["只让空字符串字段不输出","结构体零值字段也不会输出","0、false、空切片与 nil 都会被当作零值而不输出","它会影响解码时对缺失字段的处理"]' answer="2" explain="omitempty 只在编码时生效，对零值一视同仁：数字 0、false、空串、空切片、空 map、nil 都不写出。想保留 0 请用指针字段。" />
 
-<Predict no="024-2" q="第二段代码里，json.Marshal(c) 打印出来的第一行是什么？" :options='["{\"retries\":0,\"debug\":false,\"ratio\":0,\"name\":\"\"}","{}","null","编译报错"]' answer="1" output="{}" explain="四个字段恰好都是零值且都带 omitempty，于是全部不出现在结果里，序列化结果就是一个空对象。" />
+<Predict no="024-2" q="第二段代码里，json.Marshal(c) 打印出来的第一行是什么？" :options='["{\"retries\":0,\"debug\":false,\"ratio\":0,\"name\":\"\"}","{}","null","编译报错"]' answer="1" explain="四个字段恰好都是零值且都带 omitempty，于是全部不出现在结果里，序列化结果就是一个空对象。" />
 
 ## 一页纸速记
 

@@ -263,4 +263,4 @@ GORACE="halt_on_error=1" go test -race ./...                # 命中首个竞态
 
 并发编程到此收束，接下来把代码变成可维护、可测试、可发布、可诊断的工程。
 
-[下一讲：阶段五 · 工程化与质量](/engineering/)
+[下一讲：项目结构与分层设计](/engineering/project-layout)

@@ -42,7 +42,11 @@ func ProtocolBridge(invoke RPCFunc) http.Handler {
 func main() {
 	ts := httptest.NewServer(ProtocolBridge(invoke))
 	defer ts.Close()
-	resp, _ := http.Get(ts.URL + "/api/order/10086")
+	resp, err := http.Get(ts.URL + "/api/order/10086")
+	if err != nil {
+		fmt.Println("请求失败:", err)
+		return
+	}
 	defer resp.Body.Close()
 	var out map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&out)

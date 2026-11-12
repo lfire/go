@@ -15,7 +15,7 @@ var db *sql.DB
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite", "file:app.db?_pragma=busy_timeout(5000)")
+	db, err = sql.Open("sqlite", "file:demo03.db?_pragma=busy_timeout(5000)")
 	if err != nil {
 		log.Fatal(err)
 	}

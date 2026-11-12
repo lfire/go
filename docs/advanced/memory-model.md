@@ -254,7 +254,7 @@ func main() {
 ### 与 L10 源码级实战的呼应
 
 - KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：WAL 追加写与快照切换之间必须靠 Mutex 或 atomic 建立同步边，否则恢复线程可能看到「写了一半」的记录；本讲的 happens-before 推导是判断这段并发控制是否正确的唯一依据，`-race` 只能辅助发现。
-- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：预扣减与最终一致里，库存计数与订单状态的发布必须有一次同步边（channel 或 atomic），靠「先写库存再写订单」的书写顺序在并发下并不成立。
+- [实战 14 · 秒杀与高并发库存](/projects/micro-seckill)：预扣减与最终一致里，库存计数与订单状态的发布必须有一次同步边（channel 或 atomic），靠「先写库存再写订单」的书写顺序在并发下并不成立。
 - [实战 08 · 分布式任务调度系统](/projects/concurrent-scheduler)：etcd 选主与租约故障转移时，主节点标志的读写跨多个 goroutine，`sync/atomic` 与 `WaitGroup.Done`/`Wait` 各自建立的边正好对上第 3 节那张同步原语表。
 
 ## 4. 工程实践
@@ -278,7 +278,7 @@ go test -race ./...
 
 ## 随堂检测
 <Quiz no="099-1" q="按 Go 官方内存模型，happens-before 是如何定义的？" :options='["所有 goroutine 的真实执行时间顺序", "CPU 保证的指令先后", "sequenced-before 与 synchronized-before 之并的传递闭包", "GC 停顿点之间的顺序"]' answer="2" explain="doc/go_mem.html 明确定义 happens before 为 sequenced before 与 synchronized before 并集的传递闭包。" />
-<Predict no="099-2" q="第二段程序（普通 bool 标志）在 -race 下运行，结果最准确的描述是？" :options='["必定打印 42", "必定打印 0", "报告数据竞争，结果不可依据"]' answer="2" output="报告数据竞争，结果不可依据" explain="写 data 与读 data 之间没有 synchronized-before 边，构成数据竞争；DRF-SC 不适用，不能对输出作任何保证。" />
+<Predict no="099-2" q="第二段程序（普通 bool 标志）在 -race 下运行，结果最准确的描述是？" :options='["必定打印 42", "必定打印 0", "报告数据竞争，结果不可依据"]' answer="2" explain="写 data 与读 data 之间没有 synchronized-before 边，构成数据竞争；DRF-SC 不适用，不能对输出作任何保证。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["happens-before 是两个关系并集的传递闭包", "DRF-SC：无竞争程序表现为顺序一致", "同步边来自 channel、Mutex、Once、WaitGroup、atomic"]' :pitfalls='["用普通变量做 ready 标志", "靠 Sleep 代替同步", "把 -race 没报当成没竞争"]' summary="并发正确性靠 happens-before 推导，不靠运行次数或物理先后。" />

@@ -573,7 +573,7 @@ func main() {
 }
 ```
 
-<OutputBox title="像素与 EXIF 校验演示输出" output="合法小图: 2 2 png err=nil\n像素炸弹: 像素炸弹: 30000x30000 超过上限\nEXIF 方向: 6 err=nil" />
+<OutputBox title="像素与 EXIF 校验演示输出" output="合法小图: 2 2 png err=&lt;nil&gt;\n像素炸弹: 像素炸弹: 30000x30000 超过上限\nEXIF 方向: 6 err=&lt;nil&gt;" />
 
 `pngBomb` 特意用 `crc32.ChecksumIEEE` 算出合法校验和，让 `DecodeConfig` 能顺利读出 IHDR 里声明的 30000 乘 30000，从而证明拦截发生在「读到尺寸之后、分配像素之前」；若 CRC 错误只会在解析阶段失败，反而掩盖了尺寸判断。EXIF 解析按「JPEG SOI → APP1 段 → Exif 前缀 → TIFF 字节序与 IFD0 → Orientation 标签」逐层读取，每个切片前都做长度检查，避免畸形文件触发越界 panic。方向值 6 表示顺时针旋转 90 度，交给第 6.3 节校正。
 
@@ -823,7 +823,7 @@ func main() {
 }
 ```
 
-<OutputBox title="条件缓存演示输出" output="首次: 200 bytes= 17 ETag 有引号= true\n带缓存: 304 bytes= 0\n弱校验: 304" />
+<OutputBox title="条件缓存演示输出" output="首次: 200 bytes= 16 ETag 有引号= true\n带缓存: 304 bytes= 0\n弱校验: 304" />
 
 内容哈希带来三个好处：相同图片只存一份、URL 天然可永久缓存、ETag 不需要额外计算。`matchETag` 处理 `If-None-Match` 的多值、`W/` 弱校验与 `*` 通配，避免某些客户端的合法条件头被漏判而白白传输整图。304 分支只写状态码、不写正文，这是省带宽的关键；HEAD 请求同样只回头部，供 CDN 探活与取元数据。
 
@@ -904,7 +904,7 @@ func main() {
 }
 ```
 
-<OutputBox title="签名 URL 校验演示输出" output="预签名 URL 已生成, 过期时间戳= ...\n合法校验: err=nil\n篡改对象键: 签名不匹配\n过期签名: 签名已过期\n篡改方法: 签名不匹配" />
+<OutputBox title="签名 URL 校验演示输出" output="预签名 URL 已生成, 过期时间戳= ...\n合法校验: err=&lt;nil&gt;\n篡改对象键: 签名不匹配\n过期签名: 签名已过期\n篡改方法: 签名不匹配" />
 
 `message` 把方法、对象键、过期时间用换行拼接，三项任一被改都会让签名失配；`Verify` 先判过期再比签名，避免对已过期 URL 做无意义计算；`hmac.Equal` 是常量时间比较，不能用 `==` 替代。生产还要补三件事：密钥从配置中心或 KMS 注入、缺失则拒绝启动；URL 走 HTTPS 且不写进日志；签名有效期按对象大小收紧，8 MiB 的直传给 5 分钟足够，过长会放大泄露风险。
 

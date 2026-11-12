@@ -503,4 +503,4 @@ go test -race -run TestWriteAtMakesChunkRetransmissionIdempotent -v ./...
 
 下一阶段我们把视角从「一个服务」抬到「一组服务」：远程调用要解决什么、协议怎么定、服务之间怎么找到彼此。
 
-[下一讲：阶段七 · RPC 与微服务](/microservice/)
+[下一讲：RPC 原理与自研最小 RPC](/microservice/rpc-basics)

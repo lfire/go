@@ -220,7 +220,7 @@ func main() {
 | 直接 `append(s, 1)` | 安全，会分配 | 安全，会分配 |
 | `slices.Clone(s) == nil` | true | false |
 
-<Predict q="dst := make([]int, 2) 后 n := copy(dst, []int{10,20,30})，打印 n 与 dst 的结果是？" :options='["3 [10 20 30]","2 [10 20]","2 [10 20 0]","编译失败"]' answer="1" output="2 [10 20]" explain="copy 只搬 min(len(dst), len(src)) 个元素，dst 只有两格，第三个数被静默丢弃；所以要检查返回值、别假设全量复制。" />
+<Predict q="dst := make([]int, 2) 后 n := copy(dst, []int{10,20,30})，打印 n 与 dst 的结果是？" :options='["3 [10 20 30]","2 [10 20]","2 [10 20 0]","编译失败"]' answer="1" explain="copy 只搬 min(len(dst), len(src)) 个元素，dst 只有两格，第三个数被静默丢弃；所以要检查返回值、别假设全量复制。" />
 
 <Callout type="idea" title="配套示例工程">
 
@@ -332,7 +332,7 @@ func main() {
 
 <Quiz no="013-1" q="关于数组与切片，正确的是？" :options='["数组赋值只复制描述符","s[1:3] 的 cap 一定是 2","长度属于类型，[3]int 与 [4]int 不能互赋","nil 切片必须先 make 才能 append"]' answer="2" explain="数组是值，整块拷贝，长度不同即类型不同；cap 从起点算到数组末尾；nil 切片可直接 append。" />
 
-<Predict no="013-2" q="arr 长度为 5，part := arr[1:4] 后打印 len(part), cap(part) 的结果是？" :options='["3 3","3 4","4 4","2 4"]' answer="1" output="3 4" explain="左闭右开取 3 个元素；cap 从下标 1 数到末尾共 4 格。" />
+<Predict no="013-2" q="arr 长度为 5，part := arr[1:4] 后打印 len(part), cap(part) 的结果是？" :options='["3 3","3 4","4 4","2 4"]' answer="1" explain="左闭右开取 3 个元素；cap 从下标 1 数到末尾共 4 格。" />
 
 ## 一页纸速记
 

@@ -264,7 +264,7 @@ View trace / Goroutine analysis / Network blocking profile / Synchronization blo
 
 - [实战 07 · 并发爬虫](/projects/concurrent-crawler)：worker pool 并发版的 worker 数要贴着 `GOMAXPROCS` 与 I/O 比例调，不是越多越好；去重与限速用的 channel 会把大量 G 挂到等待队列，`runqueue` 与 `spinningthreads` 正好判断是「抓取本身慢」还是「调度不过来」。
 - [实战 05 · 日志分析 ETL 管道](/projects/data-log-etl)：扇出扇入聚合时，某阶段若写了无函数调用的解析紧循环就会独占一个 P，本讲 `asyncPreempt` 保证它仍能被换下，而 `go tool trace` 的 Proc 视图能看出各阶段 P 是否被占满。
-- [实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway)：SSE 流式转发是大量短阻塞 G，靠 `netpoll` 就绪唤醒而非 sysmon；`findRunnable` 把 netpoll 排在 `runqsteal` 之前，正是这类 I/O 密集服务延迟低的源码依据。
+- [实战 16 · LLM 网关与流式推理管道](/projects/ai-gateway)：SSE 流式转发是大量短阻塞 G，靠 `netpoll` 就绪唤醒而非 sysmon；`findRunnable` 把 netpoll 排在 `runqsteal` 之前，正是这类 I/O 密集服务延迟低的源码依据。
 
 ## 4. 工程实践
 线上出现「CPU 没跑满但延迟高」时，先看是不是 P 闲置或 G 排队。`GODEBUG=schedtrace=1000,scheddetail=1` 每秒打印一次各 P 的 `runq` 长度、全局 `runqueue` 与 `nmspinning`；若要精确到微秒级的调度延迟，再用 `runtime/trace` 采集后交给 `go tool trace` 看 Proc 视图。这两者都是只读观测，采样窗口控制在几十秒内即可。

@@ -297,7 +297,7 @@ func main() {
 | 实现方预先定义大接口 | 调用方被迫依赖多余方法 | 接口由使用方按需要定义 |
 | 在包内给外部类型加方法 | 编译失败 | 只能给本包类型加方法 |
 
-<Predict q="openReader(false) 失败时若图省事 return (*fileReader)(nil), err，调用方 r, _ := openReader(false) 后判断 r == nil 的结果是？" :options='["true，判空生效","false，判空失效","编译失败","panic"]' answer="1" output="false，判空失效" explain="接口含类型与数据两个字；装入 nil 的 *fileReader 后类型字写着该指针类型，整体不为 nil。正确写法是失败时显式 return nil, err，让两个字都为空。" />
+<Predict q="openReader(false) 失败时若图省事 return (*fileReader)(nil), err，调用方 r, _ := openReader(false) 后判断 r == nil 的结果是？" :options='["true，判空生效","false，判空失效","编译失败","panic"]' answer="1" explain="接口含类型与数据两个字；装入 nil 的 *fileReader 后类型字写着该指针类型，整体不为 nil。正确写法是失败时显式 return nil, err，让两个字都为空。" />
 
 <Callout type="idea" title="配套示例工程">
 
@@ -415,7 +415,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 030 讲](/core/interface-internals) 会展开 `iface`/`eface`、`itab` 与动态派发成本，把这里「两个字」的模型落到结构；[第 026 讲](/core/value-semantics) 讲接口赋值的拷贝代价；[第 031 讲](/core/string-internals) 与反射一起解释空接口存值的布局。工程上，[第 053 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Storage` 是本讲「接受接口、返回结构体」的样板，[第 118 讲](/projects/ai-gateway) 的多供应商适配则把行为差异全收进接口。
+[第 030 讲](/core/interface-internals) 会展开 `iface`/`eface`、`itab` 与动态派发成本，把这里「两个字」的模型落到结构，并与反射一起解释空接口存值的布局；[第 026 讲](/core/value-semantics) 讲接口赋值的拷贝代价。工程上，[第 053 讲](/engineering/mock-test) 靠小接口生成替身。实战里，[第 111 讲](/projects/kv-1-memory) 的 `Storage` 是本讲「接受接口、返回结构体」的样板，[第 118 讲](/projects/ai-gateway) 的多供应商适配则把行为差异全收进接口。
 
 ## 动手练一练
 
@@ -425,7 +425,7 @@ func main() {
 
 <Quiz no="019-1" q="关于 Go 接口，正确的是？" :options='["必须显式声明实现","接口由实现方定义","小接口更易复用","any 是 Go 1.0 引入的"]' answer="2" explain="隐式实现无需声明；接口由使用方定义；any 是 Go 1.18 引入的空接口别名。" />
 
-<Predict no="019-2" q="把 nil 的 *T 指针赋给 any 变量 i，判断 i == nil 的结果是？" :options='["true","false","编译失败","运行时 panic"]' answer="1" output="false" explain="接口含类型与数据两个字；装入 nil 的 *T 后类型字非空，整体不为 nil。" />
+<Predict no="019-2" q="把 nil 的 *T 指针赋给 any 变量 i，判断 i == nil 的结果是？" :options='["true","false","编译失败","运行时 panic"]' answer="1" explain="接口含类型与数据两个字；装入 nil 的 *T 后类型字非空，整体不为 nil。" />
 
 ## 一页纸速记
 

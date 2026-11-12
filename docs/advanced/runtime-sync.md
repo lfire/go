@@ -259,7 +259,7 @@ func main() {
 ### 与 L10 源码级实战的呼应
 
 - KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：「锁分片」正是把一把大锁拆成 N 把、把竞争面缩到同分片 key 的做法，本讲三行状态机表解释了为什么分片后不再轻易退化到饥饿模式；WAL 追加写还要保证临界区里不做阻塞 I/O，否则 `delay` 一列会立刻暴露问题。
-- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：热点账户就是一把被过度使用的锁，`contentions` 与 `delay` 两列直接指出该按账户哈希分片还是改成预扣减队列；本讲「先减临界区再谈换锁」的顺序在这里能避免一上来就上无锁结构。
+- [实战 14 · 秒杀与高并发库存](/projects/micro-seckill)：热点账户就是一把被过度使用的锁，`contentions` 与 `delay` 两列直接指出该按账户哈希分片还是改成预扣减队列；本讲「先减临界区再谈换锁」的顺序在这里能避免一上来就上无锁结构。
 - KV 贯穿线 ② [TCP 协议帧与网络层](/projects/kv-2-network)：连接管理与并发处理用无缓冲 channel 把请求从 accept 协程直接交给 worker，`recvq/sendq` 直接配对省一次拷贝；背压靠 channel 而非无限缓冲队列，正是第一条误读纠正后的工程落地。
 
 ## 4. 工程实践
@@ -283,7 +283,7 @@ go tool pprof -top mutex.prof
 
 ## 随堂检测
 <Quiz no="097-1" q="chansend 在有等待接收者时会怎么做？" :options='["把值拷进 buf 环形队列", "直接把值交给 recvq 队首的 sudog", "先复制到堆再唤醒接收者", "返回 false 让调用方重试"]' answer="1" explain="chansend 加锁后先查 recvq，非空则直接交接，值不进缓冲区。" />
-<Predict no="097-2" q="一个等待者超过 1ms 仍没拿到 Mutex，会发生什么？" :options='["继续自旋直到成功", "切换为饥饿模式，锁直接交给队首", "直接 panic", "把 GOMAXPROCS 加一"]' answer="1" output="切换为饥饿模式，锁直接交给队首" explain="starvationThresholdNs 为 1ms；超时后置 mutexStarving，所有权由 Unlock 直接移交队首，新来者不再自旋。" />
+<Predict no="097-2" q="一个等待者超过 1ms 仍没拿到 Mutex，会发生什么？" :options='["继续自旋直到成功", "切换为饥饿模式，锁直接交给队首", "直接 panic", "把 GOMAXPROCS 加一"]' answer="1" explain="starvationThresholdNs 为 1ms；超时后置 mutexStarving，所有权由 Unlock 直接移交队首，新来者不再自旋。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["hchan 用 recvq/sendq 直接配对，buf 只兜底", "selectgo 随机 pollorder 查就绪，lockorder 按地址加锁", "Mutex 超过 1ms 等待切饥饿模式"]' :pitfalls='["临界区里做 I/O：把竞争放大", "单核场景指望自旋：会被直接跳过", "不看 profile 就换无锁结构"]' summary="性能拐点往往不在算法，而在共享状态的配对与排队方式上。" />

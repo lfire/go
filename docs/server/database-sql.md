@@ -53,7 +53,7 @@ func main() {
 
 func run() error {
 	// Open 只构造连接池，不建连；驱动名要与 import 注册的名字一致。
-	db, err := sql.Open("sqlite", "file:app.db?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:demo01.db?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return err
 	}
@@ -251,7 +251,7 @@ var db *sql.DB
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite", "file:app.db?_pragma=busy_timeout(5000)")
+	db, err = sql.Open("sqlite", "file:demo03.db?_pragma=busy_timeout(5000)")
 	if err != nil {
 		log.Fatal(err)
 	}

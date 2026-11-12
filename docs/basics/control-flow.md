@@ -282,11 +282,11 @@ func main() {
 
 ### 两条真实误解：错误写法与正确写法
 
-**误解一：从 C 转过来，switch 的每个 case 末尾都要写 `break` 防止穿透。** Go 的 case 自带隐式结束；多写一个 `break`，若 switch 嵌在 `for` 里，跳出的是循环而不是 switch。
+**误解一：从 C 转过来，switch 的每个 case 末尾都要写 `break` 防止穿透。** Go 的 case 自带隐式结束；多写一个 `break` 只是冗余——`break` 只结束最内层的 `switch`，**不会**跳出外层 `for`；想跳出循环必须写带标签的 `break Label`。
 
-<Compare title="case 末尾要不要写 break" :panels='[{"label":"错误：照搬 C 习惯","code":"for _, day := range []int{1, 2, 3} {\n    switch day {\n    case 1:\n        handle()\n        break\n    case 2:\n        handle()\n    }\n}","note":"break 跳出最近的 for，循环被截断"},{"label":"正确：什么都不写","code":"switch day {\ncase 1:\n    handle()\ncase 2:\n    handle()\n}","note":"命中即结束；要连带执行才写 fallthrough"}]' />
+<Compare title="case 末尾要不要写 break" :panels='[{"label":"冗余：照搬 C 习惯","code":"for _, day := range []int{1, 2, 3} {\n    switch day {\n    case 1:\n        handle()\n        break\n    case 2:\n        handle()\n    }\n}","note":"break 只结束 switch，外层 for 照常跑完"},{"label":"正确：什么都不写","code":"switch day {\ncase 1:\n    handle()\ncase 2:\n    handle()\n}","note":"命中即结束；要连带执行才写 fallthrough"}]' />
 
-`break` 作用于最近的 `for`/`switch`/`select`；不写才是 Go 想要的默认行为，这也是「格式即语法」之外另一条容易带偏的习惯。
+`break` 作用于最近的 `for`/`switch`/`select`，在 case 里最近的就是 `switch` 本身；不写才是 Go 想要的默认行为，这也是「格式即语法」之外另一条容易带偏的习惯。
 
 **误解二：`goto` 能跳到同函数内任意标签，包括跳进内层块。** 跳过变量声明会被编译期直接拒绝。
 
@@ -403,7 +403,7 @@ FOUND:
 
 ## 一页纸速记
 
-<KnowledgeCard :points='["if 初始化语句的变量只在链内可见","三种 for 循环共用同一个关键字","switch 自动 break，fallthrough 才继续","type switch 按动态类型分支"]' :pitfalls='["else 另起一行","误以为 case 会穿透","无条件 for 没有 break"]' summary="分支选路径，循环重复路径；switch 不穿透。" />
+<KnowledgeCard :points='["if 初始化语句的变量只在链内可见","三种 for 循环共用同一个关键字","case 自动结束（无需 break），fallthrough 才继续","type switch 按动态类型分支"]' :pitfalls='["else 另起一行","误以为 case 会穿透","无条件 for 没有 break"]' summary="分支选路径，循环重复路径；switch 不穿透。" />
 
 ## 小结与下一讲
 

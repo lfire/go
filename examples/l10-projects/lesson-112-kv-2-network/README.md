@@ -1,9 +1,9 @@
-# 第 112 讲 · KV 贯穿线 ② TCP 协议帧与网络层
+# 第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层
 
 - **阶段**：L10 · 工程实战
 - **目标**：把单机 KV 变成网络服务
 - **知识点**：协议帧设计 / 粘包与编解码 / 连接管理 / 并发处理 / 客户端 SDK
-- **教程正文**：[第 112 讲 · KV 贯穿线 ② TCP 协议帧与网络层](/projects/kv-2-network)
+- **教程正文**：[第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层](/projects/kv-2-network)
 - **GitHub 目录**：[l10-projects/lesson-112-kv-2-network](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-112-kv-2-network)
 
 ## 运行

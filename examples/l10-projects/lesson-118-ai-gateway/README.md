@@ -1,9 +1,9 @@
-# 第 118 讲 · 实战 12 · LLM 网关与流式推理管道
+# 第 118 讲 · 实战 16 · LLM 网关与流式推理管道
 
 - **阶段**：L10 · 工程实战
 - **目标**：把 Go 的并发优势用在 AI 工程
 - **知识点**：多供应商适配 / SSE 流式转发 / 令牌与限流 / 超时与重试 / 成本与可观测
-- **教程正文**：[第 118 讲 · 实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway)
+- **教程正文**：[第 118 讲 · 实战 16 · LLM 网关与流式推理管道](/projects/ai-gateway)
 - **GitHub 目录**：[l10-projects/lesson-118-ai-gateway](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-118-ai-gateway)
 
 ## 运行

@@ -231,7 +231,11 @@ func ProtocolBridge(invoke RPCFunc) http.Handler {
 func main() {
 	ts := httptest.NewServer(ProtocolBridge(invoke))
 	defer ts.Close()
-	resp, _ := http.Get(ts.URL + "/api/order/10086")
+	resp, err := http.Get(ts.URL + "/api/order/10086")
+	if err != nil {
+		fmt.Println("请求失败:", err)
+		return
+	}
 	defer resp.Body.Close()
 	var out map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&out)
@@ -407,7 +411,7 @@ Previous write at 0x00c0000b4010 by goroutine 8:
 
 <Quiz q="多副本网关把令牌桶计数放在各自进程内存里，最可能出现什么问题？" :options='["各副本限流更精确","实际总放行量约为单副本的 N 倍，且各实例配额不一致","令牌会在副本间自动同步","不会有任何影响"]' answer="1" explain="每个副本独立计一份桶，总配额被放大约 N 倍且彼此不一致；要全局一致就得集中计数到 Redis，或按副本数均分配额并接受误差。" />
 
-<Predict q="令牌桶容量 3、每秒补 2 个，连续快速发 6 个请求，返回的 HTTP 状态码序列最可能是？" :options='["全是 200","200 200 200 429 429 200","全是 429","200 429 200 429 200 429"]' answer="1" output="200 200 200 429 429 200" explain="前三个请求取走初始 3 个令牌返回 200，第四五个因桶空返回 429 并带 Retry-After，第六个在令牌补充后重新放行。" />
+<Predict q="令牌桶容量 3、每秒补 2 个，连续快速发 6 个请求，返回的 HTTP 状态码序列最可能是？" :options='["全是 200","200 200 200 429 429 200","全是 429","200 429 200 429 200 429"]' answer="1" explain="前三个请求取走初始 3 个令牌返回 200，第四五个因桶空返回 429 并带 Retry-After，第六个在令牌补充后重新放行。" />
 
 ## 动手练一练
 <Exercise title="给网关加上按用户维度的限流与 429 响应" task="扩展 2.1 的 Gateway：用 map[string]*TokenBucket 为每个用户 ID 维护一个独立令牌桶，在鉴权通过后按用户限流，超限时返回 429 与 Retry-After 头。" :hints='["用户 ID 可在鉴权成功后写入 context，或在 token 映射里带出","每个用户首次访问时懒创建令牌桶，用一把锁保护 map","限流失败时 http.Error 之前先设置 Retry-After 头"]' solution="要点一：Gateway 增加 limits map[string]*TokenBucket 与 mu，鉴权成功后取用户 ID。\n要点二：getBucket 懒创建，用户首次请求时用 NewTokenBucket 初始化。\n要点三：Allow 为 false 时先 Set Retry-After，再 WriteHeader(429) 返回，不放行到 ReverseProxy。" explain="按用户隔离配额才不会让一个高频用户挤占所有人的令牌；明确的 429 与 Retry-After 让客户端能退避重试而不是盲目打爆网关。" />

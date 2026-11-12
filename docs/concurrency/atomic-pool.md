@@ -247,7 +247,7 @@ go test -race ./...                         # 全量回归
 
 <SequenceDiagram title="sync.Pool 的两轮 GC 与 victim 降级" caption="首轮 GC 把 local 降级为 victim，次轮丢弃 victim，池空后 Get 回退到 New" :actors='["应用","primary(local)","victim","GC","New"]' :steps='[{"from":"应用","to":"primary(local)","label":"Put 归还","note":"进本 P 的 private","kind":"call"},{"from":"primary(local)","to":"应用","label":"Get 命中","note":"LIFO 零分配复用","kind":"return"},{"from":"GC","to":"primary(local)","label":"首轮 GC","note":"STW 调 poolCleanup","kind":"call"},{"from":"primary(local)","to":"victim","label":"降级为 victim","note":"local 置空","kind":"call"},{"from":"应用","to":"victim","label":"Get 仍可能命中","note":"顶多活两轮 GC","kind":"call"},{"from":"GC","to":"victim","label":"次轮 GC","note":"清空 oldPools","kind":"call"},{"from":"victim","to":"New","label":"缓存丢弃","note":"对象被回收","kind":"call"},{"from":"应用","to":"New","label":"池空回退","note":"New 造干净对象","kind":"call"},{"from":"New","to":"应用","label":"返回新对象","note":"不依赖上次残留","kind":"return"}]' />
 
-<Predict q="把带『旧数据』残留的 Buf 交给未重置的 fillNoReset 再 append『新』，结果是什么？" :options='["只有 新","旧数据新","空字符串","panic"]' answer="1" output="旧数据新" explain="复用对象带着上次残留，未截零就 append 会把旧内容拼在前面；正确写法先 b.Data[:0] 再写、归还前再截零，结果恒为 新。" />
+<Predict q="把带『旧数据』残留的 Buf 交给未重置的 fillNoReset 再 append『新』，结果是什么？" :options='["只有 新","旧数据新","空字符串","panic"]' answer="1" explain="复用对象带着上次残留，未截零就 append 会把旧内容拼在前面；正确写法先 b.Data[:0] 再写、归还前再截零，结果恒为 新。" />
 
 <Callout type="tip" title="能不能用 -race 验证 Pool 复用？" text="不能验证『Put 必被复用』，因为 sync/pool.go 在 race.Enabled 时以 1/4 概率随机丢弃 Put 的对象，正是为了打掉这种错误假设。想稳定复现残留污染，要像 TestPoolReset 那样直接构造脏对象，或显式连调两次 runtime.GC() 观察 victim 被清空。" />
 

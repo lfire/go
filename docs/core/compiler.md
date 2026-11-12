@@ -43,7 +43,7 @@ func main() {
 
 <OutputBox title="-gcflags=-m 的典型输出" output="can inline double with cost 4 as: func(int) int { return x * 2 }\ncannot inline add: marked go:noinline\nmain.main 中可见 CALL main.add，无 CALL main.double" note="cost 是内联成本估算，超过预算或含昂贵构造的函数会被拒绝内联。" />
 
-<LineByLine code="//go:noinline\nfunc double(x int) int { return x * 2 }\nfmt.Println(double(21))" :notes='["编译指令：强制保留该函数的独立栈帧","成本极低的函数体，会被编译器内联进调用点","调用点被替换成内联后的表达式，不再产生 CALL"]' />
+<LineByLine code="// 对照：add 带 //go:noinline，double 不带\nfunc double(x int) int { return x * 2 }\nfmt.Println(double(21))" :notes='["对照：add 被 //go:noinline 禁用内联，double 没有该指令","成本极低的函数体，会被编译器内联进调用点","调用点被替换成内联后的表达式，不再产生 CALL"]' />
 
 ## 3. 深入一步
 

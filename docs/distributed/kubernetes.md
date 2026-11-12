@@ -453,7 +453,7 @@ subsets:
 
 - [Kubernetes Operator 与可观测平台](/projects/cloud-operator) 的 Reconcile 循环本质上就是「把现实收敛到声明」，与本讲 Deployment 控制器、就绪探针维护端点的思路同源；它的「告警规则」会直接消费这里的探针与重启指标。
 - [Helm / GitOps / 灰度发布](/distributed/gitops) 把本讲的 `deployment.yaml` 抽成 Chart 模板，`replicas`、`image.tag`、探针参数都进 `values.yaml`，实现一份清单多环境复用。
-- [KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) 若要以 StatefulSet 部署，本讲的「Pod 会重建、IP 会变、Service 提供稳定入口」会成为副本间寻址的基础，而成员变更（第 088 讲）必须与优雅退出配合，避免滚动更新时误判节点下线。
+- [实战 12 · KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) 若要以 StatefulSet 部署，本讲的「Pod 会重建、IP 会变、Service 提供稳定入口」会成为副本间寻址的基础，而成员变更（第 088 讲）必须与优雅退出配合，避免滚动更新时误判节点下线。
 
 <Callout type="idea" title="配套示例工程">
 
@@ -466,7 +466,7 @@ subsets:
 
 ## 随堂检测
 <Quiz no="091-1" q="把存活探针写成检查数据库连通性，数据库短暂抖动时会怎样？" :options='["只影响 readiness，Pod 继续服务","所有 Pod 同时被重启，故障被放大","自动扩容更多副本","没有任何影响"]' answer="1" explain="存活探针失败触发重启，所有副本一起重启会让局部下游故障变成全站不可用。" />
-<Predict no="091-2" q="terminationGracePeriodSeconds 设得比 preStop 等待加 Shutdown 超时之和还短，会发生什么？" :options='["优雅退出照常完成","宽限期到点被 SIGKILL 强杀，存量请求失败","K8s 自动延长宽限期","Pod 转为 Completed"]' answer="1" output="宽限期到点被 SIGKILL 强杀，存量请求失败" explain="到点未退出就被强制杀掉，所以宽限秒数必须覆盖整个收尾窗口。" />
+<Predict no="091-2" q="terminationGracePeriodSeconds 设得比 preStop 等待加 Shutdown 超时之和还短，会发生什么？" :options='["优雅退出照常完成","宽限期到点被 SIGKILL 强杀，存量请求失败","K8s 自动延长宽限期","Pod 转为 Completed"]' answer="1" explain="到点未退出就被强制杀掉，所以宽限秒数必须覆盖整个收尾窗口。" />
 <FillBlank no="091-3" tpl="失败会把 Pod 从 Service 端点摘除的是 ___；失败会重启容器的是 ___；定义 SIGTERM 到 SIGKILL 窗口的字段是 ___。" :answers='["readinessProbe~就绪探针","livenessProbe~存活探针","terminationGracePeriodSeconds"]' hint="摘流、重启、宽限期三个不同职责" explain="三者失败后果与职责完全不同，混用是滚动更新掉请求与故障放大的常见原因。" :explains='["它回答的是能否对外服务，失败只把 Pod 从 Service 端点列表摘除而不重启，正好用于滚动更新期间隔离尚未预热的新实例。","它判定进程是否已死锁到无法自愈，失败由 kubelet 按重启策略重建容器，用于把卡死但仍在跑的实例强制拉回健康。","它规定发出 SIGTERM 后等待多少秒才补 SIGKILL，给应用留出关连接、处理完在途请求的时间，字段名里的 Seconds 就点明单位是秒。"]' />
 
 ## 一页纸速记

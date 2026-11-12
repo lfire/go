@@ -578,7 +578,7 @@ jobs:
 
 <Quiz no="060-1" q="CI 里 go generate ./... 之后紧跟 git diff --exit-code，目的是什么？" :options='["加快构建速度","确保生成物已提交、没有和源码漂移","自动打 tag","清理临时文件"]' answer="1" explain="一旦生成物没入库或在 CI 里被重新生成得不一样，diff 非空就会让流水线失败，避免构建出与仓库不一致的二进制。" />
 
-<Predict no="060-2" q="用 go build -ldflags -X main.Version=v1.4.0 构建后，程序里 Version 变量的值会是？" :options='["dev","v1.4.0","空字符串","编译报错"]' answer="1" output="v1.4.0" explain="-ldflags -X 在链接期覆盖包级字符串变量，源码里的 dev 只是本地运行的兜底值。" />
+<Predict no="060-2" q="用 go build -ldflags -X main.Version=v1.4.0 构建后，程序里 Version 变量的值会是？" :options='["dev","v1.4.0","空字符串","编译报错"]' answer="1" explain="-ldflags -X 在链接期覆盖包级字符串变量，源码里的 dev 只是本地运行的兜底值。" />
 
 ## 一页纸速记
 
@@ -591,4 +591,4 @@ jobs:
 - 制品带版本与校验和、保留上一版，回滚才是可执行动作。
 - 至此阶段五结束：代码已经是可维护、可测试、可诊断、可发布的工程。
 
-[下一讲：net/http 深入：Handler、ServeMux 与中间件链](/server/)
+[下一讲：net/http 深入：Handler、ServeMux 与中间件链](/server/net-http)

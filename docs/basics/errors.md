@@ -281,7 +281,7 @@ func main() {
 
 <Quiz no="020-1" q="关于 fmt.Errorf 的 %w，下面哪项说法是正确的？" :options='["%w 会把错误转成字符串，链到此为止","%w 生成一个实现 Unwrap 的包装错误，可被 errors.Is 回溯","%w 与 %v 完全等价，只是写法更短","%w 只能用于自定义错误类型，不能用于标准库错误"]' answer="1" explain="%w 的核心作用是保留可回溯的链；%v 只是把错误文本拼进来，链断掉。errors.Is 与 errors.As 都依赖这条链。" />
 
-<Predict no="020-2" q="若把第二段代码里两处 %w 都改成 %v，errors.Is(err, os.ErrNotExist) 会输出什么？" :options='["true","false","编译报错","panic"]' answer="1" output="false" explain="改成 %v 后不再有 Unwrap 链，errors.Is 只能比较最外层那个字符串错误，与 os.ErrNotExist 不匹配，因此返回 false。代码照常编译，这也正是这个坑隐蔽的地方。" />
+<Predict no="020-2" q="若把第二段代码里两处 %w 都改成 %v，errors.Is(err, os.ErrNotExist) 会输出什么？" :options='["true","false","编译报错","panic"]' answer="1" explain="改成 %v 后不再有 Unwrap 链，errors.Is 只能比较最外层那个字符串错误，与 os.ErrNotExist 不匹配，因此返回 false。代码照常编译，这也正是这个坑隐蔽的地方。" />
 
 ## 一页纸速记
 

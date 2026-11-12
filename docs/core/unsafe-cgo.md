@@ -507,4 +507,4 @@ func main() {
 - `uintptr` 陷阱的根因是 GC 不把整数当根；用 `go vet`、`-race`、checkptr 把它变成可检测错误。
 - cgo 的取舍在于边界成本与所有权：能不跨就不跨，跨了就收敛入口、批量传数据、明确谁释放。
 
-至此 L3 核心机制收束，接下来进入 Go 最鲜明的部分。[下一讲：并发与并行：CSP 思想](/concurrency/)
+至此 L3 核心机制收束，接下来进入 Go 最鲜明的部分。[下一讲：并发与并行：CSP 思想](/concurrency/concurrency-intro)

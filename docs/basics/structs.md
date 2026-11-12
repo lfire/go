@@ -272,7 +272,7 @@ func main() {
 | 不写标签 | 用字段名原样 | 未导出字段编码时不可见 |
 | 反引号包裹 | 编译期附在字段上的元信息 | 内容靠运行期反射读取，编译期不校验 |
 
-<Predict q="调用 load(一段非法 JSON, &c) 时 err 不为 nil；改成 load(合法 JSON, nil) 把目标指针传成 nil，会怎样？" :options='["正常解析，c 被填充","panic: nil pointer","返回错误，不会 panic","编译失败"]' answer="2" output="返回错误，不会 panic" explain="load 开头先判 dst == nil 直接返回错误，把边界挡在 json.Unmarshal 之前；若不判空，nil 目标交给 Unmarshal 会返回 InvalidUnmarshalError，同样不该让调用方以为解析成功。" />
+<Predict q="调用 load(一段非法 JSON, &c) 时 err 不为 nil；改成 load(合法 JSON, nil) 把目标指针传成 nil，会怎样？" :options='["正常解析，c 被填充","panic: nil pointer","返回错误，不会 panic","编译失败"]' answer="2" explain="load 开头先判 dst == nil 直接返回错误，把边界挡在 json.Unmarshal 之前；若不判空，nil 目标交给 Unmarshal 会返回 InvalidUnmarshalError，同样不该让调用方以为解析成功。" />
 
 <Callout type="idea" title="配套示例工程">
 
@@ -394,7 +394,7 @@ func main() {
 
 <Quiz no="017-1" q="关于结构体，正确的是？" :options='["嵌入就是继承","位置字面量可只写部分字段","未导出字段对包外不可见","含切片字段的结构体可比较"]' answer="2" explain="嵌入是组合；位置字面量须写全；含不可比较字段时不可比较。" />
 
-<Predict no="017-2" q="64 位平台上，struct{ bool; int64; bool } 的 unsafe.Sizeof 结果是？" :options='["16","24","10","17"]' answer="1" output="24" explain="int64 需 8 字节对齐，前后各补 7 字节，合计 24。" />
+<Predict no="017-2" q="64 位平台上，struct{ bool; int64; bool } 的 unsafe.Sizeof 结果是？" :options='["16","24","10","17"]' answer="1" explain="int64 需 8 字节对齐，前后各补 7 字节，合计 24。" />
 
 ## 一页纸速记
 

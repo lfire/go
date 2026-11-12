@@ -398,7 +398,7 @@ func main() {
 }
 ```
 
-<OutputBox title="发号器与 Base62 演示输出" output="id=1 code=1\nid=2 code=2\nid=3 code=3\n重启后首个: 1001 code=g7\n非法字符被拒, 反解值= 0" />
+<OutputBox title="发号器与 Base62 演示输出" output="id=1 code=1\nid=2 code=2\nid=3 code=3\n重启后首个: 1001 G9\n非法字符被拒, 反解值= 0" />
 
 注意 `persist` 的顺序：先写临时文件、再 `os.Rename` 原子替换，绝不直接覆盖写正在读的文件；`Rename` 失败时清理临时文件，避免残留垃圾。这段还体现了「持久化失败即整体失败」——`Next` 遇错返回 error 而不是继续发号，因为重复发号覆盖历史短码的代价远高于一次创建失败。短码来自 URL 路径属于完全不可信输入，先 `Decode62` 做字符白名单再查存储，能挡掉大量随机扫描。
 
@@ -750,7 +750,7 @@ func main() {
 }
 ```
 
-<OutputBox title="旁路缓存并发演示输出" output="百并发查同一不存在短码, 真实回源次数: 1\n命中已存在短码: https://go.dev err=nil\n再次查不存在短码命中空值盾: true" />
+<OutputBox title="旁路缓存并发演示输出" output="百并发查同一不存在短码, 真实回源次数: 1\n命中已存在短码: https://go.dev err=&lt;nil&gt;\n再次查不存在短码命中空值盾: true" />
 
 三个机制各管一段：布隆（第 6.2 节）在更外层挡住「从没存在过」的码；空值盾挡住「刚被查过发现不存在」的码，并用 TTL 抖动避免大量盾同时过期；singleflight 保证同一时刻同一 key 只有一个回源 goroutine，把热点 key 的百并发收敛成一次查库。回源用带 200 毫秒截止的 `context`，超时直接返回错误、不设重试预算，避免慢查询叠加重试放大。`srcHits` 用原子计数，便于压测时验证「回源放大系数接近 1」。
 

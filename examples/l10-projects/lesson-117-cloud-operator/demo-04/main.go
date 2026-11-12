@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 )
 
@@ -43,11 +44,21 @@ func (s *Store) Add(o Object) {
 	set[o.Key] = struct{}{}
 }
 
+// RV 是 uint64 的十进制字符串：字典序会把 "100" 判成小于 "99"，必须按数值比较。
+func rvAtLeast(cur, incoming string) bool {
+	a, errA := strconv.ParseUint(cur, 10, 64)
+	b, errB := strconv.ParseUint(incoming, 10, 64)
+	if errA != nil || errB != nil {
+		return cur >= incoming // 非数字 RV 退回字典序
+	}
+	return a >= b
+}
+
 // Update 拒绝乱序事件：RV 不大于当前值就丢弃，返回是否接受。
 func (s *Store) Update(o Object) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.byK[o.Key]; ok && cur.ResourceVersion >= o.ResourceVersion {
+	if cur, ok := s.byK[o.Key]; ok && rvAtLeast(cur.ResourceVersion, o.ResourceVersion) {
 		return false
 	}
 	s.byK[o.Key] = o.DeepCopy()

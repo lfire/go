@@ -225,7 +225,7 @@ GC 的误读几乎都把「目标堆」当成「硬阈值」、把「并发」�
 
 ### 与 L10 源码级实战的呼应
 
-- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：流量削峰与预扣减会在极短时间内产生海量短命对象，GC 的 `1%` 与两段 STW 直接决定 p99 尾延迟；本讲「gctrace 建基线、只改 GOGC、benchstat 验证」正是「压测与预案」里定 GOGC 与 MemoryLimit 的方法。
+- [实战 14 · 秒杀与高并发库存](/projects/micro-seckill)：流量削峰与预扣减会在极短时间内产生海量短命对象，GC 的 `1%` 与两段 STW 直接决定 p99 尾延迟；本讲「gctrace 建基线、只改 GOGC、benchstat 验证」正是「压测与预案」里定 GOGC 与 MemoryLimit 的方法。
 - [实战 03 · 短链服务](/projects/net-shortlink)：高并发读服务把热点映射常驻缓存时，调大 GOGC 可换吞吐；一旦容器内存受限，就要加 `MemoryLimit` 压堆，避免被 OOM kill——这就是「内存换 CPU」的边界判断，不能只看吞吐一列。
 - KV 贯穿线 ④ [分片、复制与 Raft](/projects/kv-4-distributed)：Raft 快照与日志复制会产生大块存活堆，`heapGoal` 抬高后 `gcAssistAlloc` 的分配反压会拖慢写入；在「成员变更与压测」阶段要用 `gctrace` 确认 GC 没有成为吞吐拐点，而不是把单机版的 GOGC 结论直接搬过来。
 

@@ -260,7 +260,7 @@ func main() {
 | GOOS / GOARCH | 函数、闭包、defer 的语义与平台无关；栈增长策略由运行时屏蔽差异 | [第 039 讲](/concurrency/goroutine) |
 | 命名返回 | 配合 defer 修改返回值属于进阶行为，本讲只要求知道它存在 | [第 021 讲](/basics/defer-panic) |
 
-<Predict q="把两个 defer 先后登记为打印 A 和打印 B，函数正常返回前它们的输出顺序是？" :options='["A 然后 B","B 然后 A","顺序不确定","只执行最后登记的那个"]' answer="1" output="B 然后 A" explain="defer 按后进先出执行：后登记的 B 先弹出，先登记的 A 后执行；两者都在当前函数返回前、同一 goroutine 内跑完。" />
+<Predict q="把两个 defer 先后登记为打印 A 和打印 B，函数正常返回前它们的输出顺序是？" :options='["A 然后 B","B 然后 A","顺序不确定","只执行最后登记的那个"]' answer="1" explain="defer 按后进先出执行：后登记的 B 先弹出，先登记的 A 后执行；两者都在当前函数返回前、同一 goroutine 内跑完。" />
 
 ## 4. 工程实践
 

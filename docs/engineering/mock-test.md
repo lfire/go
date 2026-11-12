@@ -449,7 +449,7 @@ L10 里这些边界会反复出现：`/projects/kv-1-memory` 的 `Storage` 接�
 
 <Quiz no="053-1" q="关于依赖倒置中「接口该由谁定义」，哪项最符合 Go 的实践？" :options='["由数据库驱动定义，业务层去实现","由使用方（业务层）按自己需要声明小接口","放在一个公共 types 包里统一定义","用空接口 any 最灵活"]' answer="1" explain="接口由使用方声明，才能做到替换实现不动业务代码；小接口也更容易用 fake 顶替。" />
 
-<Predict no="053-2" q="用 httptest.NewRecorder() 承接一个先 WriteHeader(http.StatusOK) 的 Handler，调用结束后 rec.Code 是多少？" :options='["0","200","500","-1"]' answer="1" output="200" explain="NewRecorder 默认 Code 为 200，显式 WriteHeader 之后保持该值；它只是内存里的 ResponseWriter 实现。" />
+<Predict no="053-2" q="用 httptest.NewRecorder() 承接一个先 WriteHeader(http.StatusOK) 的 Handler，调用结束后 rec.Code 是多少？" :options='["0","200","500","-1"]' answer="1" explain="NewRecorder 默认 Code 为 200，显式 WriteHeader 之后保持该值；它只是内存里的 ResponseWriter 实现。" />
 
 ## 一页纸速记
 

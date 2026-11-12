@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -31,7 +32,14 @@ func (l *Latency) P99() float64 {
 	}
 	cp := append([]float64(nil), l.samples...)
 	sort.Float64s(cp)
-	idx := int(float64(len(cp)-1) * 0.99)
+	// nearest-rank：取 ceil(n*0.99) 个样本里最后一个，小样本时 P99 才落在上限
+	idx := int(math.Ceil(float64(len(cp)) * 0.99)) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(cp) {
+		idx = len(cp) - 1
+	}
 	return cp[idx]
 }
 

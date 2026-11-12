@@ -1,9 +1,9 @@
-# 第 111 讲 · KV 贯穿线 ① 内存版与接口抽象
+# 第 111 讲 · 实战 09 · KV 贯穿线 ① 内存版与接口抽象
 
 - **阶段**：L10 · 工程实战
 - **目标**：定义可演进的存储抽象
 - **知识点**：Command 与 Storage 接口 / 内存实现 / 错误模型 / 基准测试 / 可扩展点
-- **教程正文**：[第 111 讲 · KV 贯穿线 ① 内存版与接口抽象](/projects/kv-1-memory)
+- **教程正文**：[第 111 讲 · 实战 09 · KV 贯穿线 ① 内存版与接口抽象](/projects/kv-1-memory)
 - **GitHub 目录**：[l10-projects/lesson-111-kv-1-memory](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-111-kv-1-memory)
 
 ## 运行

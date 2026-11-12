@@ -431,7 +431,7 @@ func main() {
 
 <Quiz no="025-1" q="关于本讲的设计，下面哪项说法正确？" :options='["Storage 接口应把所有可能的方法都列全，方便以后扩展","把变量声明为 Storage 后，仍能直接访问 MemStore 的 data 字段","Put 与 Delete 用写锁，Get 与 Keys 用读锁","错误判定应比较错误文本，因为哨兵无法跨包使用"]' answer="2" explain="写操作互斥用 Lock，纯读操作用 RLock 提高并行度；接口只暴露必要方法，声明成接口后看不到具体字段，哨兵正好供跨包 errors.Is 判定。" />
 
-<Predict no="025-2" q="第 1 段 main 的最后一行 len(store.Keys()) 会输出什么？" :options='["1","0","2","panic"]' answer="1" output="0" explain="put 后 get 成功，随后 del 把 lang 删掉了，Keys 返回空切片，长度为 0。" />
+<Predict no="025-2" q="第 1 段 main 的最后一行 len(store.Keys()) 会输出什么？" :options='["1","0","2","panic"]' answer="1" explain="put 后 get 成功，随后 del 把 lang 删掉了，Keys 返回空切片，长度为 0。" />
 
 ## 一页纸速记
 
@@ -445,4 +445,4 @@ func main() {
 
 L2 语法核心到此收官。下一阶段进入核心机制，从「会用」转向「知道为什么」：先看赋值、传参与拷贝成本，把值语义彻底讲透。
 
-[下一讲：值语义深潜：赋值、传参、拷贝成本](/core/)
+[下一讲：值语义深潜：赋值、传参、拷贝成本](/core/value-semantics)

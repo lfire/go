@@ -1,11 +1,11 @@
 ---
-title: 第 114 讲 · KV 贯穿线 ④ 分片、复制与 Raft
+title: 第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft
 description: 把单机持久化 KV 演进成分布式存储：一致性哈希分片、多副本 quorum、Raft 选主与日志提交、一致性级别、成员变更与脑裂防护
 ---
 
 <StageHeader stage="L10 · 工程实战" level="★★★★★" time="90 分钟" goal="把 KV 演进成分布式存储" prereq="第 113 讲 · WAL、持久化与并发控制" />
 
-# 第 114 讲 · KV 贯穿线 ④ 分片、复制与 Raft
+# 第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft
 
 > 三讲走下来，我们已经有了一份稳定契约和三种实现：内存、TCP 客户端、带 WAL 的持久化版。第 113 讲那版能落盘、能崩溃恢复、能用 32 把分片锁扛并发，但它仍然是**一台机器**：机器宕机服务就停，容量顶死在这一台的内存与磁盘上，写吞吐被单条 WAL 流的写串行锁卡死。有人会说「把 WAL 拆到多台机器不就行了」——问题恰恰在这里：同一份数据一旦有三份拷贝，**谁说了算**？网络分区时两边都认为自己是主，就会各写各的，恢复后谁覆盖谁？这一讲做最后一次跃迁，用**分片**把数据摊到多台机器解决容量，用**副本**解决单点，用 **Raft** 让多个副本对同一串写命令达成一致。先把可度量的约束摆上桌：副本数 3、写多数派 W 为 2、读票数 R 为 2、默认单 key 线性一致、机器宕机 RTO 不超过 30 秒、已提交写 RPO 为 0、目标 30 分片承载 150 GiB。这是第 111 讲那块「窄腰」能承载的最大一次变化，而 `Apply(Command)` 依然一个字不改——第五次换实现，调用方零改动。
 
@@ -1671,7 +1671,7 @@ go tool pprof -http=:8080 cpu.prof
 
 <Quiz no="114-1" q="3 副本 Raft 组发生 1 加 2 网络分区，只有 1 个副本那侧收到写请求，正确行为是什么？" :options='["照常提交，保证可用性","返回 ErrSplitBrain 或 ErrNoQuorum 拒绝写入","把写缓存起来等分区愈合再提交","自动降级为单机模式继续服务"]' answer="1" explain="写需要 2 票多数派，1 个副本的分区凑不到，CheckQuorum 返回 ErrSplitBrain，ReplicaGroup.Apply 在 propose 之前就拒绝。若照常提交，另一侧 2 票也会提交，恢复后同一 key 出现两个版本，就是脑裂。缓存等待会把 RPO 与延迟都拖坏，且没有解决冲突。" />
 
-<Predict no="114-2" q="3 副本组把 ackBudget 设为 1（Leader 自己 1 票加 1 个 Follower），写一条 SET 后立刻 GET，结果是什么？" :options='["返回 ErrNoQuorum，读不到","SET 成功且 GET 命中最新值","SET 成功但 GET 返回旧值","直接 panic"]' answer="1" output="SET 成功且 GET 命中最新值" explain="Leader 自投 1 票加 1 个 Follower 确认共 2 票，达到 WriteQuorum(3)=2，ack 推进提交索引并应用命令；线性一致读走 Leader，直接命中已提交状态。只有 ackBudget 为 0 时才会因不足多数派返回 ErrNoQuorum，且状态机里不会出现该 key。" />
+<Predict no="114-2" q="3 副本组把 ackBudget 设为 1（Leader 自己 1 票加 1 个 Follower），写一条 SET 后立刻 GET，结果是什么？" :options='["返回 ErrNoQuorum，读不到","SET 成功且 GET 命中最新值","SET 成功但 GET 返回旧值","直接 panic"]' answer="1" explain="Leader 自投 1 票加 1 个 Follower 确认共 2 票，达到 WriteQuorum(3)=2，ack 推进提交索引并应用命令；线性一致读走 Leader，直接命中已提交状态。只有 ackBudget 为 0 时才会因不足多数派返回 ErrNoQuorum，且状态机里不会出现该 key。" />
 
 <FillBlank no="114-3" tpl="3 副本的写多数派是 ___ 票，最多容忍 ___ 个节点故障；扩容采用 ___ 阶段做区间双写；跨分片操作返回 ___。" :answers='["2","1","Joint~联合共识","ErrCrossShardTxn~跨分片事务错误"]' hint="前两空来自 N/2+1 与容错边界，第三空来自成员变更状态机，第四空来自设计边界" explain="多数派为 2 票，挂 1 个还剩 2 票可用；成员变更必须经 Joint 阶段双写校验；跨 key 落到不同 Raft 组时明确拒绝，交业务层 Saga 补偿。" :explains='["多数派取 N/2+1，3 副本即 2 票；只有过半确认才提交，任意两个多数派必有交集，已提交日志才不会在换主后丢失。","3 副本凑够 2 票即可写入，所以挂掉 1 个节点仍剩 2 票可用；若同时挂 2 个就不足多数派，必须拒写以避免脑裂。","成员变更若一步切换，新旧配置可能各选出自己的多数派；先经 Joint 阶段对新旧区间双写校验，再提交新配置才安全。","多个 key 落到不同 Raft 组时无法用单组日志保证原子，因此明确拒写并返回该错误，交业务层用 Saga 补偿。"]' />
 
@@ -1687,4 +1687,4 @@ go tool pprof -http=:8080 cpu.prof
 
 这一版明确放弃了跨分片事务，因为真实业务里「下单」偏偏要跨订单、库存、支付三处数据。下一讲离开 KV 贯穿线，进入电商微服务系统，正面处理服务拆分、proto 契约与 Saga 补偿。
 
-[下一讲：实战 09 · 电商微服务系统](/projects/micro-ecommerce)
+[下一讲：实战 13 · 电商微服务系统](/projects/micro-ecommerce)

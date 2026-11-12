@@ -278,7 +278,7 @@ RenderBaseline-12  2.21kB ± 0%  0.00kB ± 0%  -100.00%  (p=0.000 n=6+6)
 
 ### 与 L10 源码级实战的呼应
 
-- [实战 10 · 秒杀与高并发库存](/projects/micro-seckill)：压测与预案里的 QPS、p99、错误率就是本讲「最后一行端到端」指标；流量削峰前后的对比必须固定并发与数据集、一次只改一处，否则分不清收益来自限流还是缓存。
+- [实战 14 · 秒杀与高并发库存](/projects/micro-seckill)：压测与预案里的 QPS、p99、错误率就是本讲「最后一行端到端」指标；流量削峰前后的对比必须固定并发与数据集、一次只改一处，否则分不清收益来自限流还是缓存。
 - KV 贯穿线 ④ [分片、复制与 Raft](/projects/kv-4-distributed)：成员变更与压测阶段，分片路由与 Raft 写入成为新的瓶颈来源，得重新走一遍 CPU、堆、mutex 三类 profile 建基线，而不是沿用单机版第四步的 `sync.Pool` 结论。
 - [实战 03 · 短链服务](/projects/net-shortlink)：压测若只盯跳转 QPS 而忽略 `B/op` 与 GC 次数，缓存命中率一变就会出现 p99 抖动；本讲「同时看五个指标」在这里直接决定压测报告是否可信。
 
@@ -304,7 +304,7 @@ benchstat old.txt new.txt
 
 ## 随堂检测
 <Quiz no="100-1" q="想看清「哪些代码在频繁分配内存」，应该看哪一类 pprof 数据？" :options='["CPU profile", "heap profile 的 alloc_space / alloc_objects", "mutex profile", "goroutine profile"]' answer="1" explain="heap profile 配合 -alloc_space 或 -alloc_objects 才能定位分配来源；CPU 图只反映占用时间，mutex 图只反映锁等待。" />
-<Predict no="100-2" q="把热路径从 fmt.Sprintf 改成预分配的 strings.Builder 后，benchmem 的 allocs/op 会？" :options='["上升","显著下降","完全不变"]' answer="1" output="显著下降" explain="中间字符串与反射开销被消除，分配次数从每记录一次降到整批一次，第三段程序可直接验证。" />
+<Predict no="100-2" q="把热路径从 fmt.Sprintf 改成预分配的 strings.Builder 后，benchmem 的 allocs/op 会？" :options='["上升","显著下降","完全不变"]' answer="1" explain="中间字符串与反射开销被消除，分配次数从每记录一次降到整批一次，第三段程序可直接验证。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["闭环五步：基线、定位、单点改动、验证、防回归", "同时看 ns/op、B/op、GC、QPS 与 p99", "一次只改一处，收益才可归因"]' :pitfalls='["没有基线就谈优化", "用感觉替代 benchstat", "优化完不设回归门禁"]' summary="没有可复现基线的优化只是猜测，闭环才能把一次性收益变成长期资产。" />

@@ -333,7 +333,7 @@ ok      example.com/quorum    0.312s
 ### 与后续实战的衔接
 
 - [分布式任务调度系统](/projects/concurrent-scheduler) 用 etcd 选主，正是本讲 CP 取舍的落地：分区时宁可不调度，也不允许两个 Master 同时派发同一任务；它的「租约与故障转移」把「凑不齐多数派」转成了主动退位。
-- [KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) 会把第 087 讲的路由和第 088 讲的复制合起来，其「读写一致性」一节重新用上 N/W/R 与 ReadIndex。
+- [实战 12 · KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) 会把第 087 讲的路由和第 088 讲的复制合起来，其「读写一致性」一节重新用上 N/W/R 与 ReadIndex。
 - [Kubernetes Operator 与可观测平台](/projects/cloud-operator) 的 Reconcile 循环处理的是「声明状态与现实状态不一致」，其收敛思路与读修复、反熵同源：不假设一步到位，而是持续把现实拉回声明。
 
 <Callout type="idea" title="配套示例工程">
@@ -347,7 +347,7 @@ ok      example.com/quorum    0.312s
 
 ## 随堂检测
 <Quiz no="083-1" q="网络分区发生时，CAP 定理给出的真实设计取舍是？" :options='["必须同时满足 C、A、P","放弃 P 就能同时保住 C 和 A","P 是客观前提，只能在 C 与 A 之间权衡","只要多重试几次就能三者兼得"]' answer="2" explain="分区无法避免，系统只能在一致性优先与可用性优先之间做选择；无分区时 C 与 A 可以兼得。" />
-<Predict no="083-2" q="N=3、W=1、R=1 时，StrongConsistent() 返回什么？" :options='["true","false","编译报错"]' answer="1" output="false" explain="R+W=2 不大于 N=3，读写集合可能不相交，无法保证读到最新写入。" />
+<Predict no="083-2" q="N=3、W=1、R=1 时，StrongConsistent() 返回什么？" :options='["true","false","编译报错"]' answer="1" explain="R+W=2 不大于 N=3，读写集合可能不相交，无法保证读到最新写入。" />
 <FillBlank no="083-3" tpl="BASE 是 ___ Available、Soft state、___ consistent 的缩写，核心是接受软状态、追求 ___ 一致。" :answers='["Basically","Eventually","最终"]' hint="基本可用、软状态、最终一致" explain="BASE 用软状态换可用性，承诺的是无新写入后副本终将收敛。" :explains='["对应基本可用：分布式故障时允许降级，例如响应变慢或部分功能不可用，只要核心服务仍能返回，就不必追求强一致下的完整可用。","对应一致性前面的修饰词，说明副本之间允许短暂不一致，但只要停止写入并经过一段时间，各副本终会收敛到相同值。","修饰的是收敛性的一致：系统不保证每次都读到最新值，只承诺停止写入后副本逐步趋同，用可用性换来了这份较弱的保证。"]' />
 
 ## 一页纸速记

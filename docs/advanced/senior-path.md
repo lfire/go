@@ -189,9 +189,9 @@ total:                                        (statements)  78.4%
 
 ### 与 L10 源码级实战的呼应
 
-- [实战 09 · 电商微服务系统](/projects/micro-ecommerce)：服务拆分与契约的每一步取舍都该留一条 ADR，正是本讲「每个重要边界写一条 ADR」的实战场；联调阶段的复盘再回流成下次拆分的权重与约束。
-- [实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway)：多供应商适配是典型的加权选型——延迟、成本、令牌与限流、合规各占多少权重要按业务定，先小步试点验证最不确定的那一项，再写进 ADR，而不是挑最热门的 SDK。
-- [实战 11 · Kubernetes Operator 与可观测平台](/projects/cloud-operator)：CRD、控制器、Reconcile 循环与可观测平台把「用 Go 管理 Go 服务」变成可交付工程，正好检验四维里「系统架构」与「工程质量」是否真能落地；`go test -race -coverprofile` 与 `go vet` 是这个项目 CI 的最小门禁。
+- [实战 13 · 电商微服务系统](/projects/micro-ecommerce)：服务拆分与契约的每一步取舍都该留一条 ADR，正是本讲「每个重要边界写一条 ADR」的实战场；联调阶段的复盘再回流成下次拆分的权重与约束。
+- [实战 16 · LLM 网关与流式推理管道](/projects/ai-gateway)：多供应商适配是典型的加权选型——延迟、成本、令牌与限流、合规各占多少权重要按业务定，先小步试点验证最不确定的那一项，再写进 ADR，而不是挑最热门的 SDK。
+- [实战 15 · Kubernetes Operator 与可观测平台](/projects/cloud-operator)：CRD、控制器、Reconcile 循环与可观测平台把「用 Go 管理 Go 服务」变成可交付工程，正好检验四维里「系统架构」与「工程质量」是否真能落地；`go test -race -coverprofile` 与 `go vet` 是这个项目 CI 的最小门禁。
 
 九个阶段的源码、性能与架构方法，到这里都要放进 L10 的真实场景里反复用熟；判断能不能迁移，标准不是「学过」，而是能否像本讲这样给出可复现的证据。
 
@@ -227,4 +227,4 @@ go test -race ./... && go vet ./...
 
 九个阶段到这里收束，接下来把全部知识放进真实场景反复用熟。
 
-[下一讲：实战 01 · 待办清单 CLI](/projects/)
+[下一讲：实战 01 · 待办清单 CLI](/projects/cli-todo)

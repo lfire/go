@@ -492,7 +492,7 @@ func main() {
 ## 随堂检测
 <Quiz no="072-1" q="在最小 RPC 里，把「调用哪个方法」从 URL 路径改到消息体的 Method 字段，带来的最直接好处是什么？" :options='["所有方法共用一个端点，新增方法不必再写路由与样板代码","报文体积一定比 JSON 更小","不再需要序列化参数","HTTP 状态码会自动变成业务错误码"]' answer="0" explain="Method 让寻址从路径变成数据，服务端用一张注册表即可分发任意方法，这正是桩能收敛样板代码的前提。" />
 
-<Predict no="072-2" q="代码 4 中服务端固定 sleep 3 秒才返回，客户端用 context.WithTimeout 设了 200 毫秒。运行结果会是什么？" :options='["正常打印 结果: 7, 错误: nil","打印 结果: nil 并带一个 rpc 传输失败 的超时错误","客户端一直阻塞到 3 秒后才返回","服务端 panic 导致进程退出"]' answer="1" output="结果: nil, 错误: rpc 传输失败: context deadline exceeded（由 ctx 与 http.Client 共同触发）" explain="deadline 通过 context 一路传到 http.Client.Do，2 秒客户端超时与 200 毫秒 ctx 中更短的先触发，请求被提前取消。这正是 RPC 必须把超时当一等公民、而非靠调用方自觉的原因。" />
+<Predict no="072-2" q="代码 4 中服务端固定 sleep 3 秒才返回，客户端用 context.WithTimeout 设了 200 毫秒。运行结果会是什么？" :options='["正常打印 结果: 7, 错误: &lt;nil&gt;","打印 结果: nil 并带一个 rpc 传输失败 的超时错误","客户端一直阻塞到 3 秒后才返回","服务端 panic 导致进程退出"]' answer="1" output="结果: nil, 错误: rpc 传输失败: context deadline exceeded（由 ctx 与 http.Client 共同触发）" explain="deadline 通过 context 一路传到 http.Client.Do，2 秒客户端超时与 200 毫秒 ctx 中更短的先触发，请求被提前取消。这正是 RPC 必须把超时当一等公民、而非靠调用方自觉的原因。" />
 
 <FillBlank no="072-3" tpl="客户端把远程调用伪装成本地函数的那层代码叫 ___ ；服务端负责解码并查表分发的那层叫 ___ 。" :answers='["桩~stub","骨架~skeleton"]' hint="一个在调用方，一个在服务方" explain="两者合起来才把编码、传输、解码、执行、回传五段包成一次函数调用的样子。" :explains='["调用方需要一段与本地函数同签名的替身，把入参编码、发请求、收解回复都包进去，屏蔽网络细节，这一层习惯称桩。","服务端要有对称的一层负责按协议解码、查表定位方法、调用后回写结果，它撑起整个处理框架，故与桩相对称为骨架。"]' />
 

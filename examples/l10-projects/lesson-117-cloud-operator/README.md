@@ -1,9 +1,9 @@
-# 第 117 讲 · 实战 11 · Kubernetes Operator 与可观测平台
+# 第 117 讲 · 实战 15 · Kubernetes Operator 与可观测平台
 
 - **阶段**：L10 · 工程实战
 - **目标**：用 Go 管理 Go 服务
 - **知识点**：CRD 与控制器 / Reconcile 循环 / 指标与日志聚合 / 告警规则 / 发布与运维
-- **教程正文**：[第 117 讲 · 实战 11 · Kubernetes Operator 与可观测平台](/projects/cloud-operator)
+- **教程正文**：[第 117 讲 · 实战 15 · Kubernetes Operator 与可观测平台](/projects/cloud-operator)
 - **GitHub 目录**：[l10-projects/lesson-117-cloud-operator](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-117-cloud-operator)
 
 ## 运行

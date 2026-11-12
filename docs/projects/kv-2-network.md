@@ -1,11 +1,11 @@
 ---
-title: 第 112 讲 · KV 贯穿线 ② TCP 协议帧与网络层
+title: 第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层
 description: 设计定长协议帧解决粘包，管理连接与并发，并让客户端 SDK 实现同一个 Storage 接口
 ---
 
 <StageHeader stage="L10 · 工程实战" level="★★★☆☆" time="60 分钟" goal="把单机 KV 变成网络服务" prereq="第 111 讲 · 内存版与接口抽象" />
 
-# 第 112 讲 · KV 贯穿线 ② TCP 协议帧与网络层
+# 第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层
 
 > 上一版（第 111 讲）已经把 KV 的契约定得很干净：`Command` 是纯数据，`Storage` 只有一个 `Apply`，内存实现、锁分片、TTL 装饰器都满足同一套契约测试。但它有一个绕不过去的硬伤——**这个 KV 只能在自己进程里被调用**。`NewMemory()` 出来的对象，别的机器、别的进程、别的语言都碰不到；业务服务和缓存逻辑必须编译进同一个二进制，既没法独立扩容，也没法让 Go 之外的团队复用。所以这一版只加一层「传输」：定义二进制协议帧、解决 TCP 粘包与半包、管理连接与并发、处理超时与优雅关闭，并且让**客户端 SDK 也实现同一个 `Storage` 接口**。于是调用方拿到的还是那个 `Apply(Command)`，底层是本地内存还是远程 TCP，它完全不用关心。这就是第 111 讲把接口定为「窄腰」换来的红利，也是这条贯穿线第一次真正「换实现、不换调用」。
 
@@ -1456,7 +1456,7 @@ func BenchmarkPoolSet(b *testing.B) {
 
 <Quiz no="112-2" q="把响应里的错误文本改成 1 字节 err_code，最直接修掉的是什么问题？" :options='["让帧变得更短省带宽","让 ErrNotFound 等哨兵跨网络后仍可用 errors.Is 判定","让服务端不用再校验魔数","让连接池可以无限扩容"]' answer="1" explain="错误文本会丢掉错误链，客户端只能比字符串；结构化错误码经 decodeErr 还原成第 111 讲的哨兵错误，重试与判定逻辑原样复用。省带宽只是副作用，不是目的。" />
 
-<Predict no="112-3" q="一个头里 body_len 填 0xFFFFFFFF 的毒包到达 readFrame，会发生什么？" :options='["分配 4 GiB 内存后 OOM","先校验魔数与版本，再因 n 超过 maxFrame 返回 ErrBadFrame，不分配 body","被当成合法大帧一直等后续字节","触发 panic"]' answer="1" output="先校验魔数与版本，再因 n 超过 maxFrame 返回 ErrBadFrame，不分配 body" explain="关键在于校验顺序：n 超过 maxFrame 的判断在 make([]byte, n) 之前，毒包连一字节 body 都分配不到。把分配写到校验前面，就是生产里最典型的 OOM 漏洞。" />
+<Predict no="112-3" q="一个头里 body_len 填 0xFFFFFFFF 的毒包到达 readFrame，会发生什么？" :options='["分配 4 GiB 内存后 OOM","先校验魔数与版本，再因 n 超过 maxFrame 返回 ErrBadFrame，不分配 body","被当成合法大帧一直等后续字节","触发 panic"]' answer="1" explain="关键在于校验顺序：n 超过 maxFrame 的判断在 make([]byte, n) 之前，毒包连一字节 body 都分配不到。把分配写到校验前面，就是生产里最典型的 OOM 漏洞。" />
 
 <FillBlank no="112-4" tpl="处理粘包与半包靠定长头加 ___；跨网络保持错误可判定靠 ___；防止伪造长度打爆内存靠 ___；让 Close 不卡在长连接上靠连接注册表加 ___。" :answers='["io.ReadFull~ReadFull","结构化错误码~err_code~错误码","maxFrame~长度上限","SetDeadline~设立即过期Deadline"]' hint="四个空分别来自 io 包、错误码映射、帧常量、net.Conn 方法" explain="io.ReadFull 读满整帧重建边界；err_code 还原哨兵错误；maxFrame 在分配前拒绝毒包；SetDeadline(now) 唤醒阻塞读循环，让 WaitGroup 正常收尾。" :explains='["TCP 一次 Read 可能只给半帧或粘着下一帧，ReadFull 反复读直到凑满定长头声明的字节数，据此切出完整一帧、重建边界。","错误文本过网后只剩字符串，errors.Is 依赖的类型链全丢；换成固定数值码，客户端按表还原成哨兵错误，判定与重试即可原样复用。","body_len 由对端填写可伪造，照单分配极大值会直接 OOM；在申请缓冲前先与上限比对、超限即拒，关键是校验排在分配之前。","读循环卡在长连接的阻塞 Read 上，光 Close 未必立刻唤醒；设一个已过期的 deadline 令 Read 报错退出，WaitGroup 才能正常收尾。"]' />
 
@@ -1472,4 +1472,4 @@ func BenchmarkPoolSet(b *testing.B) {
 
 这一版已经能让别的进程访问 KV，但数据仍然只在内存里，进程一重启就全丢，而且所有写都挤在本地那把锁上。下一讲用 WAL 追加写与崩溃恢复解决持久性，用锁分片提升并发，帧与 SDK 依旧一行不改。
 
-[下一讲：KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async)
+[下一讲：实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async)

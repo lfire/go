@@ -1,9 +1,9 @@
-# 第 113 讲 · KV 贯穿线 ③ WAL、持久化与并发控制
+# 第 113 讲 · 实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制
 
 - **阶段**：L10 · 工程实战
 - **目标**：让数据落盘且并发安全
 - **知识点**：WAL 追加写 / 崩溃恢复 / 锁分片 / 快照 / 一致性校验
-- **教程正文**：[第 113 讲 · KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async)
+- **教程正文**：[第 113 讲 · 实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async)
 - **GitHub 目录**：[l10-projects/lesson-113-kv-3-async](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-113-kv-3-async)
 
 ## 运行

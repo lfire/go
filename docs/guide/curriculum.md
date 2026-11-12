@@ -210,14 +210,14 @@ description: 从零基础到资深的完整 Go 学习路线，11 个阶段、118
 | 108 | [实战 06 · CSV / SQL 查询工具](/projects/data-sql-tool) | ★★☆☆☆ | 55 分钟 | 表达式与 AST · 执行计划 · 多数据源适配 · 流式结果 · 测试策略 |
 | 109 | [实战 07 · 并发爬虫：单机 → 并发 → 分布式](/projects/concurrent-crawler) | ★★★★☆ | 70 分钟 | 单线程版 · worker pool 并发版 · 去重与限速 · 队列化分布式版 · 演进对比 |
 | 110 | [实战 08 · 分布式任务调度系统](/projects/concurrent-scheduler) | ★★★★☆ | 70 分钟 | 任务模型与 cron · etcd 选主 · 租约与故障转移 · 执行器与日志 · 分片与幂等 |
-| 111 | [KV 贯穿线 ① 内存版与接口抽象](/projects/kv-1-memory) | ★★☆☆☆ | 55 分钟 | Command 与 Storage 接口 · 内存实现 · 错误模型 · 基准测试 · 可扩展点 |
-| 112 | [KV 贯穿线 ② TCP 协议帧与网络层](/projects/kv-2-network) | ★★★☆☆ | 60 分钟 | 协议帧设计 · 粘包与编解码 · 连接管理 · 并发处理 · 客户端 SDK |
-| 113 | [KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async) | ★★★★☆ | 70 分钟 | WAL 追加写 · 崩溃恢复 · 锁分片 · 快照 · 一致性校验 |
-| 114 | [KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) | ★★★★★ | 90 分钟 | 分片路由 · 副本复制 · Raft 集成 · 读写一致性 · 成员变更与压测 |
-| 115 | [实战 09 · 电商微服务系统](/projects/micro-ecommerce) | ★★★★☆ | 90 分钟 | 服务拆分与契约 · 用户/商品/订单/库存 · gRPC + HTTP 网关 · 分布式事务 · 搜索与联调 |
-| 116 | [实战 10 · 秒杀与高并发库存](/projects/micro-seckill) | ★★★★★ | 80 分钟 | 流量削峰 · 预扣减与最终一致 · 限流与排队 · 热点账户 · 压测与预案 |
-| 117 | [实战 11 · Kubernetes Operator 与可观测平台](/projects/cloud-operator) | ★★★★☆ | 75 分钟 | CRD 与控制器 · Reconcile 循环 · 指标与日志聚合 · 告警规则 · 发布与运维 |
-| 118 | [实战 12 · LLM 网关与流式推理管道](/projects/ai-gateway) | ★★★★☆ | 70 分钟 | 多供应商适配 · SSE 流式转发 · 令牌与限流 · 超时与重试 · 成本与可观测 |
+| 111 | [实战 09 · KV 贯穿线 ① 内存版与接口抽象](/projects/kv-1-memory) | ★★☆☆☆ | 55 分钟 | Command 与 Storage 接口 · 内存实现 · 错误模型 · 基准测试 · 可扩展点 |
+| 112 | [实战 10 · KV 贯穿线 ② TCP 协议帧与网络层](/projects/kv-2-network) | ★★★☆☆ | 60 分钟 | 协议帧设计 · 粘包与编解码 · 连接管理 · 并发处理 · 客户端 SDK |
+| 113 | [实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制](/projects/kv-3-async) | ★★★★☆ | 70 分钟 | WAL 追加写 · 崩溃恢复 · 锁分片 · 快照 · 一致性校验 |
+| 114 | [实战 12 · KV 贯穿线 ④ 分片、复制与 Raft](/projects/kv-4-distributed) | ★★★★★ | 90 分钟 | 分片路由 · 副本复制 · Raft 集成 · 读写一致性 · 成员变更与压测 |
+| 115 | [实战 13 · 电商微服务系统](/projects/micro-ecommerce) | ★★★★☆ | 90 分钟 | 服务拆分与契约 · 用户/商品/订单/库存 · gRPC + HTTP 网关 · 分布式事务 · 搜索与联调 |
+| 116 | [实战 14 · 秒杀与高并发库存](/projects/micro-seckill) | ★★★★★ | 80 分钟 | 流量削峰 · 预扣减与最终一致 · 限流与排队 · 热点账户 · 压测与预案 |
+| 117 | [实战 15 · Kubernetes Operator 与可观测平台](/projects/cloud-operator) | ★★★★☆ | 75 分钟 | CRD 与控制器 · Reconcile 循环 · 指标与日志聚合 · 告警规则 · 发布与运维 |
+| 118 | [实战 16 · LLM 网关与流式推理管道](/projects/ai-gateway) | ★★★★☆ | 70 分钟 | 多供应商适配 · SSE 流式转发 · 令牌与限流 · 超时与重试 · 成本与可观测 |
 
 ## 练习与速查
 

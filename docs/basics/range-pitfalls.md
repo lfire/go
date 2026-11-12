@@ -370,7 +370,7 @@ func main() {
 
 <Quiz no="015-1" q="关于 Go 1.22 循环变量变化，正确的是？" :options='["只影响 range","由 go.mod 的 go 指令决定","闭包改为按值捕获","移除 map 遍历"]' answer="1" explain="1.22 对 for 与 range 同时改为每轮新变量。" />
 
-<Predict no="015-2" q="go.mod 写 go 1.21，把三轮 range 的循环变量地址存进切片再解引用，会打印什么？" :options='["4 5 6","6 6 6","三个不同地址","编译失败"]' answer="1" output="6 6 6" explain="旧语义整轮共用一个变量，三个指针都指向最后的值。" />
+<Predict no="015-2" q="go.mod 写 go 1.21，把三轮 range 的循环变量地址存进切片再解引用，会打印什么？" :options='["4 5 6","6 6 6","三个不同地址","编译失败"]' answer="1" explain="旧语义整轮共用一个变量，三个指针都指向最后的值。" />
 
 ## 一页纸速记
 

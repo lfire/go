@@ -205,7 +205,7 @@ TEXT runtime.rt0_go(SB) /usr/local/go/src/runtime/asm_amd64.s
 
 - KV 贯穿线 ③ [WAL、持久化与并发控制](/projects/kv-3-async)：崩溃恢复要在服务启动时重放 WAL、重建索引，这段逻辑必须放在 `main` 里显式编排而不是 `init`——否则失败无法返回错误、也没法加超时，正是本讲「init 使用边界」的落地；恢复慢时还能用 `inittrace` 区分是自己代码慢还是依赖包慢。
 - [实战 08 · 分布式任务调度系统](/projects/concurrent-scheduler)：Master 选主成功后要先加载任务模型与 cron 表达式、再启动执行器，顺序错了会漏跑一轮；这用的就是「按依赖图排序 + main 显式编排」的思路，而不是把加载塞进各自包的 init。
-- [实战 11 · Kubernetes Operator](/projects/cloud-operator)：控制器在 `Reconcile` 循环开始前要注册 CRD、建立 informer 缓存并等缓存同步完成，本质是把 `runtime.main` 的「先初始化、再接管」搬进应用自己的启动序列；Operator 启动慢时，本讲的 `inittrace` 与 `objdump` 两类证据同样适用。
+- [实战 15 · Kubernetes Operator](/projects/cloud-operator)：控制器在 `Reconcile` 循环开始前要注册 CRD、建立 informer 缓存并等缓存同步完成，本质是把 `runtime.main` 的「先初始化、再接管」搬进应用自己的启动序列；Operator 启动慢时，本讲的 `inittrace` 与 `objdump` 两类证据同样适用。
 
 ## 4. 工程实践
 排查「服务启动慢」时，第一件事不是靠打点猜，而是让运行时自己报账。`GODEBUG=inittrace=1` 会在每个包 init 结束时打印耗时与内存分配，直接指出哪个包最贵；配合 `go build -gcflags=-m` 还能看到全局变量是否被放到了堆上。生产环境建议把这项输出接到启动日志里做长期对比。
@@ -227,7 +227,7 @@ GODEBUG=inittrace=1 ./myserver 2> init.log
 
 ## 随堂检测
 <Quiz no="094-1" q="用户包里的 main.main 是由谁包装成 goroutine 的？" :options='["链接器直接内联", "doInit 自动完成", "newproc 封装成 G 入队", "操作系统创建主线程时顺带创建"]' answer="2" explain="proc.go 在启动阶段调用 newproc 建立第一个 G，之后才由 mstart 进入调度循环。" />
-<Predict no="094-2" q="一个没有 init 的最小程序，在 main 第一行调用 runtime.NumGoroutine() 会得到什么？" :options='["0","1","2","等于 GOMAXPROCS"]' answer="1" output="1" explain="main 自己就是 1 号 G；sysmon 是独立 M 上的系统 goroutine，不计入普通 G 数量。" />
+<Predict no="094-2" q="一个没有 init 的最小程序，在 main 第一行调用 runtime.NumGoroutine() 会得到什么？" :options='["0","1","2","等于 GOMAXPROCS"]' answer="1" explain="main 自己就是 1 号 G；sysmon 是独立 M 上的系统 goroutine，不计入普通 G 数量。" />
 
 ## 一页纸速记
 <KnowledgeCard :points='["启动四段：rt0_go、schedinit、newproc、mstart", "进入 main 时 P、堆分配器与 GC 已就绪", "init 先于 main，参数在 main 之前就绪"]' :pitfalls='["死记行号：版本升级即失效", "把重活塞进 init：阻塞启动", "以为 main 被直接调用"]' summary="Go 程序从第一刻起就在调度器里，main 只是第一个用户 G。" />

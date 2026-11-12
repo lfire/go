@@ -1,9 +1,9 @@
-# 第 116 讲 · 实战 10 · 秒杀与高并发库存
+# 第 116 讲 · 实战 14 · 秒杀与高并发库存
 
 - **阶段**：L10 · 工程实战
 - **目标**：在极端流量下守住正确性
 - **知识点**：流量削峰 / 预扣减与最终一致 / 限流与排队 / 热点账户 / 压测与预案
-- **教程正文**：[第 116 讲 · 实战 10 · 秒杀与高并发库存](/projects/micro-seckill)
+- **教程正文**：[第 116 讲 · 实战 14 · 秒杀与高并发库存](/projects/micro-seckill)
 - **GitHub 目录**：[l10-projects/lesson-116-micro-seckill](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-116-micro-seckill)
 
 ## 运行

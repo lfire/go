@@ -1075,7 +1075,7 @@ func BenchmarkSliceSourceScan(b *testing.B) {
 
 <Quiz no="108-1" q="WHERE 条件里某列值为 NULL，为什么该行一定不会被输出？" :options='["NULL 被当成 0 参与比较","与 NULL 的比较结果是 UNKNOWN，而 WHERE 只放行 TRUE","执行器会跳过所有含 NULL 的列"]' answer="1" explain="三值逻辑里任何与 NULL 的比较都返回 UNKNOWN，And 与 Or 也按真值表传播 UNKNOWN；WHERE 只对 TRUE 放行，因此 UNKNOWN 与 FALSE 一样被过滤。若把 NULL 当 0，形如对 size 做大于 1000 的判断会静默给出错误结果。" />
 
-<Predict no="108-2" q="一百万行结果集用 emit 回调写到 io.Discard，执行完成并 GC 后常驻堆增量最接近哪个量级？" :options='["数百 MB","数十 MB","接近 0 KB"]' answer="2" output="输出行数=1000000 错误=无 执行后常驻堆增量=0 KB" explain="流式执行每一时刻只持有一行，emit 写完该行即可回收；行被逐行 GC，执行后存活对象几乎不增加，因此常驻堆增量接近零，与总行数无关。这正是 6.5 用 GC 前后对比 HeapAlloc 要证明的结论。" />
+<Predict no="108-2" q="一百万行结果集用 emit 回调写到 io.Discard，执行完成并 GC 后常驻堆增量最接近哪个量级？" :options='["数百 MB","数十 MB","接近 0 KB"]' answer="2" output="输出行数=1000000 错误=无 执行后常驻堆增量≈0 KB" explain="流式执行每一时刻只持有一行，emit 写完该行即可回收；行被逐行 GC，执行后存活对象几乎不增加，因此常驻堆增量接近零，与总行数无关。这正是 6.5 用 GC 前后对比 HeapAlloc 要证明的结论。" />
 
 <FillBlank no="108-3" tpl="把过滤条件交给数据源在扫描阶段执行，叫作 ___ ；结果用 ___ 逐行吐出，内存才与行数无关。" :answers='["谓词下推","emit 回调~回调~emit"]' hint="一个是优化规则，一个是流式执行的出口。" explain="谓词下推把 WHERE 下放到扫描层，减少上行行数；emit 回调让执行器每时刻只持有一行，避免把结果集攒进切片撑爆内存。两者分别对应物理计划与流式执行两层的决策。" :explains='["把 WHERE 条件下放到扫描层，让数据源边读边过滤，上行行数先被削减；若留到执行器再筛，等于把全部原始数据白搬一趟。","每算完一行就通过回调交给调用方，执行器只持有当前一行、用完即弃；若把结果攒进切片，内存会随总行数线性上涨。"]' />
 
