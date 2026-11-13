@@ -3,7 +3,7 @@ title: 第 080 讲 · OpenTelemetry 链路追踪
 description: 自建 Trace 与 Span、实现 W3C traceparent 注入提取，把一次请求跨服务完整串起来
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把一次请求跨服务完整串起来" prereq="第 079 讲 熔断、降级、重试与雪崩防护" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把一次请求跨服务完整串起来" prereq="第 079 讲 · 熔断、降级、重试与雪崩防护" />
 
 # 第 080 讲 · OpenTelemetry 链路追踪
 

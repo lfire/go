@@ -3,7 +3,7 @@ title: 第 005 讲 · 程序、数据、值与类型
 description: 用零基础也能懂的方式建立类型直觉，先弄清程序到底在处理什么
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="25 分钟" goal="用零基础也能懂的方式建立类型直觉" prereq="第 004 讲" />
+<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="25 分钟" goal="用零基础也能懂的方式建立类型直觉" prereq="第 004 讲 · 工具链全景：build / test / fmt / vet / mod" />
 
 # 第 005 讲 · 程序、数据、值与类型
 

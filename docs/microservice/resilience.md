@@ -3,7 +3,7 @@ title: 第 079 讲 · 熔断、降级、重试与雪崩防护
 description: 用重试预算、熔断状态机、降级兜底与舱壁隔离，让局部故障不演变成全站雪崩
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="让局部故障不演变成全站故障" prereq="第 078 讲 API 网关、鉴权与限流" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="让局部故障不演变成全站故障" prereq="第 078 讲 · API 网关、鉴权与限流" />
 
 # 第 079 讲 · 熔断、降级、重试与雪崩防护
 

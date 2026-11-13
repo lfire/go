@@ -3,7 +3,7 @@ title: 第 073 讲 · Protobuf 与 gRPC 四种流
 description: 用 proto 定义契约，理解字段号与默认值，掌握一元与三种流，写出可演进的服务接口
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="写出契约优先的服务接口" prereq="第 072 讲 RPC 原理与自研最小 RPC" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="写出契约优先的服务接口" prereq="第 072 讲 · RPC 原理与自研最小 RPC" />
 
 # 第 073 讲 · Protobuf 与 gRPC 四种流
 

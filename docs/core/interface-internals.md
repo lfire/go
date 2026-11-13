@@ -160,6 +160,8 @@ func main() {
 
 ### 推导链：从 runtime2.go 与 iface.go 推到 typed nil 与动态派发
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 结论的出处是 `runtime/runtime2.go`：`eface` 是 `_type *_type` 加 `data unsafe.Pointer` 两个字，`iface` 是 `tab *itab` 加 `data unsafe.Pointer` 两个字；`itab` 含 `inter *interfacetype`、`_type *_type`、`hash uint32` 与 `fun [1]uintptr`（方法地址表，按方法数向后扩展）。`runtime/iface.go` 的 `getitab`/`itabTable` 缓存「具体类型 × 接口类型」的匹配结果，`convT64`、`convTstring` 等负责装箱并分配数据副本，`assertE2I2`、`assertI2I` 实现断言，`runtime/type.go` 的 `_type`/`rtype` 正是反射读到的同一份描述符。四条推导链：
 
 - **typed nil**：把 nil 的 `*bytes.Buffer` 赋给 `io.Writer` 时，`getitab` 返回一个非 nil 的 `*itab` 写进 `tab`，`data` 仍为空；而 `w == nil` 编译成「两个字同时为零」的比较，`tab` 非零故为假。打印像 nil、判定却非 nil，根因就在这两个字不对称。

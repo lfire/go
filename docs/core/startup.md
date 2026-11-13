@@ -117,6 +117,8 @@ func main() {
 
 ### 推导链：从 ..inittask 符号推到初始化顺序
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 结论落在链接器与运行时的交界：`cmd/link` 为每个包生成一个 `..inittask` 只读符号，`cmd/compile` 把该包的包级变量求值与所有 `init` 函数收进这个任务；`runtime/symtab.go` 的 `moduledata.inittasks` 保存全部任务的指针，`runtime/proc.go` 的 `runtime.main` 调用 `doInit` 按 `..inittask` 的依赖图递归遍历。三条推导链：
 
 - **跨包顺序**：`..inittask` 里记着本包依赖的其它包的任务指针，`doInit` 先递归完成依赖再执行自己，于是「被依赖者先」由依赖图拓扑序保证，与 import 的书写先后无关。

@@ -3,7 +3,7 @@ title: 第 065 讲 · database/sql、连接池与事务
 description: 讲清驱动与 DSN、连接池四个关键参数、Query 与 Exec 的选择、事务与隔离级别、NULL 扫描，写出不漏连接不误用事务的数据层
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="写出不漏连接、不误用事务的数据层" prereq="第 064 讲 · WebSocket / SSE" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="写出不漏连接、不误用事务的数据层" prereq="第 064 讲 · WebSocket / SSE 与实时推送" />
 
 # 第 065 讲 · database/sql、连接池与事务
 

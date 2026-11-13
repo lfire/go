@@ -3,7 +3,7 @@ title: 第 066 讲 · GORM / sqlx / sqlc 与迁移
 description: 对比 GORM、sqlx、sqlc 的取舍，讲清模型与关联、预加载与 N+1、版本化迁移和 SQL 可观测性，在 ORM 与原生 SQL 之间做理性选择
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="在 ORM 与原生 SQL 之间做理性选择" prereq="第 065 讲 · database/sql" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="在 ORM 与原生 SQL 之间做理性选择" prereq="第 065 讲 · database/sql、连接池与事务" />
 
 # 第 066 讲 · GORM / sqlx / sqlc 与迁移
 

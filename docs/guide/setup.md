@@ -3,7 +3,7 @@ title: 第 002 讲 · 装好环境：工具链、工作区与 Modules
 description: 在本机跑通安装、模块初始化与 IDE 调试，把环境问题一次解决掉
 ---
 
-<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="在本机跑通安装、模块初始化与 IDE 调试" prereq="第 001 讲" />
+<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="在本机跑通安装、模块初始化与 IDE 调试" prereq="第 001 讲 · 开篇：Go 是什么，为什么值得学" />
 
 # 第 002 讲 · 装好环境：工具链、工作区与 Modules
 

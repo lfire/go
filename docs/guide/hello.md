@@ -3,7 +3,7 @@ title: 第 003 讲 · 第一行 Go 代码：从源码到可执行文件
 description: 把最小程序的每一行都讲透，并说清 go run 与 go build 到底差在哪
 ---
 
-<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="彻底看懂一个最小 Go 程序的每一行" prereq="第 002 讲" />
+<StageHeader stage="L0 · 导学" level="★☆☆☆☆" time="25 分钟" goal="彻底看懂一个最小 Go 程序的每一行" prereq="第 002 讲 · 装好环境：工具链、工作区与 Modules" />
 
 # 第 003 讲 · 第一行 Go 代码：从源码到可执行文件
 

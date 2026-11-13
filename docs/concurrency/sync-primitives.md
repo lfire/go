@@ -178,6 +178,8 @@ func main() {
 
 ### 再深一层：WaitGroup 的计数、sema 与 happens-before
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 「锁粒度」和「Add 时机」不是风格偏好，而是由运行时状态与内存模型共同决定的正确性约束。先看 `sync.Mutex`：结构体只有两个字段，`state int32`（低位是 `mutexLocked`/`mutexWoken`/`mutexStarving` 三个标志位加等待者计数）与 `sema uint32`。`Lock` 先 CAS 抢 `mutexLocked`，抢不到才进 `lockSlow` 自旋，仍失败就调 `runtime_SemacquireMutex` 把当前 G 挂进 `runtime/sema.go` 的 `semaRoot` 等待队列（一棵按地址索引的 `sudog` treap）；`Unlock` 走 `runtime_Semrelease` 把队首 `goready`。正是这对 sema 操作带有 acquire/release 语义，才让「一次 Unlock happens-before 下一次 Lock」，前一次临界区的写入对后一个持锁者可见。若读路径不进临界区（如 `badGet` 直接读 `c.n`），这条 happens-before 就断了，`go test -race` 会在该变量上报 `WARNING: DATA RACE`；把读也纳入同一把锁，`TestGuard` 就稳定输出 1000。这就是「临界区要覆盖全部共享访问」的机器级含义：粒度不是越小越好，漏掉一次读就等于没保护。
 
 `sync.WaitGroup` 同理但更隐蔽。Go 1.20 起它的 `state atomic.Uint64` 高 32 位存计数器、低 32 位存等待者计数，另加一个 `sema uint32`：`Add(delta)` 对计数器做原子加，`Done()` 即 `Add(-1)`；`Wait()` 循环读 state，计数器为 0 就直接返回，否则 CAS 增加等待者计数后 `runtime_Semacquire(&wg.sema)` 挂起，等最后一个 `Done` 把计数减到 0 时由 `runtime_Semrelease` 唤醒全部等待者。源码注释写得很直白：`Done` synchronizes before 它所唤醒的 `Wait` 的返回。关键在于 `Add` 与 `Wait` 之间没有自动排序：若把 `wg.Add(1)` 挪进 goroutine 内部，主协程完全可能在计数登记前读到 0 就返回。实测把本讲 `TestGuard` 里的 Add 挪进函数体、让任务睡 1ms，`go test -count=3` 下 `Wait` 返回时「已完成」有时是 50、有时是 0——结果随机少算，且没有任何报错。约定「循环里先 Add、再 go、函数体 defer Done、循环外 Wait」正是为了把计数登记排在 goroutine 启动之前。

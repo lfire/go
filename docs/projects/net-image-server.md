@@ -9,7 +9,7 @@ description: 用流式 multipart、魔数与 DecodeConfig 防像素炸弹、EXIF
 
 > 图片服务流的是几 MB 的二进制，整请求读进内存会吃穿内存，只信客户端声明的类型会把伪装文件缓存出去，忽略 EXIF 方向会让手机拍的照片全躺倒，漏算像素上限则会被一张声明几万乘几万的图打爆。难点集中在四件事：不把大对象装进内存、不信任何元数据、让重复下载几乎零成本、把临时文件与签名 URL 的边界守干净。本讲先把约束量化，再按「接收、校验、派生、存储、缓存」这条链逐层落地，全程标准库可编译、可压测、可评审。
 
-<CheckList id="l106-goals" title="本讲交付清单" :items='["用 MultipartReader 与 MaxBytesReader 做到常数内存上传","用魔数、DecodeConfig 与解码重编码挡住伪装文件和像素炸弹","解析 EXIF 方向并做等比缩略图与格式转换","用内容哈希做 ETag 与 304 缓存","用 HMAC 预签名 URL 直传对象存储并保证临时文件必被清理"]' />
+<CheckList id="l106-goals" title="本讲目标" :items='["用 MultipartReader 与 MaxBytesReader 做到常数内存上传","用魔数、DecodeConfig 与解码重编码挡住伪装文件和像素炸弹","解析 EXIF 方向并做等比缩略图与格式转换","用内容哈希做 ETag 与 304 缓存","用 HMAC 预签名 URL 直传对象存储并保证临时文件必被清理"]' />
 
 ## 0. 项目定位与真实场景
 

@@ -190,6 +190,8 @@ singleflight 是另一种思路：合并「同一 key 的重复调用」，让�
 
 ### 再深一层：close 顺序、背压与「收尾比启动更易错」
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 管道的正确性几乎全押在收尾上，而收尾的底层依据是 channel 的阻塞与唤醒规则。编译期 `for n := range ch` 被展开成反复调用 `chanrecv` 的循环：只有当通道「已关闭且缓冲区排空」时，`chanrecv` 才返回 `ok=false` 让循环结束；否则接收方 G 会被封成一个 `sudog` 挂进 `hchan.recvq`，由 `gopark` 挂起，等某个发送或 `close` 来 `goready` 它。因此生产阶段漏写 `defer close(out)`，下游 G 就永远等不到唤醒——这就是 goroutine 泄漏，而且 `go test -race` 对此完全无感（它只查数据竞争）。反过来，`close(ch)` 会一次性唤醒 `sendq`/`recvq` 里的所有 G：对已关闭通道再发送会 panic `send on closed channel`，所以纪律是「谁写谁关」，消费方和 fan-in 汇合方绝不能抢着关。本讲 `merge` 里先 `wg.Wait()` 等所有输入 goroutine 结束、再 `close(merged)`，正是为了避开「还有人写就关」的丢数据与 panic。
 
 把这段推理做成可复现实验：`genOK` 用 `defer close(out)`，`TestPipelineClose` 的 `for range` 顺利收完 1、2、3 并断言和为 6；`genNoClose` 故意漏关，`TestNoCloseLeaks` 让一个消费 goroutine `for range ch`，50ms 后 `done` 仍没关闭，于是超时分支成立——这就是「range 永不结束」的实证。两条命令分别跑 `go test -race -run=TestPipelineClose -v ./...` 与 `go test -run=TestNoCloseLeaks -v ./...`，对照一目了然。注意 `-race` 在这里的作用只是确认无数据竞争，抓泄漏要靠 `runtime.NumGoroutine()` 前后对比、`go.uber.org/goleak` 在测试收尾校验，或 `go tool pprof` 的 goroutine profile 里那些卡在 `chanrecv`/`semacquire` 的 G。

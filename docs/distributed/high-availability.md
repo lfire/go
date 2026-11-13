@@ -3,7 +3,7 @@ title: 第 089 讲 · 高可用：多活、容灾与混沌工程
 description: 面向故障设计而不是祈祷不故障，重点拆解重试放大、故障域与演练
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="面向故障设计，能用冗余、限流与演练把故障关进可控范围" prereq="Raft 共识与 etcd 实践" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="面向故障设计，能用冗余、限流与演练把故障关进可控范围" prereq="第 088 讲 · Raft 共识与 etcd 实践" />
 
 # 第 089 讲 · 高可用：多活、容灾与混沌工程
 

@@ -145,6 +145,8 @@ func main() {
 
 ### 再深一层：channel 的 happens-before 清单、关闭时序与可验证证据
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 channel 为什么「既传数据又同步」，不是一句口诀，而是 `go_mem.html` 里四条明确的规则。逐条看，才能把上一讲那些阻塞与 panic 行为一路推到底：
 
 - **发送 synchronized before 对应接收的完成**：`A send on a channel is synchronized before the completion of the corresponding receive from that channel.`。发送前的写入，对接收完成之后的读可见——这就是用通道「发布」一份数据的依据。

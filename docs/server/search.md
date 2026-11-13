@@ -3,7 +3,7 @@ title: 第 069 讲 · Elasticsearch 与倒排索引
 description: 从倒排索引讲清搜索为何快，覆盖分词与 mapping、查询 DSL、写入与刷新机制以及数据同步与异构，理解何时该用搜索引擎
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="理解搜索为何快以及何时该用" prereq="第 068 讲 · 消息队列" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="理解搜索为何快以及何时该用" prereq="第 068 讲 · 消息队列：Kafka / NATS / 可靠投递" />
 
 # 第 069 讲 · Elasticsearch 与倒排索引
 

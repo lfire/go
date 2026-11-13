@@ -3,7 +3,7 @@ title: 第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层
 description: 设计定长协议帧解决粘包，管理连接与并发，并让客户端 SDK 实现同一个 Storage 接口
 ---
 
-<StageHeader stage="L10 · 工程实战" level="★★★☆☆" time="60 分钟" goal="把单机 KV 变成网络服务" prereq="第 111 讲 · 内存版与接口抽象" />
+<StageHeader stage="L10 · 工程实战" level="★★★☆☆" time="60 分钟" goal="把单机 KV 变成网络服务" prereq="第 111 讲 · 实战 09 · KV 贯穿线 ① 内存版与接口抽象" />
 
 # 第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层
 

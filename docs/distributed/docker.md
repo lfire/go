@@ -3,7 +3,7 @@ title: 第 090 讲 · 容器化：多阶段构建与镜像瘦身
 description: 交付一个小而可复现的 Go 镜像，理解 CGO_ENABLED 与多阶段构建
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★☆☆" time="45 分钟" goal="交付一个小而可复现的 Go 镜像，能解释每一步在防哪种故障" prereq="高可用：多活、容灾与混沌工程" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★☆☆" time="45 分钟" goal="交付一个小而可复现的 Go 镜像，能解释每一步在防哪种故障" prereq="第 060 讲 · CI/CD、Makefile、代码生成与发布" />
 
 # 第 090 讲 · 容器化：多阶段构建与镜像瘦身
 

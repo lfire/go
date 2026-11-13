@@ -3,7 +3,7 @@ title: 第 088 讲 · Raft 共识与 etcd 实践
 description: 理解强一致系统如何达成共识，并推演脑裂与 Leader 故障下的中途失败
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★★" time="55 分钟" goal="理解强一致系统如何达成共识，能推演脑裂与 Leader 故障下的状态" prereq="一致性哈希、分片与路由" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★★" time="55 分钟" goal="理解强一致系统如何达成共识，能推演脑裂与 Leader 故障下的状态" prereq="第 087 讲 · 一致性哈希、分片与路由" />
 
 # 第 088 讲 · Raft 共识与 etcd 实践
 

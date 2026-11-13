@@ -3,7 +3,7 @@ title: 第 078 讲 · API 网关、鉴权与限流
 description: 自建轻量网关，做路由转发、协议转换、统一鉴权与令牌桶限流，守住系统边界
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="设计统一入口并守住边界" prereq="第 077 讲 配置中心与动态配置" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="设计统一入口并守住边界" prereq="第 077 讲 · 配置中心与动态配置" />
 
 # 第 078 讲 · API 网关、鉴权与限流
 

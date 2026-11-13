@@ -175,6 +175,8 @@ func main() {
 
 ### 再深一层：取消树的实现、ctx 丢传的代价与 lostcancel
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 「取消沿父到子单向广播」不是抽象口号，而是 `context/context.go` 里一张实实在在的树。`cancelCtx` 的字段是 `mu sync.Mutex`、`done atomic.Value`（惰性创建的 `chan struct{}`，第一次 cancel 时 close）、`children map[canceler]struct{}`、`err`、`cause`。派生子 context 时 `propagateCancel(parent, c)` 把子注册进父的 `children`；`cancel()` 先 `close(c.done)`、写下 `err`，再遍历 `children` 逐个调用 `child.cancel(...)`，最后把自己从父的 children 里摘掉。`timerCtx` 则在 `cancelCtx` 之上多挂 `timer *time.Timer` 与 `deadline`，`WithDeadline` 用 `time.AfterFunc` 到期触发 `c.cancel(true, DeadlineExceeded, ...)`。因此关闭 `Done` 与所有对 `ctx.Done()` 的接收之间建立 happens-before，父取消时子孙的 `Done` 同时关闭、反向不传播；也正因为 timer 挂在节点上，丢弃 `cancel` 就等于让这棵子树一直被父引用、计时器到点才释放，这便是「context 泄漏」的机器级来源。
 
 最常见的正确性事故是「ctx 没传到底」。下游若用 `context.Background()` 另起炉灶，或在函数里干脆不 select 监听 `ctx.Done()`，上游的取消与 deadline 就完全失效：客户端断开了、整体超时了，goroutine 还在跑慢查询，直到自己跑完。本讲的 `slowNoCtx` 就是这个反面——它无视取消必然睡满 200ms；`slowWithCtx` 把 `time.After` 与 `ctx.Done()` 并进一次 select，20ms 超时一到立即返回 `context.DeadlineExceeded`。`TestCancel` 用 `go test -race -run=TestCancel -v ./...` 验证「返回及时（小于 100ms）且原因正确」，这就是可复现的对照。另一类高频错误是「丢了 cancel」：写成 `ctx, _ := context.WithCancel(...)` 把 cancel 丢掉后，`go vet ./...` 会精确报 `the cancel function returned by context.WithCancel should be called, not discarded, to avoid a context leak`；把 `defer cancel()` 补回去即消失。所以「ctx 作第一参数、派生必 defer cancel、阻塞调用都接受 ctx」都有工具与源码依据，不是教条。

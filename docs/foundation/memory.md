@@ -3,7 +3,7 @@ title: 第 009 讲 · 栈、堆、值语义与指针
 description: 建立内存模型直觉，搞懂值传递、指针与 nil，知道变量住在哪里
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="35 分钟" goal="建立内存模型直觉，知道变量住在哪里" prereq="第 008 讲" />
+<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="35 分钟" goal="建立内存模型直觉，知道变量住在哪里" prereq="第 008 讲 · 字符串、rune 与高效拼接" />
 
 # 第 009 讲 · 栈、堆、值语义与指针
 

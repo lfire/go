@@ -3,7 +3,7 @@ title: 第 076 讲 · 负载均衡与 resolver 源码
 description: 拆开 gRPC 的 resolver 与 balancer 两个扩展点，自建轮询、加权与一致性哈希
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="理解并定制 gRPC 的负载均衡" prereq="第 075 讲 服务注册发现与健康检查" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="理解并定制 gRPC 的负载均衡" prereq="第 075 讲 · 服务注册发现与健康检查" />
 
 # 第 076 讲 · 负载均衡与 resolver 源码
 

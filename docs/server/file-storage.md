@@ -3,7 +3,7 @@ title: 第 071 讲 · 文件、对象存储与断点续传
 description: 用 io.Reader/Writer 流式处理上传，讲清分块与秒传、对象存储直传、校验重试与临时文件清理，处理大文件上传与存储可靠性
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="处理大文件上传与存储可靠性" prereq="第 070 讲 · 认证授权" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="处理大文件上传与存储可靠性" prereq="第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC" />
 
 # 第 071 讲 · 文件、对象存储与断点续传
 

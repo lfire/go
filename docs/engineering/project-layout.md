@@ -3,7 +3,7 @@ title: 第 050 讲 · 项目结构与分层设计
 description: 用 cmd / internal / pkg / api 搭出依赖方向清晰的骨架，分清按领域还是按层，划清 DO / DTO / VO 并克制过度设计
 ---
 
-<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="搭出能被团队接手的项目骨架" prereq="第 049 讲 · 数据竞争与 race detector" />
+<StageHeader stage="L5 · 工程化与质量" level="★★★☆☆" time="40 分钟" goal="搭出能被团队接手的项目骨架" prereq="第 049 讲 · 数据竞争、内存模型与 race detector" />
 
 # 第 050 讲 · 项目结构与分层设计
 

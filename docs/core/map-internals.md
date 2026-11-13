@@ -160,6 +160,8 @@ GOEXPERIMENT=noswissmap go run main.go
 
 ### 推导链：从 runtime/map.go 推到每一个可观察行为
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 以下符号以 Go 1.23 及之前的经典实现为准，源文件是 `runtime/map.go`：`hmap` 的 `count`、`flags`、`B`、`noverflow`、`hash0`、`buckets`、`oldbuckets`、`nevacuate`、`extra` 记目录；`bmap` 以 `tophash [bucketCnt]uint8` 开头（`bucketCnt = 8`），后面跟 8 个键、8 个值与一个 `overflow *bmap`；常量 `loadFactorNum/loadFactorDen` 给出约 6.5 的负载阈值。把「结构」推到「现象」的四条链是：
 
 - **遍历无序**：`mapiterinit` 用 `fastrand` 随机选起始桶 `r` 与起始槽 `off`，`mapiternext` 从那里绕一圈；若 `oldbuckets` 非空（渐进搬迁中），还要兼顾新旧两个桶数组。随机起点加迁移状态，共同决定了「多轮 range 顺序不同」。

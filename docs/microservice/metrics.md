@@ -3,7 +3,7 @@ title: 第 081 讲 · Prometheus / Grafana 与 RED 指标
 description: 自建 Counter、Gauge、Histogram 与 exposition 端点，用 RED 方法让系统状态可量化可告警
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="让系统状态可量化、可告警" prereq="第 080 讲 OpenTelemetry 链路追踪" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="45 分钟" goal="让系统状态可量化、可告警" prereq="第 080 讲 · OpenTelemetry 链路追踪" />
 
 # 第 081 讲 · Prometheus / Grafana 与 RED 指标
 
@@ -240,7 +240,7 @@ histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by 
 
 Prometheus 抓取到的是「到现在一共处理了多少请求」这类累计值，而不是「这一秒处理了多少」。速率、错误率、分位数统统在查询时用两个时间点的差值算出来。这样设计有个很实在的好处：偶尔漏抓一次，下一次的累计值仍带着中间那段增量，趋势不会丢。`rate` 的本质就是对窗口内的 Counter 取 `(cur - prev) / dt`——它只适用于单调增的 Counter，用在可增可减的 Gauge 上会算出负数等荒谬结果；进程重启导致 Counter 归零时，PromQL 的 `rate` 还能自动识别这种重置并修正，手写差值则很容易踩坑。
 
-Histogram 的分位数推导更值得拆开。每个桶记录的是「小于等于该上界的总次数」，所以桶计数必然单调不减，形成一条累计曲线。`histogram_quantile` 先按分位比例算出目标落在累计次数的第几位，定位到对应桶，再在该桶的上下界之间做线性插值——这正说明了桶边界为什么必须按 SLO 目标来设：目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗插值出来的分位数会严重失真。也因为平均值会被大量快请求掩盖掉少量慢请求，用户体验取决于 P95、P99，必须靠分位数而不是平均值来刻画。
+Histogram 的分位数推导更值得拆开。每个桶记录的是「小于等于该上界的总次数」，所以桶计数必然单调不减，形成一条累计曲线。`histogram_quantile` 先按分位比例算出目标落在累计次数的第几位，定位到对应桶，再在该桶的上下界之间做线性插值——这正说明了桶边界为什么必须按 SLO（服务质量目标，第 093 讲正式定义）来设：目标 P99 小于 200 毫秒，就该在 200 附近多放几个桶，边界太粗插值出来的分位数会严重失真。也因为平均值会被大量快请求掩盖掉少量慢请求，用户体验取决于 P95、P99，必须靠分位数而不是平均值来刻画。
 
 「label 是时间序列的乘数」是另一条能算清楚的规律。下面这段代码把高基数 label 的放大效应量化出来：
 

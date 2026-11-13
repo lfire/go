@@ -1,7 +1,7 @@
 # 第 103 讲 · 实战 01 · 待办清单 CLI
 
 - **阶段**：L10 · 工程实战
-- **目标**：从零交付第一个完整命令行工具
+- **目标**：从零交付一个能进脚本、抗崩溃、可发布的命令行工具
 - **知识点**：cobra 命令树 / JSON 持久化 / 错误与退出码 / 单元测试 / 发布与安装
 - **教程正文**：[第 103 讲 · 实战 01 · 待办清单 CLI](/projects/cli-todo)
 - **GitHub 目录**：[l10-projects/lesson-103-cli-todo](https://github.com/lfire/go/tree/main/examples/l10-projects/lesson-103-cli-todo)

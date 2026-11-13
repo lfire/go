@@ -130,6 +130,8 @@ func main() {
 
 ### 推导链：从三色不变式推到混合屏障与调步公式
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 结论落在 `runtime/mgc.go` 的 `gcStart`、`gcMarkDone`、`gcMarkTermination`、`gcBgMarkWorker` 与 `gcController`（类型 `gcControllerState`，字段 `triggerRatio`、`heapGoal`、`gcPercent`、`memoryLimit`），`runtime/mbarrier.go` 的 `gcWriteBarrier`/`wbBuf`/`wbBufFlush`，以及 `runtime/mgcmark.go` 的 `gcDrain`/`markroot`。Go 1.8 起用混合写屏障，Go 1.19 起才有 `SetMemoryLimit`。推导链分四步：
 
 - **漏标的两个条件**：黑色对象新增了指向白色对象的引用，且灰色对象到该白色对象的路径被切断，二者同时成立才会误删存活对象。Dijkstra 插入屏障染灰「新指向的白值」维护强不变式，Yuasa 删除屏障染灰「被覆盖的旧值」维护弱不变式；两者都要对栈上的写加屏障，而栈写频繁、对象多，代价高。

@@ -149,6 +149,8 @@ func main() {
 
 ### 再深一层：select 为什么随机、timer 为什么会堆积
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 判断一段 select 会不会出事，要落到运行时依据，而不是凭「看起来能跑」。编译器把 select 语句翻译成 `runtime.selectgo`：所有 case 的 channel 先被收进 `scases` 数组，运行时按 channel 地址排序生成 `lockorder`（固定加锁顺序，避免一次锁多个 channel 时死锁），再用 `fastrand` 打乱出 `pollorder`。所谓「伪随机选择」就来自 `pollorder`——它逐个探测就绪的 case，碰到第一个可通信的便执行，打乱是为了让各路长期公平、不被书写顺序饿死。没有任何 case 就绪时，当前 G 会为每个 channel 造一个 `sudog` 挂进 `sendq`/`recvq`（结构见第 043 讲 hchan），随后 `gopark` 挂起；任一 channel 有数据或被关闭时把它 `goready` 唤醒。由此得到两条正确性依据：被选中的那次收发与后续语句之间建立 happens-before；`close(done)` 与所有对 done 的接收之间同样建立 happens-before。所以「关闭一个 done 广播叫停一批 goroutine」在内存模型上是可靠的，而「用共享 bool 当停止标志、main 写 worker 读」没有同步，是真正的数据竞争——这一区别用 `go test -race` 一跑便知。
 
 高频事故出在 timer 堆。`time.After(d)` 本质就是 `NewTimer(d).C`，每次调用都向运行时的 timer 堆插入一个 `runtimeTimer`（关键字段 `when` 到期纳秒、`period` 周期、`f` 回调、`arg` 参数、`seq` 序号）；Go 1.14 起每个 P 维护一棵四叉小顶堆 `timers`，到期检查由调度循环与 sysmon 承担。定时器只有到期或被 `Stop` 才从堆里摘除。当 for-select 循环里业务通道命中远快于 d 时，每轮 `time.After` 新建的 timer 都要一直挂到 d 到期才回收，短时间就能累出成千上万个对象：它不报错，只让 `HeapObjects` 与 GC 次数缓慢爬升，这就是「timer 泄漏」。想亲手复现，把下面的 `leak_test.go` 用 `go test -bench=. -benchmem -run=^$ ./...` 跑一遍，`-benchmem` 的 `allocs/op` 一列会显示 `BenchmarkTimeAfter` 每轮都新建 timer 与 channel，分配次数是 `BenchmarkTimerReuse` 的数倍；后者只 `NewTimer` 一次，命中后 `Stop` 再 `Reset`，每轮几乎零分配。示例把 d 压到 1ms 是为了让基准测试不堆积、安全跑完，真实服务里 d 往往是秒级，堆积更严重，但「每轮新建 timer」这一分配特征不变。生产定位用 `go tool pprof -alloc_objects` 找谁在调 `time.After`/`time.NewTimer`，结合 heap profile 的增长趋势，`GODEBUG=gctrace=1` 可直观看 GC 次数与堆大小。还有一条版本差异：Go 1.23 起 timer 的 channel 默认改为同步（无缓冲），`Stop` 后不再需要「从 C 兜底读一次」；旧代码若依赖缓冲行为可用 `GODEBUG=asynctimerchan=1` 恢复，但 `time.After` 每次新建 timer 的事实没变，泄漏根源仍在。

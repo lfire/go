@@ -3,7 +3,7 @@ title: 第 004 讲 · 工具链全景：build / test / fmt / vet / mod
 description: 掌握日常开发最常用的命令与排查手段，让工具替团队守住风格与质量
 ---
 
-<StageHeader stage="L0 · 导学" level="★★☆☆☆" time="30 分钟" goal="掌握日常开发最常用的命令与排查手段" prereq="第 003 讲" />
+<StageHeader stage="L0 · 导学" level="★★☆☆☆" time="30 分钟" goal="掌握日常开发最常用的命令与排查手段" prereq="第 003 讲 · 第一行 Go 代码：从源码到可执行文件" />
 
 # 第 004 讲 · 工具链全景：build / test / fmt / vet / mod
 

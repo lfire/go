@@ -3,7 +3,7 @@ title: 第 074 讲 · gRPC 拦截器、metadata、错误与超时
 description: 把横切能力统一收进拦截器，讲透 metadata 透传、status 错误码与 deadline 传播
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把横切能力统一收进拦截器" prereq="第 073 讲 Protobuf 与 gRPC 四种流" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="把横切能力统一收进拦截器" prereq="第 073 讲 · Protobuf 与 gRPC 四种流" />
 
 # 第 074 讲 · gRPC 拦截器、metadata、错误与超时
 

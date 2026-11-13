@@ -3,7 +3,7 @@ title: 第 075 讲 · 服务注册发现与健康检查
 description: 自建注册表、心跳续约与健康检查，让服务实例上下线对调用方彻底透明
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="让服务实例变化对调用方透明" prereq="第 074 讲 gRPC 拦截器、metadata、错误与超时" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="45 分钟" goal="让服务实例变化对调用方透明" prereq="第 074 讲 · gRPC 拦截器、metadata、错误与超时" />
 
 # 第 075 讲 · 服务注册发现与健康检查
 

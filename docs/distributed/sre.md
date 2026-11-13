@@ -3,7 +3,7 @@ title: 第 093 讲 · SRE：SLO、告警、容量与稳定性治理
 description: 用 SLO 与错误预算把稳定性变成可执行的发布与告警决策
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="用 SLO 与错误预算驱动发布、告警与容量决策，能对稳定性负责" prereq="Helm / GitOps / 灰度发布" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="用 SLO 与错误预算驱动发布、告警与容量决策，能对稳定性负责" prereq="第 092 讲 · Helm / GitOps / 灰度发布" />
 
 # 第 093 讲 · SRE：SLO、告警、容量与稳定性治理
 

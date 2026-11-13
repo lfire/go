@@ -3,7 +3,7 @@ title: 第 063 讲 · REST API 设计、校验与 OpenAPI
 description: 用资源与状态码表达语义，讲清幂等性、分页过滤、参数校验、版本策略与 OpenAPI 文档生成，设计出稳定可演进的接口
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="设计出稳定、可演进的接口" prereq="第 062 讲 · 路由与框架" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="45 分钟" goal="设计出稳定、可演进的接口" prereq="第 062 讲 · 路由与框架：Gin / Echo / Chi" />
 
 # 第 063 讲 · REST API 设计、校验与 OpenAPI
 

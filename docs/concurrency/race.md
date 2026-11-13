@@ -7,7 +7,7 @@ description: 用 happens-before 判定数据竞争，给出可复现竞态与修
 
 # 第 049 讲 · 数据竞争、内存模型与 race detector
 
-> 「能跑」和「正确」之间隔着数据竞争：它不一定崩溃、不一定复现，可能悄悄少算一次、偶发返回旧值。本讲先用 happens-before 给出判定，再给可复现示例与三种修复，最后拆开 -race 的原理、开销与盲区。
+> 「能跑」和「正确」之间隔着数据竞争：它不一定崩溃、不一定复现，可能悄悄少算一次、偶发返回旧值。前几讲的进阶段落已反复用 happens-before 作判据，本讲把它补成正式定义与完整判据，再给可复现示例与三种修复，最后拆开 -race 的原理、开销与盲区。
 
 ## 这一讲你会得到什么
 <CheckList id="lesson-49" title="本讲目标" :items='["用 happens-before 判定两个访问是否构成竞争","复现 counter++ 竞态并读懂 -race 报告","用 Mutex、atomic、channel 三种方式修复","说清 -race 的原理、开销、误报与漏报"]' />
@@ -146,6 +146,8 @@ func main() {
 <Callout type="tip" title="工程化建议" text="把 go test -race ./... 接进 CI。读报告抓 Read at 与 Previous write at 两段栈，定位哪两个 goroutine 缺同步。修复优先级：先用 channel 消除共享，再按不变式复杂度选 Mutex 或 atomic。" />
 
 ### 再深一层：happens-before 的形式化、-race 的向量时钟与盲区
+
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
 
 官方内存模型文档（本机 `$GOROOT/doc/go_mem.html`）的定义是：数据竞争为「对同一内存位置的一次写与另一次读或写并发发生，且这些访问不全是对 `sync/atomic` 的原子访问」；`synchronized before` 是同步操作上的偏序——「若同步型读 r 观察到同步型写 w，则 w synchronized before r」；happens-before 是 `sequenced before`（单 goroutine 内的程序顺序）与 `synchronized before` 并集的传递闭包。文档还有一句最关键的承诺：无数据竞争的程序表现得像所有 goroutine 被复用到单处理器上，即 DRF-SC（data-race-free 程序顺序一致）。反之存在竞争时结果不受任何顺序约束：编译器可重排、CPU 可乱序、可见性无保证，`counter++` 少算只是最温和的后果。这也说明「这次跑对了」不能证明正确。
 

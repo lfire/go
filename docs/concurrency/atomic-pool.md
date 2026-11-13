@@ -3,7 +3,7 @@ title: 第 046 讲 · atomic 与 sync.Pool
 description: 理解原子操作、CAS、atomic.Value 与 sync.Pool 的对象复用，看清无锁与减少分配的收益、代价和 GC 清空语义
 ---
 
-<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="40 分钟" goal="理解无锁与对象复用的收益和代价" prereq="第 045 讲 · sync 原语" />
+<StageHeader stage="L4 · 并发编程" level="★★★★☆" time="40 分钟" goal="理解无锁与对象复用的收益和代价" prereq="第 045 讲 · sync：Mutex / RWMutex / WaitGroup / Once / Cond" />
 
 # 第 046 讲 · atomic 与 sync.Pool
 
@@ -148,6 +148,8 @@ func main() {
 <Callout type="tip" title="归还前先重置" text="取出的对象可能带残留数据，Put 前把切片截零、字段清零，Put 后别再持有引用。encoding/json 与 fmt 正是这样复用编码缓冲。" />
 
 ### 再深一层：Pool 的三层结构、GC 清空与 -race 的随机丢弃
+
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
 
 要解释「Pool 为什么不是缓存」，得看 `sync/pool.go` 的真实结构。每个 P 持有一个 `poolLocal`，里面是 `private any`（当前 P 独占、LIFO 复用）与 `shared poolChain`（无锁 SPMC 队列，可被其它 P 偷取）；`Get` 的顺序是「先拿 private，再从 shared 出队，再从别的 P 偷，最后回退 `New`」，而 `Put` 优先塞进 private、满了才进 shared。整份缓存还分两级：`p.local`（primary）与 `p.victim`。`poolCleanup()` 在每次 GC 开始、STW 期间被运行时调用：第一轮把 `oldPools` 里的 `victim` 清空、再把 `allPools` 的 `local` 降级为新的 `victim`；第二轮才把上一轮的 `victim` 真正丢弃。这正是本讲示例里要连调两次 `runtime.GC()` 才能看到对象被清空的原因——GC 并不直接清 private/shared，只是把它们降级，对象最多活过两轮 GC。所以「Put 后下次 Get 必拿到同一个」在内存模型与实现上都不成立，Pool 只是「减少分配压力」的周转区。
 

@@ -3,7 +3,7 @@ title: 第 072 讲 · RPC 原理与自研最小 RPC
 description: 从一次 HTTP 请求出发，亲手推导出桩、编解码、协议、超时与错误传递，得到一个能跑的最小 RPC
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="从 HTTP 一步步推导出 RPC 要解决什么，并写出可运行的最小实现" prereq="第 071 讲 文件、对象存储与断点续传" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★☆" time="50 分钟" goal="从 HTTP 一步步推导出 RPC 要解决什么，并写出可运行的最小实现" prereq="第 071 讲 · 文件、对象存储与断点续传" />
 
 # 第 072 讲 · RPC 原理与自研最小 RPC
 

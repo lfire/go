@@ -3,7 +3,7 @@ title: 第 082 讲 · 自研微服务框架：从 0 到 1
 description: 用 Options 装配、生命周期、统一错误与内建可观测收成一套最小框架，并对照 kratos 与 go-zero
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★★★" time="60 分钟" goal="把注册、配置、拦截、可观测收成一套框架" prereq="第 081 讲 Prometheus / Grafana 与 RED 指标" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★★★" time="60 分钟" goal="把注册、配置、拦截、可观测收成一套框架" prereq="第 081 讲 · Prometheus / Grafana 与 RED 指标" />
 
 # 第 082 讲 · 自研微服务框架：从 0 到 1
 

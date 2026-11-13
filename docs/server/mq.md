@@ -3,7 +3,7 @@ title: 第 068 讲 · 消息队列：Kafka / NATS / 可靠投递
 description: 讲清队列与发布订阅、分区与顺序、确认与重试、幂等消费、事务消息与选型对比，用消息解耦并保证不丢不重
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="用消息解耦并保证不丢不重" prereq="第 067 讲 · Redis 缓存" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="用消息解耦并保证不丢不重" prereq="第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性" />
 
 # 第 068 讲 · 消息队列：Kafka / NATS / 可靠投递
 

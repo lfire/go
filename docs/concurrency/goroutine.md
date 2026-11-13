@@ -146,6 +146,8 @@ func main() {
 
 ### 再深一层：go 语句的 happens-before、泄漏时序与可验证证据
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 「main 不会等 goroutine」只是现象，背后的规则写在 Go 内存模型里。`go_mem.html` 对 `go` 语句的唯一承诺是：**`go` 语句 synchronized before 新 goroutine 开始执行**。由此能推出一条完整的可见性边界：`go` 之前 main 的所有写入，对新 G 的起点可见；反过来，新 G 里的写入对 main 之后的读**不自动可见**——两者此后没有任何排序，除非再引入 channel、`sync.Mutex`、`WaitGroup` 或原子操作。所以「起了 goroutine 看不到输出」与「共享变量读到旧值」是同一件事的两面：都缺一条同步边。`sync/waitgroup.go` 的注释补上另一半：`Done` synchronizes before 它所解除阻塞的 `Wait` 的返回，因此 `wg.Wait()` 之后读任务写入是安全的，前提仍是 `Add` 在 `go` 之前（否则计数可能还没登记，见第 045 讲）。
 
 | 写法 | 保证 | 不保证 / 边界 |
@@ -239,7 +241,7 @@ go test -bench=BenchmarkSpawnG -benchmem -run=^$ ./...       # 看一次 go 加 
 
 <Compare title="怎么观测才看得出泄漏" :panels='[{"label":"错误：拿单点值下结论","code":"if runtime.NumGoroutine() &lt; 100 {\n    fmt.Println(\"没有泄漏\") // 看不出趋势\n}","note":"运行时辅助 G、测试框架都会让单点值浮动；100 这个阈值也没有依据，泄漏照样累积。"},{"label":"正确：看增量并收尾校验","code":"before := runtime.NumGoroutine()\nhandleRequests()\nafter := runtime.NumGoroutine()\nfmt.Println(\"增量:\", after-before)\n// 测试收尾 goleak.VerifyNone(t)","note":"随请求数是否单调增长才是信号；goleak 与 goroutine profile 能定位到具体阻塞行。"}]' note="判断泄漏看趋势与阻塞栈，不看一个孤立数字。" />
 
-这些纪律在后面的实战里会反复出现。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 V2 worker pool 里，每个 Fetcher worker 必须能从 `jobs` 关闭或 `ctx.Done()` 退出，否则优雅停机停不下来、在途 G 越积越多；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「发布重启时在途任务被硬杀、既没记录也没补偿」列为痛点，正需要可取消的退出路径加状态落盘；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 里每个请求一个 G，若下游没有超时或停止出口，洪峰里会瞬间堆积大量挂起的 G。呼应本讲一句话：**起得便宜，更要保证每条阻塞路径都等得到唤醒**。
+这些纪律在后面的实战里会反复出现。第 109 讲 [并发爬虫](/projects/concurrent-crawler) 的 V2 worker pool 里，每个 Fetcher worker 必须能从 `jobs` 关闭或 `ctx.Done()`（取消信号，第 047 讲展开）退出，否则优雅停机停不下来、在途 G 越积越多；第 110 讲 [分布式任务调度](/projects/concurrent-scheduler) 把「发布重启时在途任务被硬杀、既没记录也没补偿」列为痛点，正需要可取消的退出路径加状态落盘；第 116 讲 [秒杀与高并发库存](/projects/micro-seckill) 里每个请求一个 G，若下游没有超时或停止出口，洪峰里会瞬间堆积大量挂起的 G。呼应本讲一句话：**起得便宜，更要保证每条阻塞路径都等得到唤醒**。
 
 <Predict q="一个后台 goroutine 永久阻塞在无人发送的 channel 上，用 go test -race 跑会怎样？" :options='["报 WARNING: DATA RACE","测试通过无报告，但 goroutine 数与内存随请求数缓慢上涨","直接 panic","编译报错"]' answer="1" output="-race 全程无报告；runtime.NumGoroutine() 每次请求后 +1，goleak 在收尾报 found unexpected goroutines" explain="泄漏是 G 挂在等待队列里无人唤醒，不涉及冲突读写，-race 查不到；它是缓慢失血，要靠 NumGoroutine 趋势、goleak 与 goroutine profile 定位。给每条阻塞路径留 close 或 ctx.Done() 退出路径才是修复。" />
 

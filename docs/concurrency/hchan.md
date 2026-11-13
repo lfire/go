@@ -174,7 +174,9 @@ func main() {
 
 ### 再深一层：hchan.lock 为何算同步点、直接拷贝的边界与可验证证据
 
-上一讲背下了 channel 的四条 happens-before 规则，这一讲要回答它们从哪来。一个常见误解是「因为值被拷贝了，所以同步」——不对。同步边来自 `runtime/chan.go` 里 `chansend` / `chanrecv` / `closechan` 的**锁与唤醒**：`chansend` 先拿 `hchan.lock`，找到 `recvq` 队首的 `sudog` 后由 `sendDirect` 把值直接拷进接收方指定的变量，再 `goready(gp)` 唤醒那个 G；接收方从 `gopark` 返回时重新进入调度。锁的 acquire/release 加上 goroutine 唤醒，恰好实现了 `go_mem.html` 里「发送 synchronized before 对应接收完成」那条规则；`closechan` 依次唤醒 `recvq` 里的全部 `sudog`，对应「关闭 synchronized before 读到零值的接收」。所以**同步来自 hchan.lock 与配对唤醒，不是来自拷贝本身**。
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
+第 042 讲末尾的进阶段落列过 channel 的四条 happens-before 规则，这一讲要回答它们从哪来。一个常见误解是「因为值被拷贝了，所以同步」——不对。同步边来自 `runtime/chan.go` 里 `chansend` / `chanrecv` / `closechan` 的**锁与唤醒**：`chansend` 先拿 `hchan.lock`，找到 `recvq` 队首的 `sudog` 后由 `sendDirect` 把值直接拷进接收方指定的变量，再 `goready(gp)` 唤醒那个 G；接收方从 `gopark` 返回时重新进入调度。锁的 acquire/release 加上 goroutine 唤醒，恰好实现了 `go_mem.html` 里「发送 synchronized before 对应接收完成」那条规则；`closechan` 依次唤醒 `recvq` 里的全部 `sudog`，对应「关闭 synchronized before 读到零值的接收」。所以**同步来自 hchan.lock 与配对唤醒，不是来自拷贝本身**。
 
 由此能推出一条最容易被忽略的边界：直接拷贝是**值语义**，只拷 `elemsize` 个字节。若通道里传的是指针，拷贝的只是 8 字节地址，指向的堆对象仍被收发双方共享，**channel 不替你保证这个对象不被并发改写**。发送方在 `ch <- e` 之后继续改 `e` 的字段，与接收方的读之间没有任何 happens-before，就是数据竞争。于是「交出去就不再碰」不是风格建议，而是内存模型约束；这也解释了传大对象时的两难——按值传拷贝昂贵，按指针传省 CPU 却把对象推到堆上、引入共享与 GC 压力。
 

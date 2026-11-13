@@ -202,7 +202,7 @@ description: 从零基础到资深的完整 Go 学习路线，11 个阶段、118
 | 讲次 | 标题 | 难度 | 建议时长 | 核心要点 |
 | --- | --- | --- | --- | --- |
 | 导览 | [工程实战阶段导览](/projects/) | ★ | 10 分钟 | 阶段地图与前置说明 |
-| 103 | [实战 01 · 待办清单 CLI](/projects/cli-todo) | ★☆☆☆☆ | 50 分钟 | cobra 命令树 · JSON 持久化 · 错误与退出码 · 单元测试 · 发布与安装 |
+| 103 | [实战 01 · 待办清单 CLI](/projects/cli-todo) | ★★☆☆☆ | 90 分钟 | cobra 命令树 · JSON 持久化 · 错误与退出码 · 单元测试 · 发布与安装 |
 | 104 | [实战 02 · protoc 插件与代码生成器](/projects/cli-codegen) | ★★★☆☆ | 60 分钟 | protoreflect · text/template · go/ast 解析 · 生成与格式化 · 错误码注册案例 |
 | 105 | [实战 03 · 短链服务](/projects/net-shortlink) | ★★☆☆☆ | 55 分钟 | 发号与 Base62 · 缓存与 301/302 · 防刷与过期 · 数据模型 · 压测 |
 | 106 | [实战 04 · 图片服务与对象存储](/projects/net-image-server) | ★★★☆☆ | 60 分钟 | multipart 与流式读 · 图片处理 · ETag 与缓存 · 对象存储直传 · 限流与清理 |

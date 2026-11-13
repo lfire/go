@@ -3,7 +3,7 @@ title: 第 092 讲 · Helm / GitOps / 灰度发布
 description: 做到可声明、可回滚的发布，把配置漂移与灰度失败管进流程
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="做到可声明可回滚的发布，能解释漂移、灰度与回退各自的故障边界" prereq="Kubernetes 部署与服务暴露" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="做到可声明可回滚的发布，能解释漂移、灰度与回退各自的故障边界" prereq="第 091 讲 · Kubernetes 部署与服务暴露" />
 
 # 第 092 讲 · Helm / GitOps / 灰度发布
 

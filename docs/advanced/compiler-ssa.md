@@ -3,7 +3,7 @@ title: 第 098 讲 · 编译器源码：SSA、逃逸与内联
 description: 走一遍前端 IR、SSA 优化 pass、内联预算与逃逸分析实现，并用工具亲眼验证优化器做了什么
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="理解优化器替你做了什么" prereq="第 036 讲 · 编译、链接、SSA 与内联 / 第 027 讲 · 逃逸分析" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="理解优化器替你做了什么" prereq="第 036 讲 · 编译、链接、SSA 与内联" />
 
 # 第 098 讲 · 编译器源码：SSA、逃逸与内联
 

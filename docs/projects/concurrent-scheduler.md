@@ -1197,4 +1197,6 @@ kubectl delete pod schedd-leader && date +%s%3N
 - 故障转移链路是续租中断、租约到期 key 自动删除、跟随者 Watch 唤醒、epoch 加一；漏跑可补，重复执行不可接受。
 - 脑裂只能靠持续信号加单调递增的 fencing token 在写入端拦截，任务状态机、分片、隔离与幂等表共同消化至少一次语义；优雅退位把发布窗口的漏跑压到最小。
 
+接下来换一条主线：把[第 025 讲](/basics/capstone)那个内存版 KV，用四讲一步步养成分布式存储。
+
 [下一讲：实战 09 · KV 贯穿线 ① 内存版与接口抽象](/projects/kv-1-memory)

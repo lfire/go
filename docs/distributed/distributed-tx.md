@@ -3,7 +3,7 @@ title: 第 085 讲 · 分布式事务：2PC / TCC / Saga / 消息最终一致
 description: 按业务与故障代价选一致性方案，把每个方案的中途失败讲清楚
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★★" time="60 分钟" goal="按业务选对一致性方案，逐个回答中途失败会怎样" prereq="分布式锁、幂等与去重" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★★" time="60 分钟" goal="按业务选对一致性方案，逐个回答中途失败会怎样" prereq="第 084 讲 · 分布式锁、幂等与去重" />
 
 # 第 085 讲 · 分布式事务：2PC / TCC / Saga / 消息最终一致
 

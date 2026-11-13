@@ -7,7 +7,7 @@ description: 沿 rt0_go、schedinit、newproc 到 mstart 的主流程，读懂 m
 
 # 第 094 讲 · runtime 源码：进程启动与初始化
 
-> 用户写的 main 从来不是进程执行的第一行代码。操作系统把控制权交给入口汇编之后，运行时要先搭好栈、堆、处理器与垃圾回收，再把 main.main 包装成一个 goroutine 交给调度器。读懂这段路径，才能解释「为什么 main 里 NumGoroutine 至少是 1」「为什么命令行参数一进 main 就已经可读」「为什么把重活塞进 init 会拖慢启动」。本讲以本机 Go 1.23.8 的 GOROOT 源码为准，每一步都配一段可运行程序去验证。
+> 第 035 讲讲过 init 顺序，第 040/041 讲画过 GMP 与抢占，本讲把它们对回 `rt0_go` 到 `mstart` 的真实代码。用户写的 main 从来不是进程执行的第一行代码。操作系统把控制权交给入口汇编之后，运行时要先搭好栈、堆、处理器与垃圾回收，再把 main.main 包装成一个 goroutine 交给调度器。读懂这段路径，才能解释「为什么 main 里 NumGoroutine 至少是 1」「为什么命令行参数一进 main 就已经可读」「为什么把重活塞进 init 会拖慢启动」。本讲以本机 Go 1.23.8 的 GOROOT 源码为准，每一步都配一段可运行程序去验证。
 
 ## 这一讲你会得到什么
 <CheckList id="L9-94" title="本讲目标" :items='["说出从 rt0_go 到 mstart 的四个关键阶段", "用 runtime.Stack 验证 main 就是 1 号 goroutine", "用 inittrace 与 ReadMemStats 观察初始化顺序与分配器状态"]' />

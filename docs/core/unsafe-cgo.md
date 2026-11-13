@@ -150,6 +150,8 @@ func main() {
 
 ### 推导链：从 cgocall 与 GC 根推到 uintptr 陷阱
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 结论分三处：`unsafe/unsafe.go` 的包注释列出六条合法的 `unsafe.Pointer` 转换模式；`runtime/cgocall.go` 的 `cgocall`/`asmcgocall`/`cgocallback` 负责跨边界，`runtime/proc.go` 的 `entersyscall`/`exitsyscall` 通知调度器；`cmd/compile` 的 `checkptr` 插桩在 `unsafe.Pointer` 转换处检查对齐与越界。推导链：
 
 - **uintptr 为什么危险**：它是整数类型，GC 的扫描器只把 `unsafe.Pointer` 与指针类型当根。若把 GC 改成扫描所有 `uintptr`，任何恰好等于某地址的整数都会意外保活对象，且无法区分「偏移量」与「地址」，整数运算的语义会崩塌。代价就是：一旦地址降级成整数变量，对象立刻失去存活保证，中间发生 GC 或栈增长后还原出的指针必然可能悬垂。

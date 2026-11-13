@@ -3,7 +3,7 @@ title: 第 097 讲 · channel / mutex 源码与锁竞争
 description: 沿 chansend/chanrecv/selectgo 与 Mutex 状态机，解释高并发下的性能拐点与定位手段
 ---
 
-<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="解释高并发下的性能拐点" prereq="第 043 讲 · channel 底层 hchan / 第 045 讲 · sync 原语" />
+<StageHeader stage="L9 · 资深进阶与源码" level="★★★★★" time="55 分钟" goal="解释高并发下的性能拐点" prereq="第 043 讲 · channel 底层 hchan 与收发队列" />
 
 # 第 097 讲 · channel / mutex 源码与锁竞争
 

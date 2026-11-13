@@ -3,7 +3,7 @@ title: 第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
 description: 讲清 Cache-Aside 模式、穿透击穿雪崩三大问题的成因与对策、TTL 抖动、双写一致与分布式锁初探，把缓存用对而不是用多
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="把缓存用对而不是用多" prereq="第 066 讲 · ORM 与迁移" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="把缓存用对而不是用多" prereq="第 066 讲 · GORM / sqlx / sqlc 与迁移" />
 
 # 第 067 讲 · Redis 缓存：穿透 / 击穿 / 雪崩与一致性
 

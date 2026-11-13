@@ -280,7 +280,7 @@ func main() {
 
 ### 与 L3 底层、L10 实战的呼应
 
-[第 030 讲](/core/interface-internals) 会讲接口的类型集与 `eface`，[第 036 讲](/core/compiler) 展开字典与 GCShape 模板、内联预算，把「泛型为什么有编译与体积代价」落到编译产物。工程上，[第 054 讲](/engineering/bench-fuzz) 用基准测试量化泛型与接口的差别。实战里，[第 108 讲](/projects/data-sql-tool) 要在「一套 AST 适配多种数据源」处判断用接口还是泛型，[第 118 讲](/projects/ai-gateway) 的多供应商适配也是同一类选择题。
+[第 030 讲](/core/interface-internals) 会拆开 `iface`/`eface` 与 `itab`，[第 036 讲](/core/compiler) 讲 SSA、内联预算与编译产物；类型集与约束本讲已经展开，把「泛型为什么有编译与体积代价」落到编译产物即可。工程上，[第 054 讲](/engineering/bench-fuzz) 用基准测试量化泛型与接口的差别。实战里，[第 108 讲](/projects/data-sql-tool) 要在「一套 AST 适配多种数据源」处判断用接口还是泛型，[第 118 讲](/projects/ai-gateway) 的多供应商适配也是同一类选择题。
 
 ## 动手练一练
 

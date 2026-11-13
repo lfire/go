@@ -3,7 +3,7 @@ title: 第 012 讲 · 阶段综合：CLI 单位换算器
 description: 把地基知识串成一个能跑、能用、能测的命令行程序
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="40 分钟" goal="把地基知识串成一个能用的命令行程序" prereq="第 011 讲" />
+<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="40 分钟" goal="把地基知识串成一个能用的命令行程序" prereq="第 011 讲 · 包、模块与依赖管理" />
 
 # 第 012 讲 · 阶段综合：CLI 单位换算器
 

@@ -3,7 +3,7 @@ title: 第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft
 description: 把单机持久化 KV 演进成分布式存储：一致性哈希分片、多副本 quorum、Raft 选主与日志提交、一致性级别、成员变更与脑裂防护
 ---
 
-<StageHeader stage="L10 · 工程实战" level="★★★★★" time="90 分钟" goal="把 KV 演进成分布式存储" prereq="第 113 讲 · WAL、持久化与并发控制" />
+<StageHeader stage="L10 · 工程实战" level="★★★★★" time="90 分钟" goal="把 KV 演进成分布式存储" prereq="第 113 讲 · 实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制" />
 
 # 第 114 讲 · 实战 12 · KV 贯穿线 ④ 分片、复制与 Raft
 

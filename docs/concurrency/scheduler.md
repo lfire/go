@@ -179,6 +179,8 @@ func main() {
 
 ### 再深一层：抢占点不是同步点、handoff 时序与可验证证据
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段涉及运行时源码、内存模型与性能工具等后面讲次才系统展开的内容，属于加深理解的可选层。第一次学建议先掌握本讲主线，遇到尚未讲过的术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 异步抢占解决的是「别让一个 G 霸占 CPU」，不是「保证一段逻辑的原子性」，这两件事在正确性上差得很远。实现上，sysmon 发现某个 G 连续运行超过约 10ms 后，通过信号（Unix 上是 `SIGURG`）在任意指令边界打断它，由 `runtime/preempt.go` 的异步抢占点把控制权交回调度器。关键是：**抢占发生在任意指令边界，被抢占的 G 可能停在「读后写前」**，另一个 G 若此刻读同一变量就看到中间态；而抢占本身只是 `runtime/proc.go` 里的队列与 `goready` 操作，**不在 `go_mem.html` 的同步动作清单里**，不建立任何 happens-before。由此推出两条：其一，抢占让调度与 GC 不卡住，但正确性仍只能靠 channel、Mutex、atomic 或 WaitGroup；其二，`sysmon` 跑在独立 M、不需要 P，它的 retake 与 netpoll 巡视同样是纯调度动作，也不发布写入。想让共享状态安全，得自己加同步边。
 
 | 事件 | 保证 | 不保证 / 边界 |
@@ -370,6 +372,6 @@ SCHED 1000ms: gomaxprocs=8 idleprocs=2 threads=14 spinningthreads=1 idlethreads=
 - 阻塞系统调用时 `sysmon` 触发 handoff，把 P 交给新 M；网络 I/O 则走 netpoller，不额外占线程。
 - Go 1.14 起基于信号的异步抢占补上了协作式抢占的盲区；`GODEBUG=schedtrace` 是观察这些行为的第一手工具。
 
-调度器负责把 G 跑起来，而 G 之间怎么安全交接数据，是接下来 channel 的主场。
+调度器负责把 G 跑起来，而 G 之间怎么安全交接数据，是接下来 channel 的主场。本讲示例里的 `make(chan)`、`close` 与 `for range` 只是用来制造负载与唤醒，其规则在[第 042 讲](/concurrency/channel)正式展开，此时不必深究。
 
 [下一讲：channel：语义、缓冲与关闭](/concurrency/channel)

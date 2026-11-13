@@ -3,7 +3,7 @@ title: 第 084 讲 · 分布式锁、幂等与去重
 description: 用租约、令牌与幂等键守住并发下的数据正确性，并直面 Redlock 争议
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="在并发与故障下守住数据正确性，能说清每种方案中途失败会怎样" prereq="CAP / BASE 与一致性模型" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="50 分钟" goal="在并发与故障下守住数据正确性，能说清每种方案中途失败会怎样" prereq="第 083 讲 · CAP / BASE 与一致性模型" />
 
 # 第 084 讲 · 分布式锁、幂等与去重
 

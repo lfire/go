@@ -3,7 +3,7 @@ title: 第 077 讲 · 配置中心与动态配置
 description: 自建命名空间、长轮询、原子热更新与灰度回滚，做到配置变更不重启
 ---
 
-<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="40 分钟" goal="做到配置变更不重启" prereq="第 076 讲 负载均衡与 resolver 源码" />
+<StageHeader stage="L7 · RPC 与微服务" level="★★★☆☆" time="40 分钟" goal="做到配置变更不重启" prereq="第 076 讲 · 负载均衡与 resolver 源码" />
 
 # 第 077 讲 · 配置中心与动态配置
 

@@ -3,7 +3,7 @@ title: 第 062 讲 · 路由与框架：Gin / Echo / Chi
 description: 拆解路由树与分组、绑定与校验、中间件生态，对比 Gin / Echo / Chi 的设计取向，学会按场景选框架而不是凭习惯
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="40 分钟" goal="按场景选框架而不是凭习惯" prereq="第 061 讲 · net/http" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★☆☆" time="40 分钟" goal="按场景选框架而不是凭习惯" prereq="第 061 讲 · net/http 深入：Handler、ServeMux 与中间件链" />
 
 # 第 062 讲 · 路由与框架：Gin / Echo / Chi
 

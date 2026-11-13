@@ -116,6 +116,8 @@ func main() {
 
 ### 推导链：从 runtime/string.go 推到「必须拷贝」与「优化省略」
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 结论的出处是 `runtime/string.go`：内部头 `stringStruct` 只有 `str unsafe.Pointer` 与 `len int` 两个字段（没有 `Cap`，因为不可变永远不需要为追加预留空间）；`slicebytetostring`、`stringtoslicebyte`、`rawstring`、`rawstringtmp`、`concatstrings` 负责转换与拼接。`cmd/compile/internal/walk` 在编译期把 `m[string(b)]`、`string(b) == "x"` 这类只读临时用法降级为带栈上临时缓冲的 `slicebytetostringtmp`，从而省略分配。四条推导链：
 
 - **子串共享**：`s[i:j]` 只改 `stringStruct.len`、复用同一个 `str`，所以 `unsafe.StringData(s)` 与 `unsafe.StringData(sub)` 相等；不可变让这种共享永远安全。

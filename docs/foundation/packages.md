@@ -3,7 +3,7 @@ title: 第 011 讲 · 包、模块与依赖管理
 description: 会组织代码、会加依赖、会处理版本，弄清包与模块的分工
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="30 分钟" goal="会组织代码、会加依赖、会处理版本" prereq="第 010 讲" />
+<StageHeader stage="L1 · 编程地基" level="★★☆☆☆" time="30 分钟" goal="会组织代码、会加依赖、会处理版本" prereq="第 010 讲 · 函数、多返回值、变参与闭包" />
 
 # 第 011 讲 · 包、模块与依赖管理
 

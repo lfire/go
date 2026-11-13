@@ -3,7 +3,7 @@ title: 第 113 讲 · 实战 11 · KV 贯穿线 ③ WAL、持久化与并发控�
 description: 用 WAL 追加写、CRC32C 校验与 fsync 三档策略做崩溃恢复，用锁分片提升并发，用快照与 compaction 遏制写放大
 ---
 
-<StageHeader stage="L10 · 工程实战" level="★★★★☆" time="70 分钟" goal="让数据落盘、崩溃可恢复且并发安全" prereq="第 112 讲 · TCP 协议帧与网络层" />
+<StageHeader stage="L10 · 工程实战" level="★★★★☆" time="70 分钟" goal="让数据落盘、崩溃可恢复且并发安全" prereq="第 112 讲 · 实战 10 · KV 贯穿线 ② TCP 协议帧与网络层" />
 
 # 第 113 讲 · 实战 11 · KV 贯穿线 ③ WAL、持久化与并发控制
 

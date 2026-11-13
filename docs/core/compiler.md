@@ -93,6 +93,8 @@ func main() {
 
 ### 推导链：从 cmd/compile 各阶段到 SSA 上的边界检查消除
 
+<Callout type="note" title="进阶选读 · 首次学习可跳过" text="本段沿运行时/编译器源码做推导，属于加深理解的可选层。第一次学建议先掌握本讲主线与可运行结论，遇到尚未讲过的源码术语不必停下，学完对应讲次再回看，不影响后续理解。" />
+
 把「源码不等于机器码」落到具体目录：`cmd/compile/internal/syntax` 与 `noder` 负责解析，`types2`/`typecheck` 做类型检查，`ir` 承载中间表示，`ssa` 跑优化 pass，`ssagen` 把 IR 降级成平台相关代码，`obj` 输出汇编目标文件，最后 `cmd/link` 做符号解析、重定位并生成 `pclntab`。SSA 构造阶段插入 `Phi`，随后 `prove` pass 做范围分析支撑 BCE（边界检查消除）、`cse` 做公共子表达式消除、`dce` 做死代码消除、`nilcheckelim` 做 nil 检查消除；内联成本预算约 80（相关常量在 `cmd/compile/internal/inline`，历史名 `inlineMaxBudget`，不同版本重构过）。推导链是：`for i := 0; i < len(xs); i++` 让 `prove` 能证明 `i` 恒在 `[0, len(xs))` 内，于是 `xs[i]` 的 `runtime.panicIndex` 被删掉；若把上界换成与 `len(xs)` 无关的变量，证明失败，检查重新出现。
 
 用构建信息与符号表把「优化决策」与「链接产物」对上。把第 2 节的 `inline.go` 编译：

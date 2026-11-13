@@ -3,7 +3,7 @@ title: 第 007 讲 · 数值、布尔、字符与类型转换
 description: 认识整型的宽度与平台差异，避开溢出、浮点精度和隐式转换的坑
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="避开数值溢出与隐式转换的坑" prereq="第 006 讲" />
+<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="避开数值溢出与隐式转换的坑" prereq="第 006 讲 · 变量、常量、iota 与作用域" />
 
 # 第 007 讲 · 数值、布尔、字符与类型转换
 

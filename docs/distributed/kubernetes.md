@@ -3,7 +3,7 @@ title: 第 091 讲 · Kubernetes 部署与服务暴露
 description: 把 Go 服务稳定跑在 K8s 上，给出探针与优雅退出的完整清单
 ---
 
-<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="55 分钟" goal="把 Go 服务稳定跑在 K8s 上，能解释每个探针与退出步骤在防哪种故障" prereq="容器化：多阶段构建与镜像瘦身" />
+<StageHeader stage="L8 · 分布式与云原生" level="★★★★☆" time="55 分钟" goal="把 Go 服务稳定跑在 K8s 上，能解释每个探针与退出步骤在防哪种故障" prereq="第 090 讲 · 容器化：多阶段构建与镜像瘦身" />
 
 # 第 091 讲 · Kubernetes 部署与服务暴露
 

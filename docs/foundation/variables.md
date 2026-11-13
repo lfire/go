@@ -3,7 +3,7 @@ title: 第 006 讲 · 变量、常量、iota 与作用域
 description: 写对声明、推断、常量与可见性，避开遮蔽和零值这些基础坑
 ---
 
-<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="写对声明、推断、常量与可见性" prereq="第 005 讲" />
+<StageHeader stage="L1 · 编程地基" level="★☆☆☆☆" time="30 分钟" goal="写对声明、推断、常量与可见性" prereq="第 005 讲 · 程序、数据、值与类型" />
 
 # 第 006 讲 · 变量、常量、iota 与作用域
 

@@ -3,7 +3,7 @@ title: 第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
 description: 讲清认证与授权分离、Session 与 JWT 的取舍、令牌刷新与吊销难题、OAuth2 流程与 RBAC 权限模型，并点名常见安全漏洞
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="设计安全且可演进的身份体系" prereq="第 069 讲 · Elasticsearch" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="50 分钟" goal="设计安全且可演进的身份体系" prereq="第 069 讲 · Elasticsearch 与倒排索引" />
 
 # 第 070 讲 · 认证授权：Session / JWT / OAuth2 / RBAC
 

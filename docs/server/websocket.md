@@ -3,7 +3,7 @@ title: 第 064 讲 · WebSocket / SSE 与实时推送
 description: 讲清协议握手与升级、gorilla/websocket 读写泵与心跳、断线重连、SSE 取舍以及广播与连接管理，实现可用的长连接服务
 ---
 
-<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="实现长连接场景与连接治理" prereq="第 063 讲 · REST API" />
+<StageHeader stage="L6 · 服务端与数据" level="★★★★☆" time="45 分钟" goal="实现长连接场景与连接治理" prereq="第 063 讲 · REST API 设计、校验与 OpenAPI" />
 
 # 第 064 讲 · WebSocket / SSE 与实时推送
 
